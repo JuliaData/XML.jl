@@ -78,7 +78,7 @@ end
             tag=nothing,
             attributes=nothing,
             value=" comment "),
-        (xml = "<![CData[cdata test]]>",
+        (xml = "<![CDATA[cdata test]]>",
             nodetype = CData,
             tag=nothing,
             attributes=nothing,

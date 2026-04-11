@@ -3,7 +3,7 @@
 <kml xmlns="http://earth.google.com/kml/2.2">
   <Document>
     <name>Example KML file</name>
-    <description><![CData[Example KML file]]></description>
+    <description><![CDATA[Example KML file]]></description>
     <!-- here is a comment -->
     <Style id="style1">
       <IconStyle>
@@ -31,7 +31,7 @@
     </Style>
     <Placemark>
       <name>Time Square</name>
-      <description><![CData[Times Square is a major commercial intersection and neighborhood in Midtown Manhattan, New York City.]]></description>
+      <description><![CDATA[Times Square is a major commercial intersection and neighborhood in Midtown Manhattan, New York City.]]></description>
       <styleUrl>#style1</styleUrl>
       <Point>
         <coordinates>-73.984939,40.758874,0.000000</coordinates>
@@ -39,7 +39,7 @@
     </Placemark>
     <Placemark>
       <name>Central Park</name>
-      <description><![CData[Central Park is an urban park in middle-upper Manhattan, within New York City.]]></description>
+      <description><![CDATA[Central Park is an urban park in middle-upper Manhattan, within New York City.]]></description>
       <styleUrl>#style2</styleUrl>
       <Polygon>
         <outerBoundaryIs>
@@ -57,7 +57,7 @@
     </Placemark>
     <Placemark>
       <name>Lincoln Tunnel</name>
-      <description><![CData[Traffic(under 10 minutes)]]></description>
+      <description><![CDATA[Traffic(under 10 minutes)]]></description>
       <styleUrl>#style3</styleUrl>
       <LineString>
         <tessellate>1</tessellate>

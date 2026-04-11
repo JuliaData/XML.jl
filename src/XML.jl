@@ -36,7 +36,7 @@ end
     - Declaration               # <?xml attributes... ?>
     - ProcessingInstruction    # <?NAME attributes... ?>
     - Comment                   # <!-- ... -->
-    - CData                     # <![CData[...]]>
+    - CData                     # <![CDATA[...]]>
     - Element                   # <NAME attributes... > children... </NAME>
     - Text                      # text
 
@@ -324,7 +324,7 @@ function _show_node(io::IO, o)
         printstyled(io, value(o), color=:light_black)
         printstyled(io, "-->", color=:light_cyan)
     elseif o.nodetype === CData
-        printstyled(io, " <![CData[", color=:light_cyan)
+        printstyled(io, " <![CDATA[", color=:light_cyan)
         printstyled(io, value(o), color=:light_black)
         printstyled(io, "]]>", color=:light_cyan)
     elseif o.nodetype === Document
@@ -408,7 +408,7 @@ function write(io::IO, x, ctx::Vector{Bool}=[false]; indentsize::Int=2, depth::I
         print(io, "<!--", value, "-->")
 
     elseif nodetype === CData
-        print(io, "<![CData[", value, "]]>")
+        print(io, "<![CDATA[", value, "]]>")
 
     elseif nodetype === Document
         foreach(children) do child
