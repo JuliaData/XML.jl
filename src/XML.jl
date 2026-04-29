@@ -9,7 +9,7 @@ export
     # Interface:
     children, nodetype, tag, attributes, value, is_simple, simplevalue, simple_value,
     # Extended Interface for LazyNode:
-    parent, depth, next, prev
+    parent, depth, next, prev, next!, prev!
 
 #-----------------------------------------------------------------------------# escape/unescape
 const escape_chars = ('&' => "&amp;", '<' => "&lt;", '>' => "&gt;", "'" => "&apos;", '"' => "&quot;")
@@ -114,6 +114,59 @@ function prev(o::LazyNode)
     n = prev(o.raw)
     isnothing(n) && return nothing
     n.type === RawElementClose ? prev(LazyNode(n)) : LazyNode(n)
+end
+
+"""
+    next!(o::LazyNode) -> LazyNode | Nothing
+
+In-place variant of [`next`](@ref): advance `o` to the next node in
+document order by mutating its fields. Returns `o` (now repositioned)
+or `nothing` if the end of the document has been reached.
+
+Functionally equivalent to `o = next(o)` but avoids allocating a fresh
+`LazyNode` per traversal step. Tight loops that walk a large document
+— for instance a downstream package extracting all `Placemark`
+elements from a 50 MiB KML — can trade their per-step `LazyNode`
+allocations for a single reused object.
+
+The trade-off is **aliasing**: `o` is the same object after each call,
+so callers must NOT retain references to a previous position (e.g. by
+pushing `o` into a collection) — those references would silently track
+the new position instead. If you need to keep a snapshot, copy the
+raw descriptor with `LazyNode(o.raw)`.
+"""
+function next!(o::LazyNode)
+    n = next(o.raw)
+    isnothing(n) && return nothing
+    while n !== nothing && n.type === RawElementClose
+        n = next(n)
+    end
+    isnothing(n) && return nothing
+    setfield!(o, :raw, n)
+    setfield!(o, :tag, nothing)
+    setfield!(o, :attributes, nothing)
+    setfield!(o, :value, nothing)
+    return o
+end
+
+"""
+    prev!(o::LazyNode) -> LazyNode | Nothing
+
+In-place reverse counterpart of [`next!`](@ref); see that method's
+docstring for the aliasing caveat.
+"""
+function prev!(o::LazyNode)
+    n = prev(o.raw)
+    isnothing(n) && return nothing
+    while n !== nothing && n.type === RawElementClose
+        n = prev(n)
+    end
+    isnothing(n) && return nothing
+    setfield!(o, :raw, n)
+    setfield!(o, :tag, nothing)
+    setfield!(o, :attributes, nothing)
+    setfield!(o, :value, nothing)
+    return o
 end
 
 #-----------------------------------------------------------------------------# Node

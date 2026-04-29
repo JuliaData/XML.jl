@@ -244,6 +244,51 @@ end
     end
 end
 
+#-----------------------------------------------------------------------------# next! / prev!
+@testset "LazyNode next! / prev!" begin
+    lzxml = """<root><a/><b/><c/></root>"""
+    lz = XML.parse(XML.LazyNode, lzxml)
+
+    # Functional equivalence: walking with `next!` visits the same nodes
+    # as the allocating `next` chain.
+    walker = XML.next(lz)
+    walked = [XML.write(walker)]
+    while XML.next!(walker) !== nothing
+        push!(walked, XML.write(walker))
+    end
+    expected = String[]
+    n = XML.next(lz)
+    while n !== nothing
+        push!(expected, XML.write(n))
+        n = XML.next(n)
+    end
+    @test walked == expected
+
+    # Identity: `next!(o)` returns the very same object
+    walker = XML.next(lz)
+    @test XML.next!(walker) === walker
+
+    # Memoization fields are reset when the node is repositioned
+    walker = XML.next(lz)
+    _ = walker.tag
+    @test getfield(walker, :tag) !== nothing
+    XML.next!(walker)
+    @test getfield(walker, :tag) === nothing
+
+    # `nothing` at the document boundary, idempotent there
+    walker = XML.next(lz)
+    while XML.next!(walker) !== nothing; end
+    @test XML.next!(walker) === nothing
+
+    # `prev!` is the symmetric counterpart
+    lz2 = XML.parse(XML.LazyNode, lzxml)
+    walker = XML.next(lz2)
+    XML.next!(walker); XML.next!(walker)          # root → a → b
+    @test walker.tag == "b"
+    @test XML.prev!(walker) === walker            # in-place
+    @test walker.tag == "a"
+end
+
 #-----------------------------------------------------------------------------# Preserve whitespace
 @testset "xml:space" begin
     @testset "Basic xml:space functionality" begin
