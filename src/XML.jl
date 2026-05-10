@@ -20,7 +20,7 @@ function unescape(x::AbstractString)
     end
     return result
 end
-function escape(x::String)
+function escape(x::AbstractString)
     result = replace(x, r"&(?!amp;|quot;|apos;|gt;|lt;)" => "&amp;")
     for (pat, r) in escape_chars[2:end]
         result = replace(result, pat => r)
