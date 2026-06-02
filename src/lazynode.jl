@@ -17,7 +17,7 @@ through `LazyNode` does not duplicate its text data.
 """
 struct LazyNode{S <: AbstractString}
     data::S
-    token::Token{S}
+    token::Token
     nodetype::NodeType
 end
 
@@ -27,23 +27,27 @@ end
 
 nodetype(n::LazyNode) = n.nodetype
 
-_lazy_pos(n::LazyNode) = n.token.raw.offset + 1
+_lazy_pos(n::LazyNode) = n.token.offset + 1
 _lazy_tokenizer(n::LazyNode) = tokenize(n.data, _lazy_pos(n))
+# Source string backing a lazy tokenizer (StatefulTokenizer) — needed to reconstruct token
+# text now that `Token` holds only a byte range. Used where the owning `LazyNode` is out of
+# scope (e.g. inside `LazyAttrIterator`, which carries only the tokenizer).
+@inline _src(iter) = iter.t.data
 
 # Entity-decode a TEXT/ATTR_VALUE token only when the tokenizer actually saw a `&`. When
 # `has_entities` is false the raw `SubString{String}` view is returned with no allocation
 # and no byte scan — the dominant case for spreadsheet-style data. `_decode_attr` strips
 # the surrounding quotes first; the flag is read from the token, not the stripped view.
-@inline _decode(tok::Token) = tok.has_entities ? unescape(tok.raw) : tok.raw
-@inline _decode_attr(tok::Token) = tok.has_entities ? unescape(attr_value(tok)) : attr_value(tok)
+@inline _decode(tok::Token, data) = tok.has_entities ? unescape(raw(tok, data)) : raw(tok, data)
+@inline _decode_attr(tok::Token, data) = tok.has_entities ? unescape(attr_value(tok, data)) : attr_value(tok, data)
 
 #-----------------------------------------------------------------------------# tag / value
 function tag(n::LazyNode)
     nt = n.nodetype
     if nt === Element
-        return tag_name(n.token)
+        return tag_name(n.token, n.data)
     elseif nt === ProcessingInstruction
-        return pi_target(n.token)
+        return pi_target(n.token, n.data)
     end
     nothing
 end
@@ -51,26 +55,26 @@ end
 function value(n::LazyNode)
     nt = n.nodetype
     if nt === Text
-        return _decode(n.token)
+        return _decode(n.token, n.data)
     elseif nt === Comment
         iter = _lazy_tokenizer(n)
         iterate(iter)  # COMMENT_OPEN
-        return iterate(iter)[1].raw
+        return raw(iterate(iter)[1], n.data)
     elseif nt === CData
         iter = _lazy_tokenizer(n)
         iterate(iter)  # CDATA_OPEN
-        return iterate(iter)[1].raw
+        return raw(iterate(iter)[1], n.data)
     elseif nt === DTD
         iter = _lazy_tokenizer(n)
         iterate(iter)  # DOCTYPE_OPEN
-        return lstrip(iterate(iter)[1].raw)
+        return lstrip(raw(iterate(iter)[1], n.data))
     elseif nt === ProcessingInstruction
         iter = _lazy_tokenizer(n)
         iterate(iter)  # PI_OPEN
         result = iterate(iter)
         result === nothing && return nothing
         result[1].kind === TokenKinds.PI_CONTENT || return nothing
-        content = strip(result[1].raw)
+        content = strip(raw(result[1], n.data))
         return isempty(content) ? nothing : content
     end
     nothing
@@ -90,10 +94,10 @@ function attributes(n::LazyNode)
     attrs = Pair{SubString{String}, SubString{String}}[]
     for tok in iter
         tok.kind === TokenKinds.ATTR_NAME || break
-        name = tok.raw
+        name = raw(tok, n.data)
         result = iterate(iter)
         result === nothing && break
-        push!(attrs, name => _as_substring(_decode_attr(result[1])))
+        push!(attrs, name => _as_substring(_decode_attr(result[1], n.data)))
     end
     isempty(attrs) ? nothing : Attributes(attrs)
 end
@@ -112,10 +116,10 @@ function Base.get(n::LazyNode, key::AbstractString, default)
     iterate(iter)  # skip OPEN_TAG or XML_DECL_OPEN
     for tok in iter
         tok.kind === TokenKinds.ATTR_NAME || return default
-        if tok.raw == key
+        if raw(tok, n.data) == key
             result = iterate(iter)
             result === nothing && return default
-            return _decode_attr(result[1])
+            return _decode_attr(result[1], n.data)
         else
             iterate(iter)  # skip value
         end
@@ -158,13 +162,13 @@ function Base.iterate(it::LazyAttrIterator, _ = nothing)
         it.done[] = true
         return nothing
     end
-    name = tok.raw
+    name = raw(tok, _src(it.iter))
     r = iterate(it.iter)
     if isnothing(r)
         it.done[] = true
         return nothing
     end
-    val = _decode_attr(r[1])
+    val = _decode_attr(r[1], _src(it.iter))
     ((name => val), nothing)
 end
 
@@ -185,7 +189,7 @@ function Base.keys(n::LazyNode)
     result = SubString{String}[]
     for tok in iter
         tok.kind === TokenKinds.ATTR_NAME || break
-        push!(result, tok.raw)
+        push!(result, raw(tok, n.data))
         iterate(iter)  # skip value
     end
     result
@@ -276,7 +280,7 @@ function _lazy_skip_until!(iter, target::TokenKinds.Kind)
     end
 end
 
-_token_end(tok) = tok.raw.offset + tok.raw.ncodeunits
+_token_end(tok) = tok.offset + tok.ncodeunits
 
 function _scan_to_close(iter, close_kind::TokenKinds.Kind)
     for tok in iter
@@ -329,7 +333,7 @@ function sourcetext(n::LazyNode)
     elseif nt === DTD
         return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), TokenKinds.DOCTYPE_CLOSE))
     elseif nt === Text
-        return n.token.raw
+        return raw(n.token, n.data)
     elseif nt === Document
         return SubString(n.data)
     end
@@ -478,11 +482,11 @@ function is_simple_value(n::LazyNode)
     if k === TokenKinds.TEXT
         nxt = iterate(iter)
         (isnothing(nxt) || nxt[1].kind !== TokenKinds.CLOSE_TAG) && return nothing
-        return _decode(tok)
+        return _decode(tok, n.data)
     elseif k === TokenKinds.CDATA_OPEN
         r = iterate(iter)
         (isnothing(r) || r[1].kind !== TokenKinds.CDATA_CONTENT) && return nothing
-        content = r[1].raw
+        content = raw(r[1], n.data)
         r = iterate(iter)
         (isnothing(r) || r[1].kind !== TokenKinds.CDATA_CLOSE) && return nothing
         r = iterate(iter)

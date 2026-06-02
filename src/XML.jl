@@ -12,7 +12,7 @@ export
 
 include("XMLTokenizer.jl")
 using .XMLTokenizer:
-    XMLTokenizer, tokenize, tag_name, attr_value, pi_target,
+    XMLTokenizer, tokenize, tag_name, attr_value, pi_target, raw,
     TokenKinds, Token, Tokenizer, TokenizerState
 
 #-----------------------------------------------------------------------------# escape/unescape
@@ -717,11 +717,11 @@ function _parse(xml::String, ::Type{S}, convert_text::F) where {S, F}
         k = token.kind
 
         if k === TokenKinds.TEXT
-            v = _text_value(S, token.raw, token.has_entities, convert_text)
+            v = _text_value(S, raw(token, xml), token.has_entities, convert_text)
             push!(last(children_stack), Node{S}(Text, nothing, nothing, v, nothing))
 
         elseif k === TokenKinds.OPEN_TAG
-            push!(tags, _to(S, tag_name(token)))
+            push!(tags, _to(S, tag_name(token, xml)))
             push!(attrs_stack, Pair{S,S}[])
             push!(children_stack, Node{S}[])
 
@@ -735,7 +735,7 @@ function _parse(xml::String, ::Type{S}, convert_text::F) where {S, F}
             in_close_tag && (in_close_tag = false)
 
         elseif k === TokenKinds.CLOSE_TAG
-            close_name = tag_name(token)
+            close_name = tag_name(token, xml)
             isempty(tags) && error("Closing tag </$close_name> with no matching open tag.")
             t = pop!(tags)
             t == close_name || error("Mismatched tags: expected </$t>, got </$close_name>.")
@@ -745,10 +745,10 @@ function _parse(xml::String, ::Type{S}, convert_text::F) where {S, F}
             in_close_tag = true
 
         elseif k === TokenKinds.ATTR_NAME
-            pending_attr_name = token.raw
+            pending_attr_name = raw(token, xml)
 
         elseif k === TokenKinds.ATTR_VALUE
-            val = _text_value(S, attr_value(token), token.has_entities, convert_text)
+            val = _text_value(S, attr_value(token, xml), token.has_entities, convert_text)
             name = _to(S, pending_attr_name)
             if decl_attrs !== nothing
                 any(p -> first(p) == name, decl_attrs) && error("Duplicate attribute: $name")
@@ -767,20 +767,20 @@ function _parse(xml::String, ::Type{S}, convert_text::F) where {S, F}
             decl_attrs = nothing
 
         elseif k === TokenKinds.COMMENT_CONTENT
-            push!(last(children_stack), Node{S}(Comment, nothing, nothing, _to(S, token.raw), nothing))
+            push!(last(children_stack), Node{S}(Comment, nothing, nothing, _to(S, raw(token, xml)), nothing))
 
         elseif k === TokenKinds.CDATA_CONTENT
-            push!(last(children_stack), Node{S}(CData, nothing, nothing, _to(S, token.raw), nothing))
+            push!(last(children_stack), Node{S}(CData, nothing, nothing, _to(S, raw(token, xml)), nothing))
 
         elseif k === TokenKinds.DOCTYPE_CONTENT
-            push!(last(children_stack), Node{S}(DTD, nothing, nothing, _to(S, lstrip(token.raw)), nothing))
+            push!(last(children_stack), Node{S}(DTD, nothing, nothing, _to(S, lstrip(raw(token, xml))), nothing))
 
         elseif k === TokenKinds.PI_OPEN
-            pending_pi_tag = pi_target(token)
+            pending_pi_tag = pi_target(token, xml)
             pending_pi_value = nothing
 
         elseif k === TokenKinds.PI_CONTENT
-            content = strip(token.raw)
+            content = strip(raw(token, xml))
             pending_pi_value = isempty(content) ? nothing : _to(S, content)
 
         elseif k === TokenKinds.PI_CLOSE

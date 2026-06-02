@@ -44,27 +44,45 @@ baremodule TokenKinds
 end
 
 #-----------------------------------------------------------------------# Token
+# A token is a (kind, has_entities, byte-range) triple. It stores only the *range* into
+# the source — `offset` (0-based byte offset) and `ncodeunits` (byte length), mirroring
+# the internal fields of the `SubString` it used to hold. Dropping the SubString's string
+# reference makes `Token` an ISBITS type, so the `(Token, TokenizerState)` tuple returned
+# by `iterate` no longer heap-allocates per token (previously the dominant parse cost).
+# Recover the text with `raw(token, data)`, passing the original source string.
+#
 # `has_entities` records whether the raw bytes contain a `&`. It is set by the readers for
 # `TEXT` and `ATTR_VALUE` (where entity references can appear) and stays `false` for every
-# other token kind. The downstream parser uses it to skip `unescape`'s redundant byte scan
+# other token kind, letting the downstream parser skip `unescape`'s redundant byte scan
 # when no entities are present.
-#
-# Field order matters: `has_entities` lives in the alignment padding that would otherwise
-# sit between the 1-byte `kind` and the 24-byte `raw`. This keeps `sizeof(Token{String})`
-# at 32 bytes instead of 40, which matters because tokens are allocated by the million
-# during parse.
-struct Token{S <: AbstractString}
+struct Token
     kind::TokenKinds.Kind
     has_entities::Bool
-    raw::SubString{S}
+    offset::Int        # == SubString.offset (0-based byte offset into the source)
+    ncodeunits::Int    # == SubString.ncodeunits (byte length of the token text)
 end
 
-# Backwards-compatible constructor for the many internal call sites that emit non-entity
-# tokens (markup, names, close tokens, etc.).
-@inline Token(kind::TokenKinds.Kind, raw::SubString{S}) where {S} = Token{S}(kind, false, raw)
+# Emit-site constructors: take the throwaway `SubString` view a reader just built and keep
+# only its byte range. The SubString does not escape, so this allocates nothing. They keep
+# every `Token(KIND, SubString(data, a, b))` / `Token(KIND, has_amp, view)` site unchanged.
+@inline Token(kind::TokenKinds.Kind, raw::SubString) = Token(kind, false, raw.offset, raw.ncodeunits)
+@inline Token(kind::TokenKinds.Kind, has_entities::Bool, raw::SubString) =
+    Token(kind, has_entities, raw.offset, raw.ncodeunits)
+
+# Recover the token's text as a zero-copy `SubString` of its source `data`. `prevind` lands
+# the end index on the START of the last character, so the round-trip is correct for
+# multibyte UTF-8 — a naive `SubString(data, off+1, off+ncu)` would pass a continuation byte
+# as the end index and throw. `_token_root` resolves `data::SubString` to its parent string
+# (token offsets are root-relative, since `SubString(::SubString, …)` flattens to the root).
+@inline _token_root(s::AbstractString) = s
+@inline _token_root(s::SubString)      = s.string
+@inline function raw(t::Token, data::AbstractString)
+    r = _token_root(data)
+    @inbounds SubString(r, t.offset + 1, prevind(r, t.offset + t.ncodeunits + 1))
+end
 
 function Base.show(io::IO, t::Token)
-    print(io, t.kind, ": ", repr(String(t.raw)))
+    print(io, t.kind, " @", t.offset, "+", t.ncodeunits)
 end
 
 #-----------------------------------------------------------------------# Tokenizer mode
@@ -82,16 +100,18 @@ end
 end
 
 #-----------------------------------------------------------------------# TokenizerState (immutable, SROA-friendly)
-struct TokenizerState{S <: AbstractString}
+struct TokenizerState
     pos::Int
     mode::Mode
-    pending::Token{S}  # buffered token for constructs that emit two tokens at once (e.g. content + close)
+    pending::Token  # buffered token for constructs that emit two tokens at once (e.g. content + close)
 end
 
-# Create an empty token (no pending token buffered)
+# Create an empty token (no pending token buffered). The throwaway `SubString(s,1,0)` has
+# offset/ncodeunits 0, so the resulting Token is the (kind, false, 0, 0) sentinel.
 @inline no_token(s::AbstractString) = Token(TokenKinds.TEXT, @inbounds SubString(s, 1, 0))
-# Check whether the state has a buffered pending token
-@inline has_pending(st::TokenizerState) = !isempty(st.pending.raw)
+# Check whether the state has a buffered pending token (the sentinel has ncodeunits 0;
+# every real pending token — COMMENT/CDATA/PI/DOCTYPE close — is non-empty).
+@inline has_pending(st::TokenizerState) = st.pending.ncodeunits != 0
 
 
 #-----------------------------------------------------------------------# Tokenizer (immutable iterator)
@@ -113,7 +133,7 @@ tokenize(xml::AbstractString, pos::Int) = StatefulTokenizer(Tokenizer(xml, pos))
 # storage that `Iterators.Stateful` carries.
 mutable struct StatefulTokenizer{S <: AbstractString}
     const t::Tokenizer{S}
-    state::TokenizerState{S}
+    state::TokenizerState
     done::Bool
 end
 
@@ -121,7 +141,7 @@ StatefulTokenizer(t::Tokenizer{S}) where {S <: AbstractString} =
     StatefulTokenizer{S}(t, TokenizerState(t.start, M_DEFAULT, no_token(t.data)), false)
 
 Base.IteratorSize(::Type{<:StatefulTokenizer}) = Base.SizeUnknown()
-Base.eltype(::Type{StatefulTokenizer{S}}) where {S} = Token{S}
+Base.eltype(::Type{<:StatefulTokenizer}) = Token
 
 @inline function Base.iterate(st::StatefulTokenizer, _ = nothing)
     st.done && return nothing
@@ -142,7 +162,7 @@ function Base.show(io::IO, t::Tokenizer)
 end
 
 Base.IteratorSize(::Type{<:Tokenizer}) = Base.SizeUnknown()
-Base.eltype(::Type{Tokenizer{S}}) where {S} = Token{S}
+Base.eltype(::Type{<:Tokenizer}) = Token
 
 function Base.iterate(t::Tokenizer, st::TokenizerState=TokenizerState(t.start, M_DEFAULT, no_token(t.data)))
     (; data) = t
@@ -227,9 +247,9 @@ function read_text(data::AbstractString, pos::Int)
     n = ncodeunits(data)
     lt_idx = findnext('<', data, pos)
     end_pos = isnothing(lt_idx) ? n + 1 : lt_idx
-    raw = @inbounds SubString(data, start, prevind(data, end_pos))
-    has_amp = occursin('&', raw)
-    tok = Token{typeof(data)}(TokenKinds.TEXT, has_amp, raw)
+    text = @inbounds SubString(data, start, prevind(data, end_pos))
+    has_amp = occursin('&', text)
+    tok = Token(TokenKinds.TEXT, has_amp, text)
     (tok, TokenizerState(end_pos, M_DEFAULT, no_token(data)))
 end
 
@@ -398,8 +418,8 @@ function read_attr_value(data::AbstractString, pos::Int, mode::Mode)
     pos = close_idx + 1  # one past the closing quote (always ASCII)
 
     next_state = (mode == M_XML_DECL_VALUE) ? M_XML_DECL : M_TAG
-    raw = @inbounds SubString(data, start, pos - 1)
-    tok = Token{typeof(data)}(TokenKinds.ATTR_VALUE, has_amp, raw)
+    valraw = @inbounds SubString(data, start, pos - 1)
+    tok = Token(TokenKinds.ATTR_VALUE, has_amp, valraw)
     (tok, TokenizerState(pos, next_state, no_token(data)))
 end
 
@@ -504,40 +524,44 @@ end
 #-----------------------------------------------------------------------# Utility functions
 
 """
-    tag_name(token::Token) -> SubString{String}
+    tag_name(token::Token, data) -> SubString
 
-Extract the element name from an `OPEN_TAG` or `CLOSE_TAG` token.
+Extract the element name from an `OPEN_TAG` or `CLOSE_TAG` token. `data` is the source the
+token was scanned from (needed to recover the text — see [`raw`](@ref)).
 """
-function tag_name(token::Token)
+function tag_name(token::Token, data)
+    r = raw(token, data)
     if token.kind == TokenKinds.OPEN_TAG
-        @inbounds SubString(token.raw, 2, ncodeunits(token.raw))  # skip '<'
+        @inbounds SubString(r, 2, ncodeunits(r))  # skip '<'
     elseif token.kind == TokenKinds.CLOSE_TAG
-        @inbounds SubString(token.raw, 3, ncodeunits(token.raw))  # skip '</'
+        @inbounds SubString(r, 3, ncodeunits(r))  # skip '</'
     else
         throw(ArgumentError("tag_name requires OPEN_TAG or CLOSE_TAG, got $(token.kind)"))
     end
 end
 
 """
-    attr_value(token::Token) -> SubString{String}
+    attr_value(token::Token, data) -> SubString
 
-Strip the surrounding quotes from an `ATTR_VALUE` token.
+Strip the surrounding quotes from an `ATTR_VALUE` token. `data` is the source string.
 """
-function attr_value(token::Token)
+function attr_value(token::Token, data)
     token.kind == TokenKinds.ATTR_VALUE ||
         throw(ArgumentError("attr_value requires ATTR_VALUE, got $(token.kind)"))
-    @inbounds SubString(token.raw, 2, prevind(token.raw, lastindex(token.raw)))
+    r = raw(token, data)
+    @inbounds SubString(r, 2, prevind(r, lastindex(r)))
 end
 
 """
-    pi_target(token::Token) -> SubString{String}
+    pi_target(token::Token, data) -> SubString
 
-Extract the target name from a `PI_OPEN` or `XML_DECL_OPEN` token.
+Extract the target name from a `PI_OPEN` or `XML_DECL_OPEN` token. `data` is the source string.
 """
-function pi_target(token::Token)
+function pi_target(token::Token, data)
     (token.kind == TokenKinds.PI_OPEN || token.kind == TokenKinds.XML_DECL_OPEN) ||
         throw(ArgumentError("pi_target requires PI_OPEN or XML_DECL_OPEN, got $(token.kind)"))
-    @inbounds SubString(token.raw, 3, ncodeunits(token.raw))  # skip '<?'
+    r = raw(token, data)
+    @inbounds SubString(r, 3, ncodeunits(r))  # skip '<?'
 end
 
 end # module XMLTokenizer

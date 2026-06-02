@@ -20,7 +20,7 @@ const _CURSOR_XT = XMLTokenizer
 
 mutable struct Cursor{S <: AbstractString}
     st::_CURSOR_XT.StatefulTokenizer{S}  # mutable token engine (advances in place)
-    token::_CURSOR_XT.Token{S}           # opening/primary token of the current node
+    token::_CURSOR_XT.Token              # opening/primary token of the current node (isbits)
     nodetype::NodeType                   # current event kind
     depth::Int                           # current node's depth (root children = 1)
     enclosing::Int                       # open-element count (depth bookkeeping)
@@ -47,7 +47,7 @@ Base.parse(::Type{Cursor}, xml::AbstractString) = Cursor(String(xml))
 @inline _data(c::Cursor) = c.st.t.data
 # A fresh token stream positioned at the current node — mirrors LazyNode's
 # `_lazy_tokenizer`, but built directly on the token layer (no LazyNode).
-@inline _rescan(c::Cursor) = tokenize(_data(c), c.token.raw.offset + 1)
+@inline _rescan(c::Cursor) = tokenize(_data(c), c.token.offset + 1)
 
 #-----------------------------------------------------------------------------# next!
 """
@@ -109,42 +109,42 @@ end
 
 function tag(c::Cursor)
     nt = c.nodetype
-    nt === Element                ? tag_name(c.token) :
-    nt === ProcessingInstruction  ? pi_target(c.token) : nothing
+    nt === Element                ? tag_name(c.token, _data(c)) :
+    nt === ProcessingInstruction  ? pi_target(c.token, _data(c)) : nothing
 end
 
 # token-layer entity decode (inlined `_decode`; depends only on `unescape`).
 # Returns Union{SubString,String} like `value(::LazyNode)` — the polymorphic
 # return is inherent to the accessor; the residual boxing it causes is minor
 # next to the per-token allocation that Phase 2 (bitstype Token) removes.
-@inline _cursor_decode(tok) = tok.has_entities ? unescape(tok.raw) : tok.raw
+@inline _cursor_decode(tok, data) = tok.has_entities ? unescape(raw(tok, data)) : raw(tok, data)
 
 function value(c::Cursor)
     nt = c.nodetype
     if nt === Text
-        return _cursor_decode(c.token)
+        return _cursor_decode(c.token, _data(c))
     elseif nt === Comment
         it = _rescan(c); iterate(it)            # COMMENT_OPEN
-        return iterate(it)[1].raw
+        return raw(iterate(it)[1], _data(c))
     elseif nt === CData
         it = _rescan(c); iterate(it)            # CDATA_OPEN
-        return iterate(it)[1].raw
+        return raw(iterate(it)[1], _data(c))
     elseif nt === DTD
         it = _rescan(c); iterate(it)            # DOCTYPE_OPEN
-        return lstrip(iterate(it)[1].raw)
+        return lstrip(raw(iterate(it)[1], _data(c)))
     elseif nt === ProcessingInstruction
         it = _rescan(c); iterate(it)            # PI_OPEN
         r = iterate(it)
         r === nothing && return nothing
         r[1].kind === _CURSOR_XT.TokenKinds.PI_CONTENT || return nothing
-        content = strip(r[1].raw)
+        content = strip(raw(r[1], _data(c)))
         return isempty(content) ? nothing : content
     end
     nothing
 end
 
-@inline _cursor_decode_attr(tok) =
-    tok.has_entities ? unescape(attr_value(tok)) : attr_value(tok)
+@inline _cursor_decode_attr(tok, data) =
+    tok.has_entities ? unescape(attr_value(tok, data)) : attr_value(tok, data)
 @inline _cursor_as_substring(s::SubString{String}) = s
 @inline _cursor_as_substring(s::String) = SubString(s, 1, lastindex(s))
 
@@ -154,10 +154,10 @@ function attributes(c::Cursor)
     attrs = Pair{SubString{String}, SubString{String}}[]
     for tok in it
         tok.kind === _CURSOR_XT.TokenKinds.ATTR_NAME || break
-        name = tok.raw
+        name = raw(tok, _data(c))
         r = iterate(it)
         r === nothing && break
-        push!(attrs, name => _cursor_as_substring(_cursor_decode_attr(r[1])))
+        push!(attrs, name => _cursor_as_substring(_cursor_decode_attr(r[1], _data(c))))
     end
     isempty(attrs) ? nothing : Attributes(attrs)
 end
@@ -168,10 +168,10 @@ function Base.get(c::Cursor, key::AbstractString, default)
     it = _rescan(c); iterate(it)
     for tok in it
         tok.kind === _CURSOR_XT.TokenKinds.ATTR_NAME || return default
-        if tok.raw == key
+        if raw(tok, _data(c)) == key
             r = iterate(it)
             r === nothing && return default
-            return _cursor_decode_attr(r[1])
+            return _cursor_decode_attr(r[1], _data(c))
         else
             iterate(it)                         # skip value
         end
