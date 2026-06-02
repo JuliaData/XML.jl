@@ -1,6 +1,7 @@
 using Test, XML
-using XML: Cursor, next!, for_each_child, eof, nodetype, tag, value, attributes, depth,
-           Element, Text, CData, Comment, ProcessingInstruction, Declaration, DTD, LazyNode
+using XML: Cursor, next!, for_each_child, @for_each_child, eof, nodetype, tag, value,
+           attributes, depth, children, Element, Text, CData, Comment,
+           ProcessingInstruction, Declaration, DTD, LazyNode
 
 @testset "Cursor" begin
 
@@ -158,5 +159,55 @@ using XML: Cursor, next!, for_each_child, eof, nodetype, tag, value, attributes,
             end
         end
         @test deep == [("P", ["a", "b"]), ("P", ["c"])]
+    end
+
+    @testset "Cursor(data, startpos) + Cursor(LazyNode) subtree bridge" begin
+        doc = "<r><a><x/><y/></a><b/></r>"
+        # Primitive: start at the byte offset of <a> → walk a's subtree only.
+        apos = first(findfirst("<a>", doc))
+        c = Cursor(doc, apos)
+        @test next!(c) !== nothing
+        @test String(tag(c)) == "a"
+        @test depth(c) == 1
+        kids = String[]
+        @for_each_child c ch begin
+            nodetype(ch) === Element && push!(kids, String(tag(ch)))
+        end
+        @test kids == ["x", "y"]          # b is a's sibling, outside the subtree → excluded
+
+        # Bridge: locate <a> via the lazy DOM, then cursor-walk just its subtree.
+        ln = parse(doc, LazyNode)
+        a = children(children(ln)[1])[1]  # Document → <r> → <a>
+        c2 = Cursor(a)
+        next!(c2)
+        @test String(tag(c2)) == "a"
+        kids2 = String[]
+        @for_each_child c2 ch begin
+            nodetype(ch) === Element && push!(kids2, String(tag(ch)))
+        end
+        @test kids2 == ["x", "y"]
+    end
+
+    @testset "@for_each_child inlines (accumulates locals without a closure)" begin
+        # The macro body assigns enclosing locals directly — the case a do-block
+        # would box. Verify correctness of such accumulation, nested + minified.
+        doc = "<D><F><P><name>A</name><Point/></P><P><name>B</name></P></F></D>"
+        c = parse(Cursor, doc); next!(c)              # at <D>
+        placemarks = Tuple{Int,Bool}[]                # (child_element_count, saw_name)
+        @for_each_child c f begin                     # F
+            nodetype(f) === Element || continue
+            @for_each_child c p begin                 # P
+                nodetype(p) === Element || continue
+                n = 0; saw_name = false               # locals mutated inside the inner macro body
+                @for_each_child c g begin
+                    if nodetype(g) === Element
+                        n += 1
+                        tag(g) == "name" && (saw_name = true)
+                    end
+                end
+                push!(placemarks, (n, saw_name))
+            end
+        end
+        @test placemarks == [(2, true), (1, true)]    # P1: name+Point; P2: name
     end
 end

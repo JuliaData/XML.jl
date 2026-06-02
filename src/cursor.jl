@@ -45,6 +45,31 @@ function Cursor(data::S) where {S <: AbstractString}
 end
 Base.parse(::Type{Cursor}, xml::AbstractString) = Cursor(String(xml))
 
+"""
+    Cursor(data::AbstractString, startpos::Integer)
+
+A cursor whose token stream starts at byte position `startpos` in `data` instead
+of the document start — for walking a subtree whose start offset is already known.
+The first [`next!`](@ref) lands on whatever element begins at `startpos`, at depth
+1, so [`for_each_child`](@ref) then iterates that element's immediate children and
+auto-stops at its subtree boundary (the depth break). LazyNode-agnostic primitive.
+"""
+function Cursor(data::S, startpos::Integer) where {S <: AbstractString}
+    st = _CURSOR_XT.StatefulTokenizer(_CURSOR_XT.Tokenizer(data, startpos))
+    Cursor{S}(st, _CURSOR_XT.no_token(data), Document, 0, 0, false, false)
+end
+
+"""
+    Cursor(node::LazyNode)
+
+Convenience bridge: a cursor positioned to walk `node` and its subtree — the
+inverse of the `LazyNode(c)` snapshot. Delegates to `Cursor(data, startpos)` with
+`node`'s source string and start offset; it is the only place `Cursor` mentions
+`LazyNode`, and it is an optional, removable convenience (a consumer that tracks
+subtree start offsets directly can call the primitive `Cursor(data, startpos)`).
+"""
+Cursor(node::LazyNode) = Cursor(node.data, node.token.offset + 1)
+
 @inline _data(c::Cursor) = c.st.t.data
 # A fresh token stream positioned at the current node — mirrors LazyNode's
 # `_lazy_tokenizer`, but built directly on the token layer (no LazyNode).
@@ -215,6 +240,36 @@ function for_each_child(f, c::Cursor)
         c.depth == target && f(c)
     end
     return c
+end
+
+"""
+    @for_each_child c child body
+
+Macro form of [`for_each_child`](@ref): run `body` for each immediate child of the
+cursor `c`'s current node, binding `child` to `c` (the cursor itself) on each. The
+body is **inlined** (not a closure), so it can assign enclosing locals without the
+capture-boxing a `do` block incurs — which matters in hot extraction loops where
+the body accumulates fields. Same depth/peek semantics as the function form (holds
+the boundary node on exit, so it composes when nested). Mirrors the shape of a
+node-based `@for_each_immediate_child`.
+"""
+macro for_each_child(c, child, body)
+    quote
+        local _cur = $(esc(c))
+        local _initial = _cur.depth
+        local _target = _initial + 1
+        while next!(_cur) !== nothing
+            if _cur.depth <= _initial
+                _cur.held = true
+                break
+            end
+            if _cur.depth == _target
+                local $(esc(child)) = _cur
+                $(esc(body))
+            end
+        end
+        _cur
+    end
 end
 
 # Pull-mode iterator surface → `for node in c … end`. The yielded value IS the
