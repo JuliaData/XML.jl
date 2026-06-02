@@ -115,4 +115,48 @@ using XML: Cursor, next!, for_each_child, eof, nodetype, tag, value, attributes,
         @test depth(c) == 1
         @test next!(c) === nothing
     end
+
+    @testset "nested for_each_child composes (DFS), incl. minified" begin
+        # Regression: a consume-on-break for_each_child skipped the *second* subtree of
+        # a parent when there was no inter-element whitespace to buffer the boundary node
+        # (the boundary node was consumed by the enclosing sweep's next!). The peekable
+        # `held` flag holds the boundary node so composition is correct for any input.
+        function folders(doc)
+            c = parse(Cursor, doc); next!(c)        # position at <Document>
+            out = Tuple{String,Vector{String}}[]
+            for_each_child(c) do _
+                nodetype(c) === Element || return
+                ftag = String(tag(c))               # capture before descending (aliasing contract)
+                kids = String[]
+                for_each_child(c) do _
+                    nodetype(c) === Element && push!(kids, String(tag(c)))
+                end
+                push!(out, (ftag, kids))
+            end
+            out
+        end
+        mini = "<Document><Folder><name>F1</name><Placemark/><Placemark/></Folder>" *
+               "<Folder><name>F2</name><Placemark/></Folder></Document>"
+        ws   = "<Document>\n  <Folder><name>F1</name><Placemark/><Placemark/></Folder>\n" *
+               "  <Folder><name>F2</name><Placemark/></Folder>\n</Document>"
+        expected = [("Folder", ["name", "Placemark", "Placemark"]), ("Folder", ["name", "Placemark"])]
+        @test folders(mini) == expected      # minified — the case the consume-on-break code broke
+        @test folders(ws)   == expected      # whitespaced — must still hold
+
+        # 3-level DFS, minified
+        c = parse(Cursor, "<D><F><P><a/><b/></P><P><c/></P></F></D>"); next!(c)
+        deep = Tuple{String,Vector{String}}[]
+        for_each_child(c) do _               # F
+            nodetype(c) === Element || return
+            for_each_child(c) do _           # P
+                nodetype(c) === Element || return
+                ptag = String(tag(c)); ks = String[]
+                for_each_child(c) do _
+                    nodetype(c) === Element && push!(ks, String(tag(c)))
+                end
+                push!(deep, (ptag, ks))
+            end
+        end
+        @test deep == [("P", ["a", "b"]), ("P", ["c"])]
+    end
 end

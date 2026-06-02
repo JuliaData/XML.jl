@@ -25,6 +25,7 @@ mutable struct Cursor{S <: AbstractString}
     depth::Int                           # current node's depth (root children = 1)
     enclosing::Int                       # open-element count (depth bookkeeping)
     done::Bool
+    held::Bool                           # peek flag: current node not yet consumed (see for_each_child)
 end
 
 """
@@ -40,7 +41,7 @@ aliasing-contract note on [`next!`](@ref).
 """
 function Cursor(data::S) where {S <: AbstractString}
     st = _CURSOR_XT.StatefulTokenizer(_CURSOR_XT.Tokenizer(data, 1))
-    Cursor{S}(st, _CURSOR_XT.no_token(data), Document, 0, 0, false)
+    Cursor{S}(st, _CURSOR_XT.no_token(data), Document, 0, 0, false, false)
 end
 Base.parse(::Type{Cursor}, xml::AbstractString) = Cursor(String(xml))
 
@@ -62,6 +63,10 @@ the loop body) is safe; to *retain* a position across further advances,
 snapshot it (e.g. `LazyNode(c)`).
 """
 @inline function next!(c::Cursor)
+    if c.held               # a node held by a child-iteration break — re-yield without advancing
+        c.held = false
+        return c
+    end
     c.done && return nothing
     K = _CURSOR_XT.TokenKinds
     while true
@@ -191,12 +196,22 @@ LazyNode(c::Cursor) = LazyNode(_data(c), c.token, c.nodetype)
 Apply `f(c)` to each immediate child of the cursor's current node, advancing
 `c` in place (a depth-tracked forward sweep). Deeper descendants are visited
 but not passed to `f`. Read `c` synchronously inside `f` (aliasing contract).
+
+Nestable: calling `for_each_child` again inside `f` descends into that child's
+own subtree and composes for full DFS. On reaching the end of its subtree a
+sweep *holds* the boundary node (the next sibling/ancestor) instead of consuming
+it, so the enclosing sweep still sees it — correct regardless of whether the
+source has inter-element whitespace (a minified document has no buffering text
+nodes, which an earlier consume-on-break version skipped over).
 """
 function for_each_child(f, c::Cursor)
     initial = c.depth
     target  = initial + 1
     while next!(c) !== nothing
-        c.depth <= initial && break             # left the parent's subtree
+        if c.depth <= initial
+            c.held = true                       # hold the boundary node for the enclosing sweep
+            break
+        end
         c.depth == target && f(c)
     end
     return c
