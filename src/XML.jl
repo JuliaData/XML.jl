@@ -6,6 +6,7 @@ export
     nodetype, tag, attributes, value, children, children!, eachchildnode, eachattribute,
     is_simple, simple_value, is_simple_value, sourcetext,
     depth, siblings,
+    Cursor, next!, for_each_child, eof,
     xpath,
     h
 
@@ -316,6 +317,7 @@ end
 
 include("xpath.jl")
 include("lazynode.jl")
+include("cursor.jl")
 
 
 #-----------------------------------------------------------------------------# _to_node
