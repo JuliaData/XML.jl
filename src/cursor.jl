@@ -272,6 +272,32 @@ macro for_each_child(c, child, body)
     end
 end
 
+"""
+    skip_element!(c::Cursor)
+
+With `c` positioned on an `Element`, advance past that element's entire subtree in one
+byte-level scan (no internal tokens emitted), so the next [`next!`](@ref) yields the
+element's following sibling (or the parent boundary). For structural walks (e.g. layer
+discovery) that classify a node but don't need its contents — far cheaper than letting
+`for_each_child`/`next!` tokenize the skipped subtree. No-op on non-`Element` nodes.
+"""
+function skip_element!(c::Cursor)
+    c.nodetype === Element || return c
+    data = _data(c)
+    after = _CURSOR_XT._skip_element_raw(data, c.token.offset + 1)
+    if after > ncodeunits(data)
+        c.done = true
+        c.held = false
+        return c
+    end
+    # Jump the tokenizer to just past the matching close, in M_DEFAULT. Drop enclosing
+    # by one to mirror having read this element's CLOSE_TAG / SELF_CLOSE.
+    c.st.state = _CURSOR_XT.TokenizerState(after, _CURSOR_XT.M_DEFAULT, _CURSOR_XT.no_token(data))
+    c.enclosing -= 1
+    c.held = false
+    return c
+end
+
 # Pull-mode iterator surface → `for node in c … end`. The yielded value IS the
 # cursor (aliasing contract).
 function Base.iterate(c::Cursor, ::Nothing = nothing)

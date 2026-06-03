@@ -1,6 +1,6 @@
 using Test, XML
-using XML: Cursor, next!, for_each_child, @for_each_child, eof, nodetype, tag, value,
-           attributes, depth, children, Element, Text, CData, Comment,
+using XML: Cursor, next!, for_each_child, @for_each_child, skip_element!, eof, nodetype,
+           tag, value, attributes, depth, children, Element, Text, CData, Comment,
            ProcessingInstruction, Declaration, DTD, LazyNode
 
 @testset "Cursor" begin
@@ -209,5 +209,42 @@ using XML: Cursor, next!, for_each_child, @for_each_child, eof, nodetype, tag, v
             end
         end
         @test placemarks == [(2, true), (1, true)]    # P1: name+Point; P2: name
+    end
+
+    @testset "skip_element! skips a subtree (robust: CDATA/comment/quoted/nested)" begin
+        # skip_element! must leave the cursor exactly where for_each_child's full walk
+        # would on the next sibling — but without tokenizing the skipped subtree, even
+        # when it contains a literal </tag> inside CDATA/comments or a > inside an attr.
+        kids_plain(doc) = begin
+            c = parse(Cursor, doc); next!(c); t = String[]
+            for_each_child(c) do _
+                nodetype(c) === Element && push!(t, String(tag(c)))
+            end
+            t
+        end
+        kids_skip(doc) = begin
+            c = parse(Cursor, doc); next!(c); t = String[]
+            for_each_child(c) do _
+                if nodetype(c) === Element
+                    push!(t, String(tag(c)))
+                    skip_element!(c)
+                end
+            end
+            t
+        end
+        cases = [
+            ("<r><a><x/><y/></a><b>t</b><c/></r>",             ["a", "b", "c"]),
+            ("<r><a/><b><z/></b></r>",                         ["a", "b"]),     # self-close first
+            ("<r><a><![CDATA[</a> <b> fake]]></a><b/></r>",    ["a", "b"]),     # fake close in CDATA
+            ("<r><a><!-- </a><b><c> --></a><d/></r>",          ["a", "d"]),     # fake tags in comment
+            ("""<r><a x="1>2"><y/></a><b/></r>""",             ["a", "b"]),     # > inside attr value
+            ("<r><a><a><a/></a></a><b/></r>",                  ["a", "b"]),     # nested same name
+            ("<r><a><?pi <x> ?></a><b/></r>",                  ["a", "b"]),     # markup-ish PI body
+            ("<D><F><P><name>n</name></P></F><F><P/></F></D>", ["F", "F"]),     # minified
+        ]
+        for (doc, exp) in cases
+            @test kids_plain(doc) == exp
+            @test kids_skip(doc) == exp
+        end
     end
 end

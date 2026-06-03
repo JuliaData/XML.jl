@@ -521,6 +521,77 @@ function read_doctype_body(data::AbstractString, pos::Int)
     err("unterminated DOCTYPE", start)
 end
 
+#-----------------------------------------------------------------------# skip_element (byte-level subtree skip)
+# Advance past an entire element subtree WITHOUT emitting its internal tokens — a byte
+# scan that counts element-nesting depth and respects CDATA / comment / PI / quoted-`>`
+# boundaries. O(subtree bytes) but with a far tighter loop than full tokenization (no
+# token emission, no SubString construction). Used by `skip_element!` for structural
+# walks (e.g. layer discovery) that classify a node but don't need its contents.
+
+# Find the `>` ending the tag whose `<` is at index `i`, skipping quoted attribute
+# values (where `>` may appear literally). Returns the index of that `>` (or `n`).
+@inline function _scan_tag_end(data::AbstractString, i::Int, n::Int)
+    j = i + 1
+    @inbounds while j <= n
+        b = codeunit(data, j)
+        if b == UInt8('"') || b == UInt8('\'')
+            j += 1
+            while j <= n && codeunit(data, j) != b
+                j += 1
+            end
+        elseif b == UInt8('>')
+            return j
+        end
+        j += 1
+    end
+    return n
+end
+
+# `openpos`: 1-based index of the `<` starting the element to skip. Returns the 1-based
+# index just past its matching close (`</name>` or `/>`), or `ncodeunits(data)+1` if the
+# document ends first (lenient, mirroring the tokenizer's EOF handling).
+function _skip_element_raw(data::AbstractString, openpos::Int)
+    n = ncodeunits(data)
+    depth = 0
+    i = openpos
+    @inbounds while i <= n
+        lt = findnext('<', data, i)
+        lt === nothing && return n + 1
+        i = lt
+        nxt = (i + 1 <= n) ? codeunit(data, i + 1) : 0x00
+        if nxt == UInt8('!')
+            nx2 = (i + 2 <= n) ? codeunit(data, i + 2) : 0x00
+            if nx2 == UInt8('-')            # <!-- comment -->
+                cl = findnext("-->", data, i)
+                cl === nothing && return n + 1
+                i = last(cl) + 1
+            elseif nx2 == UInt8('[')        # <![CDATA[ ... ]]>
+                cl = findnext("]]>", data, i)
+                cl === nothing && return n + 1
+                i = last(cl) + 1
+            else                            # <!DOCTYPE ...> / other <! declaration
+                i = _scan_tag_end(data, i, n) + 1
+            end
+        elseif nxt == UInt8('?')            # <? ... ?>
+            cl = findnext("?>", data, i)
+            cl === nothing && return n + 1
+            i = last(cl) + 1
+        elseif nxt == UInt8('/')            # </name> close
+            e = _scan_tag_end(data, i, n)
+            depth -= 1
+            i = e + 1
+            depth == 0 && return i
+        else                                # <name ...> open or <name .../> self-close
+            e = _scan_tag_end(data, i, n)
+            self_closed = e > 1 && codeunit(data, e - 1) == UInt8('/')
+            i = e + 1
+            self_closed || (depth += 1)
+            depth == 0 && return i
+        end
+    end
+    return n + 1
+end
+
 #-----------------------------------------------------------------------# Utility functions
 
 """
