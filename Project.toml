@@ -1,7 +1,7 @@
 name = "XML"
 uuid = "72c71f33-b9b6-44de-8c94-c961784809e2"
 authors = ["Josh Day <emailjoshday@gmail.com> and contributors"]
-version = "0.3.8"
+version = "0.3.9"
 
 [deps]
 Mmap = "a63ad114-7e13-5084-954f-fe012c677804"
