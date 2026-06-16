@@ -128,9 +128,9 @@ function Base.get(n::LazyNode, key::AbstractString, default)
 end
 
 #-----------------------------------------------------------------------------# eachattribute
-struct LazyAttrIterator{I}
+mutable struct LazyAttrIterator{I}
     iter::I
-    done::Base.RefValue{Bool}
+    done::Bool
 end
 
 Base.IteratorSize(::Type{<:LazyAttrIterator}) = Base.SizeUnknown()
@@ -150,22 +150,22 @@ function eachattribute(n::LazyNode)
     iter = _lazy_tokenizer(n)
     is_attrs = n.nodetype === Element || n.nodetype === Declaration
     is_attrs && iterate(iter)  # skip OPEN_TAG / XML_DECL_OPEN
-    LazyAttrIterator{typeof(iter)}(iter, Ref(!is_attrs))
+    LazyAttrIterator{typeof(iter)}(iter, !is_attrs)
 end
 
 function Base.iterate(it::LazyAttrIterator, _ = nothing)
-    it.done[] && return nothing
+    it.done && return nothing
     r = iterate(it.iter)
-    isnothing(r) && (it.done[] = true; return nothing)
+    isnothing(r) && (it.done = true; return nothing)
     tok = r[1]
     if tok.kind !== TokenKinds.ATTR_NAME
-        it.done[] = true
+        it.done = true
         return nothing
     end
     name = raw(tok, _src(it.iter))
     r = iterate(it.iter)
     if isnothing(r)
-        it.done[] = true
+        it.done = true
         return nothing
     end
     val = _decode_attr(r[1], _src(it.iter))
