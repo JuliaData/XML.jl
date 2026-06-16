@@ -209,6 +209,42 @@ function Base.get(c::Cursor, key::AbstractString, default)
     default
 end
 
+#-----------------------------------------------------------------------------# is_simple_value
+# Cursor mirror of `is_simple_value(::LazyNode)`: combined predicate+accessor that
+# returns the lone Text/CData value of the current element (or `nothing` if it has
+# attributes / isn't a single-text element). Non-destructive — reads via `_rescan`,
+# so the cursor position is unchanged (caller still advances with `for_each_child` /
+# `skip_element!`). Lets hot paths read e.g. an XLSX `<v>` value with no LazyNode snapshot.
+function is_simple_value(c::Cursor)
+    c.nodetype === Element || return nothing
+    it = _rescan(c)
+    iterate(it)                                 # skip OPEN_TAG
+    found_close = false
+    for tok in it
+        tok.kind === _CURSOR_XT.TokenKinds.TAG_CLOSE && (found_close = true; break)
+        return nothing                          # has attributes / self-close / not simple
+    end
+    found_close || return nothing
+    result = iterate(it)
+    result === nothing && return nothing
+    tok = result[1]
+    if tok.kind === _CURSOR_XT.TokenKinds.TEXT
+        nxt = iterate(it)
+        (nxt === nothing || nxt[1].kind !== _CURSOR_XT.TokenKinds.CLOSE_TAG) && return nothing
+        return _cursor_decode(tok, _data(c))
+    elseif tok.kind === _CURSOR_XT.TokenKinds.CDATA_OPEN
+        r = iterate(it)
+        (r === nothing || r[1].kind !== _CURSOR_XT.TokenKinds.CDATA_CONTENT) && return nothing
+        content = raw(r[1], _data(c))
+        r = iterate(it)
+        (r === nothing || r[1].kind !== _CURSOR_XT.TokenKinds.CDATA_CLOSE) && return nothing
+        r = iterate(it)
+        (r === nothing || r[1].kind !== _CURSOR_XT.TokenKinds.CLOSE_TAG) && return nothing
+        return content
+    end
+    nothing
+end
+
 #-----------------------------------------------------------------------------# snapshot (bridge to DOM)
 # The ONE place that references `LazyNode` — a one-way, optional bridge for
 # storing the current position. The cursor's own operation never depends on it.

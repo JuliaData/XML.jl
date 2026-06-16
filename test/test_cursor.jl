@@ -1,7 +1,7 @@
 using Test, XML
 using XML: Cursor, next!, for_each_child, @for_each_child, skip_element!, eof, nodetype,
            tag, value, attributes, depth, children, Element, Text, CData, Comment,
-           ProcessingInstruction, Declaration, DTD, LazyNode
+           ProcessingInstruction, Declaration, DTD, LazyNode, is_simple_value
 
 @testset "Cursor" begin
 
@@ -246,5 +246,30 @@ using XML: Cursor, next!, for_each_child, @for_each_child, skip_element!, eof, n
             @test kids_plain(doc) == exp
             @test kids_skip(doc) == exp
         end
+    end
+
+    @testset "is_simple_value(::Cursor) — agrees with LazyNode, non-destructive" begin
+        at_v(doc) = (c = parse(Cursor, doc); next!(c); next!(c); c)   # position on <v>
+        # simple text / entity / CDATA element → decoded value, identical to the DOM path
+        for doc in ("<r><v>123</v></r>", "<r><v>a &amp; b</v></r>", "<r><v><![CDATA[x<y]]></v></r>")
+            c = at_v(doc)
+            @test String(tag(c)) == "v"
+            @test is_simple_value(c) == is_simple_value(LazyNode(c))   # cursor == LazyNode
+        end
+        @test is_simple_value(at_v("<r><v>123</v></r>"))        == "123"
+        @test is_simple_value(at_v("<r><v>a &amp; b</v></r>"))  == "a & b"   # entity-decoded
+        @test is_simple_value(at_v("<r><v><![CDATA[x<y]]></v></r>")) == "x<y"
+
+        # not simple → nothing: attribute, element child, empty/self-close, mixed content
+        for doc in ("""<r><v a="1">x</v></r>""", "<r><v><b/></v></r>", "<r><v/></r>", "<r><v>a<b/>c</v></r>")
+            @test is_simple_value(at_v(doc)) === nothing
+        end
+        # non-element node → nothing
+        c = parse(Cursor, "<r>text</r>"); next!(c); next!(c)
+        @test is_simple_value(c) === nothing
+
+        # non-destructive: the cursor is unchanged after the read (still on <v>)
+        c = at_v("<r><v>9</v></r>"); is_simple_value(c)
+        @test String(tag(c)) == "v" && is_simple_value(c) == "9"
     end
 end
