@@ -4,12 +4,13 @@ export
     Node, LazyNode, NodeType, Attributes,
     CData, Comment, Declaration, Document, DTD, Element, ProcessingInstruction, Text,
     nodetype, tag, attributes, value, children, children!, eachchildnode, eachattribute,
+    foreach_attr,
     is_simple, simple_value, is_simple_value, sourcetext,
     depth, siblings,
     Cursor, next!, for_each_child, @for_each_child, skip_element!, eof,
     xpath,
     h
-
+    
 include("XMLTokenizer.jl")
 using .XMLTokenizer:
     XMLTokenizer, tokenize, tag_name, attr_value, pi_target, raw,

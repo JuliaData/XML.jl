@@ -172,6 +172,35 @@ function Base.iterate(it::LazyAttrIterator, _ = nothing)
     ((name => val), nothing)
 end
 
+#-----------------------------------------------------------------------------# foreach_attr
+"""
+    foreach_attr(f, n::LazyNode)
+
+Call `f(name_token, value_token)` for each attribute of `n` (an `Element` or
+`Declaration`), where both arguments are `Token` values. Avoids the
+`Union{Nothing, T}` iteration protocol and its associated boxing, making this
+suitable for zero-allocation hot paths.
+
+Recover attribute text with `XML.XMLTokenizer.raw(tok, n.data)` and decode
+attribute values with `XML.XMLTokenizer.attr_value(tok, n.data)`.
+
+For decoded `name => value` pairs, use [`eachattribute`](@ref) instead.
+"""
+function foreach_attr(f, n::LazyNode{String})
+    n.nodetype in (Element, Declaration) || return
+    iter = _lazy_tokenizer(n)
+    iterate(iter)  # skip OPEN_TAG / XML_DECL_OPEN
+    while true
+        r = iterate(iter)
+        isnothing(r) && return
+        name_tok = r[1]
+        name_tok.kind === TokenKinds.ATTR_NAME || return
+        r = iterate(iter)
+        isnothing(r) && return
+        f(name_tok, r[1])
+    end
+end
+
 function Base.getindex(n::LazyNode, key::AbstractString)
     val = get(n, key, _MISSING_ATTR)
     val === _MISSING_ATTR && throw(KeyError(key))
