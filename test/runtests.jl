@@ -651,7 +651,7 @@ end
     utf8_bom = vcat(UInt8[0xEF, 0xBB, 0xBF], Vector{UInt8}(text))
     for bytes in (le, be, utf8_bom)
         doc = Node(XML.Raw(bytes))
-        root = only(children(doc))
+        root = only(filter(n -> nodetype(n) == Element, children(doc)))
         @test tag(root) == "root"
         @test value(only(children(root))) == "hello"
     end
