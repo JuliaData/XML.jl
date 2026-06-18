@@ -642,5 +642,18 @@ end
     kw = NamedTuple(OrderedDict(Symbol(k) => Int(k) for k in 'a':'z'))
     xyz  = XML.Element("point"; kw...)
     @test collect(keys(attributes(xyz))) == string.(collect('a':'z'))
+
+    # https://github.com/JuliaComputing/XML.jl/issues/62 (UTF-16/BOM input)
+    text = """<?xml version="1.0"?><root>hello</root>"""
+    units = transcode(UInt16, text)
+    le = vcat(UInt8[0xFF, 0xFE], reinterpret(UInt8, units))
+    be = vcat(UInt8[0xFE, 0xFF], reinterpret(UInt8, bswap.(units)))
+    utf8_bom = vcat(UInt8[0xEF, 0xBB, 0xBF], Vector{UInt8}(text))
+    for bytes in (le, be, utf8_bom)
+        doc = Node(XML.Raw(bytes))
+        root = only(children(doc))
+        @test tag(root) == "root"
+        @test value(only(children(root))) == "hello"
+    end
 end
 
