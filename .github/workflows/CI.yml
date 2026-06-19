@@ -14,17 +14,15 @@ jobs:
         version:
           - 'lts'
           - '1' # automatically expands to the latest stable 1.x release of Julia
-          - 'nightly'
         os:
           - ubuntu-latest
-          - macOS-latest
+          - macOS-15-intel
           - windows-latest
         arch:
-          - x64
-          - x86
-        exclude:
+          - x64        
+        include:
           - os: macOS-latest
-            arch: x86
+            arch: aarch64
     steps:
       - uses: actions/checkout@v2
       - uses: julia-actions/setup-julia@v3
