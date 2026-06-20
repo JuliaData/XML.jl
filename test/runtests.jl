@@ -654,6 +654,16 @@ end
         root = only(filter(n -> nodetype(n) == Element, children(doc)))
         @test tag(root) == "root"
         @test value(only(children(root))) == "hello"
+
+        # read(file) round-trip exercises the Mmap.mmap path (the real .xlsx case)
+        mktemp() do path, io
+            write(io, bytes)
+            close(io)
+            file_doc = read(path, Node)
+            file_root = only(filter(n -> nodetype(n) == Element, children(file_doc)))
+            @test tag(file_root) == "root"
+            @test value(only(children(file_root))) == "hello"
+        end
     end
 end
 
