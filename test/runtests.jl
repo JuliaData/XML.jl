@@ -29,6 +29,7 @@ end
     @test escape(escape(s)) == escape(s)
     @test s == unescape(escape(s))
     @test s == unescape(unescape(escape(s)))
+    @test escape(SubString("a&b<c>", 1)) == "a&amp;b&lt;c&gt;"   # #60: SubString input (was a MethodError)
 
     n = Element("tag", Text(s))
     @test XML.simple_value(n) == s
@@ -202,6 +203,13 @@ end
         n=XML.prev(n)
         text_content = XML.write(n)
         @test text_content == "<root>\n  <text/>\n  <text2>hello</text2>\n  <text3 xml:space=\"preserve\">  hello  <text3b>  preserve  </text3b></text3>\n  <text4 xml:space=\"preserve\"/>\n  <text5/>\n</root>"
+        # #56: prev must cross a CDATA section (the call itself threw before the delimiter fix)
+        cdoc = XML.parse(XML.LazyNode, "<r><a>x</a><![CDATA[hello]]><b>y</b></r>")
+        cb = XML.children(XML.children(cdoc)[1])[3]   # the <b> element
+        cp = XML.prev(cb)
+        @test cp isa XML.LazyNode                      # does not throw
+        @test XML.nodetype(cp) == XML.CData
+        @test XML.value(cp) == "hello"
     end
 
     @testset "depth and parent" begin
