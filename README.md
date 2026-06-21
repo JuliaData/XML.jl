@@ -1,4 +1,4 @@
-[![CI](https://github.com/JuliaComputing/XML.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/JuliaComputing/XML.jl/actions/workflows/CI.yml)
+[![CI](https://github.com/JuliaData/XML.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/JuliaData/XML.jl/actions/workflows/CI.yml)
 
 <h1 align="center">XML.jl</h1>
 
@@ -74,7 +74,7 @@ doc[end][2]  # Second child of root
 | `Declaration` | `<?xml attributes... ?>` | `Declaration(; attrs...)`
 | `ProcessingInstruction` | `<?tag attributes... ?>` | `ProcessingInstruction(tag; attrs...)`
 | `Comment` | `<!-- text -->` | `Comment(text)`
-| `CData` | `<![CData[text]]>` | `CData(text)`
+| `CData` | `<![CDATA[text]]>` | `CData(text)`
 | `Element` | `<tag attributes... > children... </NAME>` | `Element(tag, children...; attrs...)`
 | `Text` | the `text` part of `<tag>text</tag>` | `Text(text)`
 

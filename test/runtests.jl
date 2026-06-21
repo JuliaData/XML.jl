@@ -29,6 +29,7 @@ end
     @test escape(escape(s)) == escape(s)
     @test s == unescape(escape(s))
     @test s == unescape(unescape(escape(s)))
+    @test escape(SubString("a&b<c>", 1)) == "a&amp;b&lt;c&gt;"   # #60: SubString input (was a MethodError)
 
     n = Element("tag", Text(s))
     @test XML.simple_value(n) == s
@@ -78,7 +79,7 @@ end
             tag=nothing,
             attributes=nothing,
             value=" comment "),
-        (xml = "<![CData[cdata test]]>",
+        (xml = "<![CDATA[cdata test]]>",
             nodetype = CData,
             tag=nothing,
             attributes=nothing,
@@ -202,6 +203,13 @@ end
         n=XML.prev(n)
         text_content = XML.write(n)
         @test text_content == "<root>\n  <text/>\n  <text2>hello</text2>\n  <text3 xml:space=\"preserve\">  hello  <text3b>  preserve  </text3b></text3>\n  <text4 xml:space=\"preserve\"/>\n  <text5/>\n</root>"
+        # #56: prev must cross a CDATA section (the call itself threw before the delimiter fix)
+        cdoc = XML.parse(XML.LazyNode, "<r><a>x</a><![CDATA[hello]]><b>y</b></r>")
+        cb = XML.children(XML.children(cdoc)[1])[3]   # the <b> element
+        cp = XML.prev(cb)
+        @test cp isa XML.LazyNode                      # does not throw
+        @test XML.nodetype(cp) == XML.CData
+        @test XML.value(cp) == "hello"
     end
 
     @testset "depth and parent" begin
@@ -242,6 +250,51 @@ end
         @test XML.attributes(x) === nothing
         @test XML.value(x) == "Gambardella, Matthew"
     end
+end
+
+#-----------------------------------------------------------------------------# next! / prev!
+@testset "LazyNode next! / prev!" begin
+    lzxml = """<root><a/><b/><c/></root>"""
+    lz = XML.parse(XML.LazyNode, lzxml)
+
+    # Functional equivalence: walking with `next!` visits the same nodes
+    # as the allocating `next` chain.
+    walker = XML.next(lz)
+    walked = [XML.write(walker)]
+    while XML.next!(walker) !== nothing
+        push!(walked, XML.write(walker))
+    end
+    expected = String[]
+    n = XML.next(lz)
+    while n !== nothing
+        push!(expected, XML.write(n))
+        n = XML.next(n)
+    end
+    @test walked == expected
+
+    # Identity: `next!(o)` returns the very same object
+    walker = XML.next(lz)
+    @test XML.next!(walker) === walker
+
+    # Memoization fields are reset when the node is repositioned
+    walker = XML.next(lz)
+    _ = walker.tag
+    @test getfield(walker, :tag) !== nothing
+    XML.next!(walker)
+    @test getfield(walker, :tag) === nothing
+
+    # `nothing` at the document boundary, idempotent there
+    walker = XML.next(lz)
+    while XML.next!(walker) !== nothing; end
+    @test XML.next!(walker) === nothing
+
+    # `prev!` is the symmetric counterpart
+    lz2 = XML.parse(XML.LazyNode, lzxml)
+    walker = XML.next(lz2)
+    XML.next!(walker); XML.next!(walker)          # root → a → b
+    @test walker.tag == "b"
+    @test XML.prev!(walker) === walker            # in-place
+    @test walker.tag == "a"
 end
 
 #-----------------------------------------------------------------------------# Preserve whitespace

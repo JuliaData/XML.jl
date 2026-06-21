@@ -3,7 +3,7 @@
     RawType:
     - RawText                   # text
     - RawComment                # <!-- ... -->
-    - RawCData                  # <![CData[...]]>
+    - RawCData                  # <![CDATA[...]]>
     - RawDeclaration            # <?xml attributes... ?>
     - RawProcessingInstruction  # <?NAME attributes... ?>
     - RawDTD                    # <!DOCTYPE ...>
@@ -37,7 +37,7 @@ Create an iterator over raw chunks of data in an XML file.  Each chunk of data r
     - RawDocument                # Only used to initialize the iterator state.
     - RawText                    # text
     - RawComment                 # <!-- ... -->
-    - RawCData                   # <![CData[...]]>
+    - RawCData                   # <![CDATA[...]]>
     - RawDeclaration             # <?xml attributes... ?>
     - RawProcessingInstruction   # <?NAME attributes... ?>
     - RawDTD                     # <!DOCTYPE ...>
@@ -271,7 +271,7 @@ function value(o::Raw)
     if o.type === RawText
         String(o)
     elseif o.type === RawCData
-        String(view(o.data, o.pos+length("<![CData["):o.pos+o.len-3))
+        String(view(o.data, o.pos+length("<![CDATA["):o.pos+o.len-3))
     elseif o.type === RawComment
         String(view(o.data, o.pos+length("<!--"):o.pos+o.len-3))
     elseif o.type === RawDTD
@@ -539,7 +539,7 @@ function prev_no_xml_space(o::Raw) # same as v0.3.5
             i = findprev(Vector{UInt8}("<--"), data, j)[1]
         elseif c2 === ']'
             type = RawCData
-            i = findprev(Vector{UInt8}("<![CData["), data, j)[1]
+            i = findprev(Vector{UInt8}("<![CDATA["), data, j)[1]
         elseif c2 === '?'
             i = findprev(Vector{UInt8}("<?"), data, j)[1]
             if get_name(data, i + 2)[1] == "xml"
