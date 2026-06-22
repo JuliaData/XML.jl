@@ -67,7 +67,23 @@ struct Raw
     ctx::Vector{Bool} # Context for xml:space (Vector to support inheritance of context)
     has_xml_space::Bool # Whether data contains `xml:space` attribute at least once
 end
+# Honor a leading byte-order mark (XML 1.0 §4.3.3): decode UTF-16 to UTF-8 and
+# strip a UTF-8 BOM so the byte-oriented tokenizer always sees UTF-8.
+function _normalize_bom(data::Vector{UInt8})
+    n = length(data)
+    if n >= 2 && data[1] == 0xFF && data[2] == 0xFE
+        units = reinterpret(UInt16, data[3:end])
+        return Vector{UInt8}(transcode(String, units))
+    elseif n >= 2 && data[1] == 0xFE && data[2] == 0xFF
+        units = bswap.(reinterpret(UInt16, data[3:end]))
+        return Vector{UInt8}(transcode(String, units))
+    elseif n >= 3 && data[1] == 0xEF && data[2] == 0xBB && data[3] == 0xBF
+        return data[4:end]
+    end
+    return data
+end
 function Raw(data::Vector{UInt8})#, ctx::Vector{Bool}=Bool[false])
+    data = _normalize_bom(data)
     needle = Vector{UInt8}("xml:space")
     has_xml_space = findfirst(needle, data) !== nothing
     return Raw(RawDocument, 0, 0, 0, data, [false], has_xml_space)
