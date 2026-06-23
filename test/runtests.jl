@@ -1119,7 +1119,7 @@ end
         joinpath(@__DIR__, "data", "xml.xsd"),
         joinpath(@__DIR__, "data", "kml.xsd"),
         joinpath(@__DIR__, "data", "books.xml"),
-        # example.kml uses invalid <![CData[...]]> (lowercase), skip roundtrip
+        joinpath(@__DIR__, "data", "example.kml"),
         joinpath(@__DIR__, "data", "simple_dtd.xml"),
         joinpath(@__DIR__, "data", "preserve.xml"),
     ])
@@ -1221,10 +1221,12 @@ end
     end
 
     @testset "example.kml" begin
-        # example.kml uses invalid <![CData[...]]> (lowercase 'd') which is not valid XML
+        # example.kml is a valid KML sample with CDATA sections; the invalid
+        # lowercase <![CData[ spelling it used to use is still rejected as malformed.
         path = joinpath(@__DIR__, "data", "example.kml")
         isfile(path) || return
-        @test_throws ArgumentError read(path, Node)
+        @test nodetype(read(path, Node)) == Document
+        @test_throws ArgumentError parse("<r><![CData[x]]></r>", Node)
     end
 
     @testset "tv.dtd" begin
