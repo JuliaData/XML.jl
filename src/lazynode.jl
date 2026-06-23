@@ -536,8 +536,8 @@ Base.length(n::LazyNode) = length(children(n))
 Base.parse(::Type{LazyNode}, xml::AbstractString) = parse(xml, LazyNode)
 Base.parse(xml::AbstractString, ::Type{LazyNode}) = LazyNode(String(xml), Document)
 
-Base.read(filename::AbstractString, ::Type{LazyNode}) = parse(read(filename, String), LazyNode)
-Base.read(io::IO, ::Type{LazyNode}) = parse(read(io, String), LazyNode)
+Base.read(filename::AbstractString, ::Type{LazyNode}) = parse(String(_normalize_bom(read(filename))), LazyNode)
+Base.read(io::IO, ::Type{LazyNode}) = parse(String(_normalize_bom(read(io))), LazyNode)
 
 #-----------------------------------------------------------------------------# show
 function Base.show(io::IO, n::LazyNode)

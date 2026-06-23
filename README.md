@@ -1,4 +1,4 @@
-[![CI](https://github.com/JuliaComputing/XML.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/JuliaComputing/XML.jl/actions/workflows/CI.yml)
+[![CI](https://github.com/JuliaData/XML.jl/actions/workflows/CI.yml/badge.svg)](https://github.com/JuliaData/XML.jl/actions/workflows/CI.yml) [![codecov](https://codecov.io/gh/JuliaData/XML.jl/graph/badge.svg)](https://codecov.io/gh/JuliaData/XML.jl)
 
 <h1 align="center">XML.jl</h1>
 

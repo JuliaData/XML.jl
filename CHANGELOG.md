@@ -17,6 +17,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tokenizer: multi-byte UTF-8 in attribute values** — Parsing attribute values containing multi-byte UTF-8 characters (e.g., `<doc city="東京"/>`) could produce a `StringIndexError` because `attr_value()` used byte arithmetic (`ncodeunits - 1`) instead of `prevind` to strip quotes. The same issue existed in `_read_attr_value!`.
 - **Tokenizer: quotes inside DTD comments** — A `"` or `'` character inside a `<!-- -->` comment within a DTD internal subset caused the tokenizer to misinterpret it as a quoted string delimiter, leading to an "Unterminated quoted string" error. The DOCTYPE body parser now correctly skips comment content.
 
+## [0.3.9] - 2026-06-20
+
+First release since XML.jl moved to [JuliaData](https://github.com/JuliaData/XML.jl) (transferred from JuliaComputing).
+
+### Added
+- `next!` and `prev!` for in-place, zero-allocation forward/backward traversal of `LazyNode` ([#59]).
+
+### Fixed
+- CDATA sections are now read and written with the spec-correct `<![CDATA[ … ]]>` delimiter.
+  The previous `<![CData[` spelling is invalid XML and did not interoperate with other parsers ([#56]).
+- `escape` now accepts any `AbstractString` (e.g. `SubString`), not only `String` ([#60]).
+
+### Changed
+- Relaxed the OrderedCollections.jl compat bound to include v2 ([#64]).
+
 ## [0.3.8]
 
 ### Fixed
@@ -123,36 +138,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Initial release.
 
-[Unreleased]: https://github.com/JuliaComputing/XML.jl/compare/v0.3.8...HEAD
-[0.3.8]: https://github.com/JuliaComputing/XML.jl/compare/v0.3.7...v0.3.8
-[0.3.7]: https://github.com/JuliaComputing/XML.jl/compare/v0.3.6...v0.3.7
-[0.3.6]: https://github.com/JuliaComputing/XML.jl/compare/v0.3.5...v0.3.6
-[0.3.5]: https://github.com/JuliaComputing/XML.jl/compare/v0.3.4...v0.3.5
-[0.3.4]: https://github.com/JuliaComputing/XML.jl/compare/v0.3.3...v0.3.4
-[0.3.3]: https://github.com/JuliaComputing/XML.jl/compare/v0.3.2...v0.3.3
-[0.3.2]: https://github.com/JuliaComputing/XML.jl/compare/v0.3.1...v0.3.2
-[0.3.1]: https://github.com/JuliaComputing/XML.jl/compare/v0.3.0...v0.3.1
-[0.3.0]: https://github.com/JuliaComputing/XML.jl/compare/v0.2.3...v0.3.0
-[0.2.3]: https://github.com/JuliaComputing/XML.jl/compare/v0.2.2...v0.2.3
-[0.2.2]: https://github.com/JuliaComputing/XML.jl/compare/v0.2.1...v0.2.2
-[0.2.1]: https://github.com/JuliaComputing/XML.jl/compare/v0.2.0...v0.2.1
-[0.2.0]: https://github.com/JuliaComputing/XML.jl/compare/v0.1.3...v0.2.0
-[0.1.3]: https://github.com/JuliaComputing/XML.jl/compare/v0.1.2...v0.1.3
-[0.1.2]: https://github.com/JuliaComputing/XML.jl/compare/v0.1.1...v0.1.2
-[0.1.1]: https://github.com/JuliaComputing/XML.jl/compare/v0.1.0...v0.1.1
-[0.1.0]: https://github.com/JuliaComputing/XML.jl/releases/tag/v0.1.0
+[Unreleased]: https://github.com/JuliaData/XML.jl/compare/v0.3.9...HEAD
+[0.3.9]: https://github.com/JuliaData/XML.jl/compare/v0.3.8...v0.3.9
+[0.3.8]: https://github.com/JuliaData/XML.jl/compare/v0.3.7...v0.3.8
+[0.3.7]: https://github.com/JuliaData/XML.jl/compare/v0.3.6...v0.3.7
+[0.3.6]: https://github.com/JuliaData/XML.jl/compare/v0.3.5...v0.3.6
+[0.3.5]: https://github.com/JuliaData/XML.jl/compare/v0.3.4...v0.3.5
+[0.3.4]: https://github.com/JuliaData/XML.jl/compare/v0.3.3...v0.3.4
+[0.3.3]: https://github.com/JuliaData/XML.jl/compare/v0.3.2...v0.3.3
+[0.3.2]: https://github.com/JuliaData/XML.jl/compare/v0.3.1...v0.3.2
+[0.3.1]: https://github.com/JuliaData/XML.jl/compare/v0.3.0...v0.3.1
+[0.3.0]: https://github.com/JuliaData/XML.jl/compare/v0.2.3...v0.3.0
+[0.2.3]: https://github.com/JuliaData/XML.jl/compare/v0.2.2...v0.2.3
+[0.2.2]: https://github.com/JuliaData/XML.jl/compare/v0.2.1...v0.2.2
+[0.2.1]: https://github.com/JuliaData/XML.jl/compare/v0.2.0...v0.2.1
+[0.2.0]: https://github.com/JuliaData/XML.jl/compare/v0.1.3...v0.2.0
+[0.1.3]: https://github.com/JuliaData/XML.jl/compare/v0.1.2...v0.1.3
+[0.1.2]: https://github.com/JuliaData/XML.jl/compare/v0.1.1...v0.1.2
+[0.1.1]: https://github.com/JuliaData/XML.jl/compare/v0.1.0...v0.1.1
+[0.1.0]: https://github.com/JuliaData/XML.jl/releases/tag/v0.1.0
 
-[#5]: https://github.com/JuliaComputing/XML.jl/pull/5
-[#16]: https://github.com/JuliaComputing/XML.jl/pull/16
-[#20]: https://github.com/JuliaComputing/XML.jl/pull/20
-[#26]: https://github.com/JuliaComputing/XML.jl/issues/26
-[#29]: https://github.com/JuliaComputing/XML.jl/pull/29
-[#31]: https://github.com/JuliaComputing/XML.jl/issues/31
-[#32]: https://github.com/JuliaComputing/XML.jl/pull/32
-[#37]: https://github.com/JuliaComputing/XML.jl/pull/37
-[#38]: https://github.com/JuliaComputing/XML.jl/pull/38
-[#43]: https://github.com/JuliaComputing/XML.jl/issues/43
-[#45]: https://github.com/JuliaComputing/XML.jl/pull/45
-[#46]: https://github.com/JuliaComputing/XML.jl/issues/46
-[#47]: https://github.com/JuliaComputing/XML.jl/pull/47
-[#49]: https://github.com/JuliaComputing/XML.jl/pull/49
+[#5]: https://github.com/JuliaData/XML.jl/pull/5
+[#16]: https://github.com/JuliaData/XML.jl/pull/16
+[#20]: https://github.com/JuliaData/XML.jl/pull/20
+[#26]: https://github.com/JuliaData/XML.jl/issues/26
+[#29]: https://github.com/JuliaData/XML.jl/pull/29
+[#31]: https://github.com/JuliaData/XML.jl/issues/31
+[#32]: https://github.com/JuliaData/XML.jl/pull/32
+[#37]: https://github.com/JuliaData/XML.jl/pull/37
+[#38]: https://github.com/JuliaData/XML.jl/pull/38
+[#43]: https://github.com/JuliaData/XML.jl/issues/43
+[#45]: https://github.com/JuliaData/XML.jl/pull/45
+[#46]: https://github.com/JuliaData/XML.jl/issues/46
+[#47]: https://github.com/JuliaData/XML.jl/pull/47
+[#49]: https://github.com/JuliaData/XML.jl/pull/49
+[#56]: https://github.com/JuliaData/XML.jl/pull/56
+[#59]: https://github.com/JuliaData/XML.jl/pull/59
+[#60]: https://github.com/JuliaData/XML.jl/pull/60
+[#64]: https://github.com/JuliaData/XML.jl/pull/64

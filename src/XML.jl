@@ -669,8 +669,22 @@ write(node::Node; indentsize::Int=2) = (io = IOBuffer(); _write_xml(io, node, 0,
 write(filename::AbstractString, node::Node; kw...) = open(io -> write(io, node; kw...), filename, "w")
 write(io::IO, node::Node; indentsize::Int=2) = _write_xml(io, node, 0, indentsize)
 
-Base.read(filename::AbstractString, ::Type{Node}) = parse(read(filename, String), Node)
-Base.read(io::IO, ::Type{Node}) = parse(read(io, String), Node)
+# Honor a leading byte-order mark (XML 1.0 §4.3.3): transcode UTF-16 (LE/BE) to UTF-8
+# and strip a UTF-8 BOM so the parser always sees UTF-8. Ported from #65 (was src/raw.jl).
+function _normalize_bom(data::Vector{UInt8})
+    n = length(data)
+    if n >= 2 && data[1] == 0xFF && data[2] == 0xFE          # UTF-16 LE
+        return Vector{UInt8}(transcode(String, reinterpret(UInt16, data[3:end])))
+    elseif n >= 2 && data[1] == 0xFE && data[2] == 0xFF      # UTF-16 BE
+        return Vector{UInt8}(transcode(String, bswap.(reinterpret(UInt16, data[3:end]))))
+    elseif n >= 3 && data[1] == 0xEF && data[2] == 0xBB && data[3] == 0xBF  # UTF-8 BOM
+        return data[4:end]
+    end
+    return data
+end
+
+Base.read(filename::AbstractString, ::Type{Node}) = parse(String(_normalize_bom(read(filename))), Node)
+Base.read(io::IO, ::Type{Node}) = parse(String(_normalize_bom(read(io))), Node)
 
 #-----------------------------------------------------------------------------# parse
 Base.parse(::Type{Node}, xml::AbstractString) = parse(xml, Node)
