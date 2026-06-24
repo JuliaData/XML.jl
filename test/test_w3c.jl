@@ -114,10 +114,12 @@ notwf_tests = filter(t -> t.type == "not-wf", xml10_tests)
         n_pass = 0
         n_fail = 0
         failures = String[]
+        # Read at :strict (the strongest level): every well-formed W3C doc must parse even under the
+        # full content-level checks — this also guards :strict against false-positives on real XML.
         for test in valid_tests
             isfile(test.uri) || continue
             try
-                doc = read(test.uri, Node)
+                doc = read(test.uri, Node; wellformed = :strict)
                 @test nodetype(doc) == Document
                 n_pass += 1
             catch e
@@ -137,20 +139,20 @@ notwf_tests = filter(t -> t.type == "not-wf", xml10_tests)
         for test in notwf_tests
             isfile(test.uri) || continue
             try
-                read(test.uri, Node)
+                read(test.uri, Node; wellformed = :strict)
                 n_fail += 1
                 push!(failures, test.id)
             catch
                 n_pass += 1
             end
         end
-        # XML.jl is non-validating: it rejects structural + syntactic ill-formedness, but not
-        # validity errors needing DTD/entity processing (undefined entities, ID/IDREF, attribute
-        # types…), and :strict (more syntactic checks) is still pending — so it does NOT reject all
-        # 940 not-wf cases of the pinned xmlts20130923 suite. Assert a no-regression floor on the
-        # count it DOES reject; bump it as :structural/:strict grow. Categorising the rest is Phase 6.5.
-        @test n_pass >= 156
-        n_fail > 0 && @info "W3C not-wf: $n_fail not yet rejected (out-of-scope validity / pending :strict)" examples=first(failures, 20)
+        # XML.jl is non-validating and this suite runs at :strict, so it rejects structural +
+        # syntactic ill-formedness but NOT validity errors needing DTD/entity processing (undefined
+        # entities, ID/IDREF, attribute types…). It therefore does not reject all 940 not-wf cases of
+        # the pinned xmlts20130923 suite. Assert a no-regression floor on the count it DOES reject
+        # (rose 156→169 when :strict landed); bump it as coverage grows. Categorising the rest is Phase 6.5.
+        @test n_pass >= 169
+        n_fail > 0 && @info "W3C not-wf: $n_fail not yet rejected (out-of-scope validity errors: DTD/entity)" examples=first(failures, 20)
         @info "W3C not-well-formed: $n_pass / $(n_pass + n_fail) rejected"
     end
 end
