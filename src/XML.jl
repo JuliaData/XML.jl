@@ -680,6 +680,13 @@ function _normalize_bom(data::Vector{UInt8})
     elseif n >= 3 && data[1] == 0xEF && data[2] == 0xBB && data[3] == 0xBF  # UTF-8 BOM
         return data[4:end]
     end
+    # No BOM matched. A NUL in the first two bytes means UTF-16/UTF-32 without a BOM — not
+    # well-formed XML (§4.3.3). Without this, :structural still rejects it downstream, but with a
+    # cryptic "invalid element name" (the interleaved NULs derail tokenization); this names the real
+    # cause. Two comparisons, no false positives (well-formed UTF-8 XML can't contain 0x00) — vs
+    # isvalid(String, data), which would be an O(n) hot-path scan.
+    n >= 2 && (data[1] == 0x00 || data[2] == 0x00) &&
+        error("UTF-16 without a BOM is not well-formed (XML 1.0 §4.3.3)")
     return data
 end
 

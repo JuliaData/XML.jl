@@ -43,6 +43,13 @@ using Test
         @test escape("") == ""
         @test unescape("") == ""
     end
+
+    @testset "#60: escape accepts SubString (AbstractString, not just String)" begin
+        # MarkNahabedian #60: escape was specialized on String, so SubString threw. Guard the fix.
+        s = SubString("x<y>z", 2, 4)   # "<y>"
+        @test s isa SubString
+        @test escape(s) == "&lt;y&gt;"
+    end
 end
 
 #==============================================================================#
@@ -1085,6 +1092,17 @@ end
         @test nodetype(doc) == Document
         root = first(filter(x -> nodetype(x) == Element, children(doc)))
         @test simple_value(root) == "hello"
+    end
+
+    @testset "byte-order mark handling (§4.3.3)" begin
+        # BOM-prefixed input must decode to UTF-8 before parsing (guards the _normalize_bom port).
+        @test tag(read(IOBuffer(UInt8[0xFF,0xFE, 0x3C,0x00,0x61,0x00,0x2F,0x00,0x3E,0x00]), Node)[1]) == "a"  # UTF-16 LE BOM + <a/>
+        @test tag(read(IOBuffer(UInt8[0xFE,0xFF, 0x00,0x3C,0x00,0x61,0x00,0x2F,0x00,0x3E]), Node)[1]) == "a"  # UTF-16 BE BOM + <a/>
+        @test tag(read(IOBuffer(UInt8[0xEF,0xBB,0xBF, 0x3C,0x61,0x2F,0x3E]), Node)[1]) == "a"                  # UTF-8 BOM + <a/>
+        # §4.3.3: UTF-16 entities MUST start with a BOM; a leading NUL byte is the signature →
+        # raise a clear error rather than crash the UTF-8 parser downstream.
+        @test_throws "UTF-16 without a BOM" read(IOBuffer(UInt8[0x00,0x3C,0x00,0x61,0x00,0x2F,0x00,0x3E]), Node)  # UTF-16 BE, no BOM
+        @test_throws "UTF-16 without a BOM" read(IOBuffer(UInt8[0x3C,0x00,0x61,0x00,0x2F,0x00,0x3E,0x00]), Node)  # UTF-16 LE, no BOM
     end
 end
 
