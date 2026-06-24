@@ -52,13 +52,9 @@ using Test
     end
 
     @testset "UTF-8 element names" begin
-        # XML.jl tokenizer does not yet support non-ASCII characters in element names
-        @test_broken try
-            parse("<données/>", Node)
-            true
-        catch
-            false
-        end
+        # Non-ASCII characters in element names are supported (previously @test_broken).
+        doc = parse("<données/>", Node)
+        @test tag(children(doc)[1]) == "données"
     end
 
     @testset "Multi-byte UTF-8 sequences" begin

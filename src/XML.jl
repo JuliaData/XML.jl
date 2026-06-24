@@ -871,10 +871,11 @@ end
 
 # DTD parsing helpers — each returns (parsed_piece, new_pos) so calls compose.
 
-# A byte that can appear in an XML Name (letters, digits, `_`, `-`, `.`, `:`).
+# A character that can appear in an XML Name (letters, digits, `_`, `-`, `.`, `:`, and any
+# non-ASCII char — mirrors the tokenizer's lenient NAME_BYTE_TABLE rule).
 @inline _dtd_is_name_char(c::Char) =
     ('a' <= c <= 'z') || ('A' <= c <= 'Z') || ('0' <= c <= '9') ||
-    c == '_' || c == '-' || c == '.' || c == ':'
+    c == '_' || c == '-' || c == '.' || c == ':' || !isascii(c)
 
 # Advance past any whitespace.
 function _dtd_skip_ws(s, pos)
@@ -889,10 +890,10 @@ function _dtd_read_name(s, pos)
     pos = _dtd_skip_ws(s, pos)
     start = pos
     while pos <= ncodeunits(s) && _dtd_is_name_char(s[pos])
-        pos += 1
+        pos = nextind(s, pos)
     end
     start == pos && error("Expected name at position $pos in DTD")
-    SubString(s, start, pos - 1), pos
+    SubString(s, start, prevind(s, pos)), pos
 end
 
 # Read a `"..."` or `'...'` string and return the contents without the surrounding quotes.

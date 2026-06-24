@@ -1269,6 +1269,12 @@ end
         @test pd.entities[2].value == "Writer: Donald Duck."
     end
 
+    @testset "Unicode name in DTD" begin
+        pd = parse_dtd("café [<!ELEMENT café (#PCDATA)>]")
+        @test pd.root == "café"
+        @test pd.elements[1].name == "café"
+    end
+
     @testset "DTD with SYSTEM external ID" begin
         pd = parse_dtd("""root SYSTEM "root.dtd\"""")
         @test pd.root == "root"
@@ -1692,6 +1698,30 @@ end
     @testset "Arabic characters" begin
         doc = parse("<root>\u0645\u0631\u062d\u0628\u0627</root>", Node)
         @test simple_value(doc[1]) == "\u0645\u0631\u062d\u0628\u0627"
+    end
+
+    # Non-ASCII characters in NAMES (element / attribute), not just content/values.
+    @testset "Unicode in element names" begin
+        doc = parse("<caf\u00e9>x</caf\u00e9>", Node)
+        @test tag(doc[1]) == "caf\u00e9"
+    end
+
+    @testset "Unicode in attribute names" begin
+        doc = parse("<root \u00fcber=\"1\"/>", Node)
+        @test doc[1]["\u00fcber"] == "1"
+        # a name *ending* in a multibyte char exercises the slice end-index (prevind)
+        doc2 = parse("<root caf\u00e9=\"2\"/>", Node)
+        @test doc2[1]["caf\u00e9"] == "2"
+    end
+
+    @testset "CJK element name" begin
+        doc = parse("<\u65e5\u672c\u8a9e/>", Node)
+        @test tag(doc[1]) == "\u65e5\u672c\u8a9e"
+    end
+
+    @testset "Unicode in PI target" begin
+        doc = parse("<root><?caf\u00e9 data?></root>", Node)
+        @test tag(doc[1][1]) == "caf\u00e9"
     end
 end
 

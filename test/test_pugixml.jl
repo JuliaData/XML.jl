@@ -190,13 +190,11 @@ using Test
     #                        Unicode / CJK Content                             #
     #==========================================================================#
     @testset "Unicode element names (CJK)" begin
-        # XML.jl tokenizer does not yet support CJK characters in element/attribute names
-        @test_broken try
-            parse("<汉语>世界</汉语>", Node)
-            true
-        catch
-            false
-        end
+        # CJK characters in element names are supported (previously @test_broken).
+        doc = parse("<汉语>世界</汉语>", Node)
+        el = children(doc)[1]
+        @test tag(el) == "汉语"
+        @test simple_value(el) == "世界"
     end
 
     @testset "Unicode text content" begin

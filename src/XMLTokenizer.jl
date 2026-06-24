@@ -200,12 +200,15 @@ end
 # Check if pos + offset is within bounds
 @inline canpeek(data::AbstractString, pos::Int, offset::Int)::Bool = pos + offset <= ncodeunits(data)
 
-# Lookup table for XML name bytes (letter, digit, _, -, ., :)
+# Lookup table for XML name bytes (letter, digit, _, -, ., :), plus every non-ASCII
+# byte (0x80–0xFF) — the UTF-8 lead/continuation bytes — so Unicode names like `<café>`
+# tokenize. Lenient per-byte rule: exact XML NameStartChar/NameChar ranges aren't validated.
 const NAME_BYTE_TABLE = let t = falses(256)
     for r in (UInt8('a'):UInt8('z'), UInt8('A'):UInt8('Z'), UInt8('0'):UInt8('9'))
         for b in r; t[b + 1] = true; end
     end
     for b in (UInt8('_'), UInt8('-'), UInt8('.'), UInt8(':')); t[b + 1] = true; end
+    for b in 0x80:0xFF; t[b + 1] = true; end
     NTuple{256,Bool}(t)
 end
 @inline is_name_byte(b::UInt8)::Bool = @inbounds NAME_BYTE_TABLE[b + 1]
@@ -320,7 +323,7 @@ function read_pi_start(data::AbstractString, pos::Int, start::Int)
         tok = Token(TokenKinds.XML_DECL_OPEN, @inbounds SubString(data, start, pos - 1))
         (tok, TokenizerState(pos, M_XML_DECL, no_token(data)))
     else
-        tok = Token(TokenKinds.PI_OPEN, @inbounds SubString(data, start, pos - 1))
+        tok = Token(TokenKinds.PI_OPEN, @inbounds SubString(data, start, prevind(data, pos)))
         (tok, TokenizerState(pos, M_PI, no_token(data)))
     end
 end
@@ -331,7 +334,7 @@ function read_open_tag_start(data::AbstractString, pos::Int, start::Int)
     @inbounds while !iseof(data, pos) && is_name_byte(peek(data, pos))
         pos += 1
     end
-    tok = Token(TokenKinds.OPEN_TAG, @inbounds SubString(data, start, pos - 1))
+    tok = Token(TokenKinds.OPEN_TAG, @inbounds SubString(data, start, prevind(data, pos)))
     (tok, TokenizerState(pos, M_TAG, no_token(data)))
 end
 
@@ -340,7 +343,7 @@ function read_close_tag_start(data::AbstractString, pos::Int, start::Int)
     @inbounds while !iseof(data, pos) && is_name_byte(peek(data, pos))
         pos += 1
     end
-    tok = Token(TokenKinds.CLOSE_TAG, @inbounds SubString(data, start, pos - 1))
+    tok = Token(TokenKinds.CLOSE_TAG, @inbounds SubString(data, start, prevind(data, pos)))
     (tok, TokenizerState(pos, M_CLOSE_TAG, no_token(data)))
 end
 
@@ -384,7 +387,7 @@ function read_in_tag(data::AbstractString, pos::Int, mode::Mode)
     @inbounds while !iseof(data, pos) && is_name_byte(peek(data, pos))
         pos += 1
     end
-    name_end = pos - 1
+    name_end = prevind(data, pos)
     name_start > name_end && err("expected attribute name or tag close", pos)
 
     # Consume '=' and surrounding whitespace (not part of any token)
@@ -603,9 +606,9 @@ token was scanned from (needed to recover the text — see [`raw`](@ref)).
 function tag_name(token::Token, data)
     r = raw(token, data)
     if token.kind == TokenKinds.OPEN_TAG
-        @inbounds SubString(r, 2, ncodeunits(r))  # skip '<'
+        @inbounds SubString(r, 2, lastindex(r))  # skip '<'; lastindex (not ncodeunits) for multibyte names
     elseif token.kind == TokenKinds.CLOSE_TAG
-        @inbounds SubString(r, 3, ncodeunits(r))  # skip '</'
+        @inbounds SubString(r, 3, lastindex(r))  # skip '</'
     else
         throw(ArgumentError("tag_name requires OPEN_TAG or CLOSE_TAG, got $(token.kind)"))
     end
@@ -632,7 +635,7 @@ function pi_target(token::Token, data)
     (token.kind == TokenKinds.PI_OPEN || token.kind == TokenKinds.XML_DECL_OPEN) ||
         throw(ArgumentError("pi_target requires PI_OPEN or XML_DECL_OPEN, got $(token.kind)"))
     r = raw(token, data)
-    @inbounds SubString(r, 3, ncodeunits(r))  # skip '<?'
+    @inbounds SubString(r, 3, lastindex(r))  # skip '<?'
 end
 
 end # module XMLTokenizer
