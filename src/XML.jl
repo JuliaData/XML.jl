@@ -738,6 +738,23 @@ function _check_document_wellformed(children)
     nroots > 1 && error("not well-formed: multiple root elements (found $nroots)")
 end
 
+# XML §2.2 Char production — the code points a character reference may legally denote. Stricter
+# than Julia's `isvalid(Char, cp)`, which accepts #x0 and other C0 controls that XML forbids.
+_is_xml_char(cp::Integer) =
+    cp == 0x9 || cp == 0xA || cp == 0xD ||
+    (0x20 <= cp <= 0xD7FF) || (0xE000 <= cp <= 0xFFFD) || (0x10000 <= cp <= 0x10FFFF)
+
+# `:strict` only: reject any numeric character reference whose code point is outside the XML Char
+# range. Gated + DCE'd off the :strict path, and only called when a token actually carries
+# entities, so :lenient/:structural pay nothing.
+function _check_charrefs_strict(s::AbstractString)
+    for m in eachmatch(r"&#([xX]?)([0-9a-fA-F]+);", s)
+        cp = tryparse(UInt32, m[2]; base = isempty(m[1]) ? 10 : 16)
+        (cp === nothing || !_is_xml_char(cp)) &&
+            error("not well-formed: illegal character reference \"&#$(m[1])$(m[2]);\"")
+    end
+end
+
 # Token-stream → Node{S} builder. `convert_text` is `unescape` for parsed content (with entity
 # decoding) and `identity` for zero-copy SubString parsing where the caller keeps raw escapes.
 # `Val{W}` is the well-formedness level (:lenient / :structural / :strict); its checks compile
@@ -758,7 +775,9 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
         k = token.kind
 
         if k === TokenKinds.TEXT
-            v = _text_value(S, raw(token, xml), token.has_entities, convert_text)
+            rawtext = raw(token, xml)
+            W === :strict && token.has_entities && _check_charrefs_strict(rawtext)
+            v = _text_value(S, rawtext, token.has_entities, convert_text)
             push!(last(children_stack), Node{S}(Text, nothing, nothing, v, nothing))
 
         elseif k === TokenKinds.OPEN_TAG
@@ -792,7 +811,9 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
             pending_attr_name = raw(token, xml)
 
         elseif k === TokenKinds.ATTR_VALUE
-            val = _text_value(S, attr_value(token, xml), token.has_entities, convert_text)
+            rawval = attr_value(token, xml)
+            W === :strict && token.has_entities && _check_charrefs_strict(rawval)
+            val = _text_value(S, rawval, token.has_entities, convert_text)
             name = _to(S, pending_attr_name)
             if decl_attrs !== nothing
                 any(p -> first(p) == name, decl_attrs) && error("Duplicate attribute: $name")
@@ -811,7 +832,9 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
             decl_attrs = nothing
 
         elseif k === TokenKinds.COMMENT_CONTENT
-            push!(last(children_stack), Node{S}(Comment, nothing, nothing, _to(S, raw(token, xml)), nothing))
+            cmt = raw(token, xml)
+            W === :strict && occursin("--", cmt) && error("not well-formed: \"--\" within a comment")
+            push!(last(children_stack), Node{S}(Comment, nothing, nothing, _to(S, cmt), nothing))
 
         elseif k === TokenKinds.CDATA_CONTENT
             push!(last(children_stack), Node{S}(CData, nothing, nothing, _to(S, raw(token, xml)), nothing))
@@ -821,6 +844,8 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
 
         elseif k === TokenKinds.PI_OPEN
             pending_pi_tag = pi_target(token, xml)
+            W === :strict && (isempty(pending_pi_tag) || !_is_name_start(first(pending_pi_tag))) &&
+                error("not well-formed: invalid processing-instruction target \"$pending_pi_tag\"")
             pending_pi_value = nothing
 
         elseif k === TokenKinds.PI_CONTENT

@@ -115,6 +115,18 @@ end
         doc = parse("<empty/>", Node)
         @test length(children(doc[1])) == 0
     end
+
+    @testset ":strict rejects character references outside the XML Char range" begin
+        # XML §2.2 Char: #x0, surrogates, and code points > #x10FFFF are not legal characters.
+        @test_throws Exception parse("<root>&#0;</root>", Node; wellformed=:strict)        # NUL
+        @test_throws Exception parse("<root>&#xD800;</root>", Node; wellformed=:strict)    # surrogate
+        @test_throws Exception parse("<root>&#xFFFFFF;</root>", Node; wellformed=:strict)  # > #x10FFFF
+        @test_throws Exception parse("""<e a="&#0;"/>""", Node; wellformed=:strict)        # in an attribute too
+        # legal refs still parse under :strict
+        @test simple_value(parse("<root>&#x41;&#x9;</root>", Node; wellformed=:strict)[1]) == "A\t"
+        # :structural (default) and :lenient do not enforce the Char range
+        @test nodetype(parse("<root>&#0;</root>", Node)) == Document
+    end
 end
 
 #==============================================================================#
@@ -160,6 +172,14 @@ end
         @test value(doc[1][1]) == " A "
         @test value(doc[1][2]) == " B "
     end
+
+    @testset ":strict rejects \"--\" inside a comment" begin
+        # XML §2.5: the string "--" must not occur within comments.
+        @test_throws Exception parse("<root><!-- a -- b --></root>", Node; wellformed=:strict)
+        # :structural (default) and :lenient accept it
+        @test nodetype(parse("<root><!-- a -- b --></root>", Node)) == Document
+        @test nodetype(parse("<root><!-- a -- b --></root>", Node; wellformed=:lenient)) == Document
+    end
 end
 
 #==============================================================================#
@@ -194,6 +214,17 @@ end
         doc = parse("<root/><?post-process?>", Node)
         @test nodetype(doc[2]) == ProcessingInstruction
         @test tag(doc[2]) == "post-process"
+    end
+
+    @testset ":strict rejects an empty or invalid PI target" begin
+        # XML §2.6: a PI target must be a Name.
+        @test_throws Exception parse("<root><? data?></root>", Node; wellformed=:strict)   # empty target
+        @test_throws Exception parse("<root><?123?></root>", Node; wellformed=:strict)     # invalid name-start
+        # a valid target (incl. "xml-stylesheet") still parses under :strict
+        @test nodetype(parse("<?xml-stylesheet?><root/>", Node; wellformed=:strict)) == Document
+        # :structural (default) and :lenient accept the empty target
+        @test nodetype(parse("<root><? data?></root>", Node)) == Document
+        @test nodetype(parse("<root><? data?></root>", Node; wellformed=:lenient)) == Document
     end
 end
 
