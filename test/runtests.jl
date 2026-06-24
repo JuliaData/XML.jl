@@ -60,6 +60,28 @@ end
     @test nodetype(doc[2]) == Element
     @test tag(doc[2]) == "greeting"
     @test simple_value(doc[2]) == "Hello, world!"
+
+    # A well-formed document has exactly one root and no stray top-level markup.
+    # v0.4 enforces this by default (`wellformed=:structural`); `:lenient` opts out.
+    @testset "rejects ill-formed under :structural (the default)" begin
+        @test_throws ErrorException parse("<a/><b/>", Node)       # multiple root elements
+        @test_throws ErrorException parse("x<a/>", Node)          # non-whitespace text before root
+        @test_throws ErrorException parse("<a/>x", Node)          # non-whitespace text after root
+        @test_throws ErrorException parse("<></>", Node)          # empty element name
+        @test_throws ErrorException parse("<1b>x</1b>", Node)     # name starts with a digit
+        @test_throws ErrorException parse("<.d/>", Node)          # name starts with punctuation
+    end
+
+    @testset ":structural still accepts legal prolog/epilog" begin
+        @test nodetype(parse("  <a/>  ", Node)) == Document       # whitespace around root is legal
+        @test nodetype(parse("<!--c--><a/>", Node)) == Document   # comment before root
+        @test nodetype(parse("""<?xml version="1.0"?><a/>""", Node)) == Document
+    end
+
+    @testset ":lenient opts out of well-formedness enforcement" begin
+        @test nodetype(parse("<a/><b/>", Node; wellformed=:lenient)) == Document
+        @test nodetype(parse("<></>", Node; wellformed=:lenient)) == Document
+    end
 end
 
 #==============================================================================#

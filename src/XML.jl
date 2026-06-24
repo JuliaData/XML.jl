@@ -683,18 +683,23 @@ function _normalize_bom(data::Vector{UInt8})
     return data
 end
 
-Base.read(filename::AbstractString, ::Type{Node}) = parse(String(_normalize_bom(read(filename))), Node)
-Base.read(io::IO, ::Type{Node}) = parse(String(_normalize_bom(read(io))), Node)
+Base.read(filename::AbstractString, ::Type{Node}; wellformed::Symbol=:structural) = parse(String(_normalize_bom(read(filename))), Node; wellformed)
+Base.read(io::IO, ::Type{Node}; wellformed::Symbol=:structural) = parse(String(_normalize_bom(read(io))), Node; wellformed)
 
 #-----------------------------------------------------------------------------# parse
-Base.parse(::Type{Node}, xml::AbstractString) = parse(xml, Node)
+# A leading U+FEFF (BOM as a character) isn't content — drop it so a BOM'd in-memory string
+# parses cleanly. (The read path strips the BOM bytes via _normalize_bom; this covers
+# parse(::AbstractString), where the bytes have already decoded to a U+FEFF char.)
+_drop_bom(s::String)::String = startswith(s, '\ufeff') ? s[nextind(s, 1):end] : s
 
-function Base.parse(xml::AbstractString, ::Type{Node})
-    _parse(String(xml), String, unescape)
+Base.parse(::Type{Node}, xml::AbstractString; wellformed::Symbol=:structural) = parse(xml, Node; wellformed)
+
+function Base.parse(xml::AbstractString, ::Type{Node}; wellformed::Symbol=:structural)
+    _parse(_drop_bom(String(xml)), String, unescape, Val(wellformed))
 end
 
-function Base.parse(xml::AbstractString, ::Type{Node{SubString{String}}})
-    _parse(String(xml), SubString{String}, identity)
+function Base.parse(xml::AbstractString, ::Type{Node{SubString{String}}}; wellformed::Symbol=:structural)
+    _parse(_drop_bom(String(xml)), SubString{String}, identity, Val(wellformed))
 end
 
 # Convert a parser substring to the requested storage type — copy to a fresh String, or
@@ -713,10 +718,31 @@ _nothingify(v::Vector) = isempty(v) ? nothing : v
 @inline _text_value(::Type{S}, raw, has_entities, convert_text::F) where {S, F} =
     has_entities ? convert_text(raw) : _to(S, raw)
 
-# Token-stream → Node{S} builder. `convert_text` is `unescape` for parsed content (with
-# entity decoding) and `identity` for zero-copy SubString parsing where the caller opts
-# to keep raw escapes.
-function _parse(xml::String, ::Type{S}, convert_text::F) where {S, F}
+# An XML NameStartChar (lenient on Unicode, mirroring NAME_BYTE_TABLE): a letter, `_`, `:`, or
+# any non-ASCII char — but NOT a digit / `-` / `.` (those are valid NameChars, just not first).
+@inline _is_name_start(c::Char) =
+    ('a' <= c <= 'z') || ('A' <= c <= 'Z') || c == '_' || c == ':' || !isascii(c)
+
+# Document-shape well-formedness (`:structural`/`:strict`): exactly one root element, and any
+# top-level Text must be whitespace only. (`:lenient` skips this — the call is gated + DCE'd.)
+function _check_document_wellformed(children)
+    nroots = 0
+    for c in children
+        nt = nodetype(c)
+        if nt === Element
+            nroots += 1
+        elseif nt === Text && !isempty(strip(value(c)))
+            error("not well-formed: non-whitespace text at the top level")
+        end
+    end
+    nroots > 1 && error("not well-formed: multiple root elements (found $nroots)")
+end
+
+# Token-stream → Node{S} builder. `convert_text` is `unescape` for parsed content (with entity
+# decoding) and `identity` for zero-copy SubString parsing where the caller keeps raw escapes.
+# `Val{W}` is the well-formedness level (:lenient / :structural / :strict); its checks compile
+# away on :lenient.
+function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, W}
     tags = S[]
     attrs_stack = Vector{Pair{S,S}}[]
     children_stack = Vector{Vector{Node{S}}}()
@@ -736,7 +762,10 @@ function _parse(xml::String, ::Type{S}, convert_text::F) where {S, F}
             push!(last(children_stack), Node{S}(Text, nothing, nothing, v, nothing))
 
         elseif k === TokenKinds.OPEN_TAG
-            push!(tags, _to(S, tag_name(token, xml)))
+            nm = tag_name(token, xml)
+            W !== :lenient && (isempty(nm) || !_is_name_start(first(nm))) &&
+                error("not well-formed: invalid element name \"$nm\"")
+            push!(tags, _to(S, nm))
             push!(attrs_stack, Pair{S,S}[])
             push!(children_stack, Node{S}[])
 
@@ -805,6 +834,7 @@ function _parse(xml::String, ::Type{S}, convert_text::F) where {S, F}
 
     !isempty(tags) && error("Unclosed tags: $(join(tags, ", "))")
     doc_children = only(children_stack)
+    W !== :lenient && _check_document_wellformed(doc_children)
     Node{S}(Document, nothing, nothing, nothing, isempty(doc_children) ? nothing : doc_children)
 end
 

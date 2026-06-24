@@ -36,7 +36,7 @@ end
 # Parse a test catalog XML and extract TEST entries
 function parse_catalog(catalog_path::String)
     isfile(catalog_path) || return NamedTuple[]
-    doc = read(catalog_path, Node)
+    doc = read(catalog_path, Node; wellformed = :lenient)  # catalog is a multi-root fixture, not a doc under test
     tests = NamedTuple[]
     _collect_tests!(tests, doc, dirname(catalog_path))
     return tests
