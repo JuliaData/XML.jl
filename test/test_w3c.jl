@@ -125,9 +125,8 @@ notwf_tests = filter(t -> t.type == "not-wf", xml10_tests)
                 push!(failures, "$(test.id): $e")
             end
         end
-        if n_fail > 0
-            @warn "W3C well-formed: $n_pass passed, $n_fail failed" failures=first(failures, 20)
-        end
+        n_fail > 0 && @warn "W3C well-formed docs that failed to parse" failures=first(failures, 20)
+        @test n_fail == 0                  # every well-formed W3C doc must parse
         @info "W3C well-formed: $n_pass / $(n_pass + n_fail) passed"
     end
 
@@ -142,13 +141,16 @@ notwf_tests = filter(t -> t.type == "not-wf", xml10_tests)
                 n_fail += 1
                 push!(failures, test.id)
             catch
-                @test true
                 n_pass += 1
             end
         end
-        if n_fail > 0
-            @warn "W3C not-well-formed: $n_pass rejected, $n_fail incorrectly accepted" failures=first(failures, 20)
-        end
-        @info "W3C not-well-formed: $n_pass / $(n_pass + n_fail) correctly rejected"
+        # XML.jl is non-validating: it rejects structural + syntactic ill-formedness, but not
+        # validity errors needing DTD/entity processing (undefined entities, ID/IDREF, attribute
+        # types…), and :strict (more syntactic checks) is still pending — so it does NOT reject all
+        # 940 not-wf cases of the pinned xmlts20130923 suite. Assert a no-regression floor on the
+        # count it DOES reject; bump it as :structural/:strict grow. Categorising the rest is Phase 6.5.
+        @test n_pass >= 156
+        n_fail > 0 && @info "W3C not-wf: $n_fail not yet rejected (out-of-scope validity / pending :strict)" examples=first(failures, 20)
+        @info "W3C not-well-formed: $n_pass / $(n_pass + n_fail) rejected"
     end
 end
