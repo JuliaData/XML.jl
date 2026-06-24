@@ -1111,17 +1111,17 @@ end
     end
 
     @testset "errors/extra-content: content after root element" begin
-        # libxml2 test/errors/extra-content.xml
-        # XML.jl is lenient: treats trailing text as a Text node in the Document
-        doc = parse("<d/>x", Node)
-        @test nodetype(doc) == Document
+        # libxml2 test/errors/extra-content.xml — trailing text after the root is ill-formed.
+        # Default (:structural) rejects it; :lenient keeps the old accept-as-trailing-Text behavior.
+        @test_throws Exception parse("<d/>x", Node)
+        @test nodetype(parse("<d/>x", Node; wellformed = :lenient)) == Document
     end
 
     @testset "errors/invalid-start-tag-1: text-only document" begin
-        # libxml2 test/errors/invalid-start-tag-1.xml
-        # XML.jl is lenient: treats bare text as a Text node
-        doc = parse("x", Node)
-        @test nodetype(doc) == Document
+        # libxml2 test/errors/invalid-start-tag-1.xml — a bare-text document has no root element.
+        # Default (:structural) rejects it; :lenient keeps the old accept-as-Text behavior.
+        @test_throws Exception parse("x", Node)
+        @test nodetype(parse("x", Node; wellformed = :lenient)) == Document
     end
 
     @testset "errors/invalid-start-tag-2: lone <" begin
@@ -1130,10 +1130,10 @@ end
     end
 
     @testset "errors/doctype1: malformed DOCTYPE" begin
-        # libxml2 test/errors/doctype1.xml - "<!DOCTYPE doc>[]>"
-        # XML.jl is lenient: parses the DOCTYPE and treats []> as text
-        doc = parse("<!DOCTYPE doc>[]>\n<doc/>", Node)
-        @test nodetype(doc) == Document
+        # libxml2 test/errors/doctype1.xml — "<!DOCTYPE doc>[]>": the stray "]>" is top-level text.
+        # Default (:structural) rejects it; :lenient keeps the old parse-DOCTYPE-and-text behavior.
+        @test_throws Exception parse("<!DOCTYPE doc>[]>\n<doc/>", Node)
+        @test nodetype(parse("<!DOCTYPE doc>[]>\n<doc/>", Node; wellformed = :lenient)) == Document
     end
 
     @testset "errors/dup-xml-attr: duplicate xml: attribute" begin

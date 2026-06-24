@@ -3461,6 +3461,7 @@ end
 include("test_abstracttrees_ext.jl")
 include("test_pugixml.jl")
 include("test_libexpat.jl")
+include("test_libxml2_testcases.jl")
 include("test_w3c.jl")
 include("test_tokenizer.jl")
 include("test_cursor.jl")
