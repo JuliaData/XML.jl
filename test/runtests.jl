@@ -1568,6 +1568,14 @@ end
         @test_throws ErrorException parse_dtd(Element("x"))
     end
 
+    @testset "parse_dtd gives a clear error on parameter-entity references" begin
+        # PE references (%name;) are not expanded by this best-effort helper; the error explains
+        # that, rather than surfacing an opaque internal BoundsError / position error.
+        @test_throws "parameter-entity" parse_dtd("root [<!ELEMENT e %text;>]")
+        # a PE-free DTD is unaffected
+        @test parse_dtd("note [<!ELEMENT note (#PCDATA)>]").root == "note"
+    end
+
     @testset "complex DTD file (structure test)" begin
         # complex_dtd.xml uses parameter entity references (%text;) which parse_dtd does not
         # expand, so we just verify parsing the fixture works. It is an XML declaration plus an
