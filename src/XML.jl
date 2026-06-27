@@ -837,6 +837,7 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
 
         elseif k === TokenKinds.ATTR_VALUE
             rawval = attr_value(token, xml)
+            W !== :lenient && occursin('<', rawval) && error("not well-formed: '<' in attribute value (XML 1.0 §3.1)")
             W === :strict && token.has_entities && _check_charrefs_strict(rawval)
             val = _text_value(S, rawval, token.has_entities, convert_text)
             name = _to(S, pending_attr_name)

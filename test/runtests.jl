@@ -502,6 +502,15 @@ end
         @test doc[1]["a"] == "1>2"
     end
 
+    @testset "literal < in attribute value rejected (§3.1)" begin
+        # §3.1 AttValue ::= '"' ([^<&"] | Reference)* '"' — a raw '<' is not well-formed
+        # (whereas '>' above is), and &lt; is the correct way to include '<'.
+        @test_throws Exception parse("""<x a="1<2"/>""", Node)                      # :structural default
+        @test_throws Exception parse("""<x a="1<2"/>""", Node; wellformed=:strict)
+        @test parse("""<x a="1<2"/>""", Node; wellformed=:lenient)[1]["a"] == "1<2" # :lenient accepts
+        @test parse("""<x a="1&lt;2"/>""", Node)[1]["a"] == "1<2"                    # &lt; is well-formed
+    end
+
     @testset "attribute with entity reference" begin
         doc = parse("""<x a="a&amp;b"/>""", Node)
         @test doc[1]["a"] == "a&b"
