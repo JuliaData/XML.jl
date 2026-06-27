@@ -1692,6 +1692,22 @@ end
     @testset "unterminated attribute value" begin
         @test_throws Exception parse("""<a b="no end""", Node)
     end
+
+    @testset "truncated construct whose open token lands at EOF" begin
+        # The open token consumes through end-of-input, so the body reader never ran: the Node
+        # parser silently accepted these, and the lazy readers' value() indexed `nothing` (an
+        # opaque MethodError). Each now raises a clear "unterminated ..." error.
+        @test_throws Exception parse("<!--", Node)
+        @test_throws Exception parse("<![CDATA[", Node)
+        @test_throws Exception parse("<?pi", Node)
+        @test_throws Exception parse("<root><!--", Node)
+        @test_throws Exception parse("<root><![CDATA[", Node)
+        # lazy readers re-tokenize on access — a clear error, not an opaque MethodError
+        @test_throws Exception children(parse("<root><!--", LazyNode))[1]
+        # complete constructs (including the empty comment <!---->) are unaffected
+        @test nodetype(parse("<r><!--c--></r>", Node)) == Document
+        @test nodetype(parse("<r><!----></r>", Node)) == Document
+    end
 end
 
 #==============================================================================#

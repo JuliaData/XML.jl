@@ -171,7 +171,15 @@ function Base.iterate(t::Tokenizer, st::TokenizerState=TokenizerState(t.start, M
     if has_pending(st)
         return (pending, TokenizerState(pos, mode, no_token(data)))
     end
-    iseof(data, pos) && return nothing
+    # EOF ends the token stream cleanly in M_DEFAULT (top level) and in the tag modes, where it
+    # leaves a partial token the parser rejects as an unclosed tag. But EOF mid content-body — a
+    # "<!--", "<![CDATA[", "<?pi", or "<!DOCTYPE" whose open token consumed through end-of-input —
+    # is an unterminated construct: fall through to the body reader so it raises the precise
+    # "unterminated ..." error instead of silently ending (which left the Node parser accepting the
+    # truncated input, and made the lazy readers' value() index `nothing`).
+    if iseof(data, pos)
+        (mode == M_COMMENT || mode == M_CDATA || mode == M_PI || mode == M_DOCTYPE) || return nothing
+    end
 
     if mode == M_DEFAULT
         peek(data, pos) == UInt8('<') ? read_markup(data, pos) : read_text(data, pos)
