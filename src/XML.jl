@@ -773,7 +773,7 @@ function _check_document_wellformed(children)
     nroots = 0
     ndtds = 0
     has_markup = false   # a Comment / PI / Declaration / CData / DTD at the top level
-    for c in children
+    for (idx, c) in enumerate(children)
         nt = nodetype(c)
         if nt === Element
             nroots += 1
@@ -784,6 +784,10 @@ function _check_document_wellformed(children)
             if nt === DTD
                 ndtds += 1
                 nroots > 0 && error("not well-formed: DOCTYPE must precede the root element")
+            elseif nt === Declaration
+                # §2.8: the XML declaration must be the very first thing in the document. Only the
+                # first child may be a Declaration; a second (or any later) one is misplaced.
+                idx == 1 || error("not well-formed: the XML declaration must be the first thing in the document (XML 1.0 §2.8)")
             end
         end
     end
@@ -877,6 +881,8 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
             decl_attrs = Pair{S,S}[]
 
         elseif k === TokenKinds.XML_DECL_CLOSE
+            W !== :lenient && length(children_stack) > 1 &&
+                error("not well-formed: XML declaration inside element content")
             a = isempty(decl_attrs) ? nothing : decl_attrs
             push!(last(children_stack), Node{S}(Declaration, nothing, a, nothing, nothing))
             decl_attrs = nothing

@@ -110,6 +110,19 @@ end
         @test nodetype(parse("<x/><!DOCTYPE x>", Node; wellformed=:lenient)) == Document
     end
 
+    @testset "rejects a misplaced or duplicate XML declaration (§2.8)" begin
+        # The XML declaration must be the very first thing in the document.
+        @test_throws ErrorException parse("""<r/><?xml version="1.0"?>""", Node)                       # after the root
+        @test_throws ErrorException parse("""<?xml version="1.0"?><?xml version="1.0"?><r/>""", Node)  # duplicate
+        @test_throws ErrorException parse("""<a><?xml version="1.0"?></a>""", Node)                    # nested in content
+        @test_throws ErrorException parse("""<!--c--><?xml version="1.0"?><r/>""", Node)               # after a comment
+        # the well-formed case still parses, including at :strict
+        @test nodetype(parse("""<?xml version="1.0"?><r/>""", Node)) == Document
+        @test nodetype(parse("""<?xml version="1.0"?><r/>""", Node; wellformed=:strict)) == Document
+        # :lenient opts out
+        @test nodetype(parse("""<r/><?xml version="1.0"?>""", Node; wellformed=:lenient)) == Document
+    end
+
     @testset ":lenient opts out of well-formedness enforcement" begin
         @test nodetype(parse("<a/><b/>", Node; wellformed=:lenient)) == Document
         @test nodetype(parse("<></>", Node; wellformed=:lenient)) == Document
