@@ -345,6 +345,12 @@ _to_node(x) = Node{String}(Text, nothing, nothing, string(x), nothing)
 #-----------------------------------------------------------------------------# NodeType constructors
 # Make each NodeType variant callable as a constructor: `Element("div", ...)`,
 # `Text("hi")`, etc. Dispatches on `T` to validate args/kwargs and build the right Node.
+# A valid XML 1.0 Name (§2.3): a NameStartChar followed by NameChars, using the same lenient
+# per-character rule as the tokenizer (every non-ASCII char is accepted; the exact Unicode ranges
+# are not enforced) — so a constructed node's name is one the parser would also accept and
+# round-trip, rather than a string like "" or "1bad" that serializes to malformed XML.
+_is_xml_name(s::AbstractString) = !isempty(s) && _is_name_start(first(s)) && all(_dtd_is_name_char, s)
+
 function (T::NodeType)(args...; attrs...)
     S = String
     if T in (Text, Comment, CData, DTD)
@@ -354,6 +360,7 @@ function (T::NodeType)(args...; attrs...)
     elseif T === Element
         isempty(args) && error("Element nodes require at least a tag.")
         t = string(first(args))
+        _is_xml_name(t) || error("invalid XML element name $(repr(t)): must be an XML 1.0 Name")
         a = Pair{S,S}[String(k) => String(v) for (k, v) in pairs(attrs)]
         c = Node{S}[_to_node(x) for x in args[2:end]]
         Node{S}(T, t, a, nothing, c)
@@ -366,6 +373,7 @@ function (T::NodeType)(args...; attrs...)
         length(args) <= 2 || error("ProcessingInstruction nodes accept a target and optional content.")
         !isempty(attrs) && error("ProcessingInstruction nodes do not accept attributes.")
         t = string(args[1])
+        _is_xml_name(t) || error("invalid XML processing-instruction target $(repr(t)): must be an XML 1.0 Name")
         v = length(args) == 2 ? string(args[2]) : nothing
         Node{S}(T, t, nothing, v, nothing)
     elseif T === Document

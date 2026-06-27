@@ -753,6 +753,19 @@ end
         @test_throws Exception Document(; x="1")              # no attrs
         @test_throws Exception ProcessingInstruction()        # need target
         @test_throws Exception ProcessingInstruction("a", "b", "c")  # too many args
+
+        # invalid XML names are rejected, so a constructed node can't serialize to malformed XML (§2.3)
+        @test_throws Exception Element("")         # empty name -> "</>"
+        @test_throws Exception Element("1bad")     # name starts with a digit
+        @test_throws Exception Element(".d")        # name starts with punctuation
+        @test_throws Exception Element("a b")       # whitespace in name -> "<a b/>"
+        @test_throws Exception Element("a<b")       # markup char in name
+        @test_throws Exception ProcessingInstruction("1bad", "x")   # invalid PI target
+        # valid names (incl. namespaced and non-ASCII) still construct
+        @test tag(Element("ok")) == "ok"
+        @test tag(Element("ns:item")) == "ns:item"
+        @test tag(Element("café")) == "café"
+        @test tag(ProcessingInstruction("php", "echo")) == "php"
     end
 end
 
