@@ -143,7 +143,7 @@ doc = parse("""
 </root>
 """, Node)
 
-root = doc[end]
+root = doc[1]   # the <root> element (doc[end] would be the trailing-whitespace Text node)
 
 xpath(root, "//b")           # All <b> descendants
 xpath(root, "a[@id='2']/b")  # <b> inside <a id="2">

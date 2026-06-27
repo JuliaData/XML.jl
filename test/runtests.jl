@@ -2811,6 +2811,23 @@ end
         @test isempty(xpath(doc, "ns:missing"))
     end
 
+    @testset "README example: doc[1] is the root (doc[end] is the trailing-whitespace Text)" begin
+        rdoc = parse("""
+<root>
+  <a id="1"><b>hello</b></a>
+  <a id="2"><b>world</b></a>
+</root>
+""", Node)
+        root = rdoc[1]
+        @test nodetype(root) == Element && tag(root) == "root"
+        @test length(xpath(root, "//b")) == 2
+        @test length(xpath(root, "a[@id='2']/b")) == 1
+        @test length(xpath(root, "a[1]")) == 1
+        @test length(xpath(root, "//b/text()")) == 2
+        # the documented pitfall: doc[end] is the trailing whitespace Text node, not <root>
+        @test nodetype(rdoc[end]) == Text
+    end
+
     @testset "has-attribute predicate [@attr]" begin
         results = xpath(doc, "/root/users/user[@role]")
         @test length(results) == 3
