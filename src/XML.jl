@@ -356,7 +356,13 @@ function (T::NodeType)(args...; attrs...)
     if T in (Text, Comment, CData, DTD)
         length(args) == 1 || error("$T nodes require exactly one value argument.")
         !isempty(attrs) && error("$T nodes do not accept attributes.")
-        Node{S}(T, nothing, nothing, string(only(args)), nothing)
+        v = string(only(args))
+        # A value containing its own close delimiter is un-representable: write would emit XML that
+        # re-parses split into multiple nodes. (DTD is excluded — its internal subset legitimately
+        # contains '>'.)
+        T === Comment && occursin("-->", v) && error("Comment content cannot contain \"-->\": $(repr(v))")
+        T === CData && occursin("]]>", v) && error("CData content cannot contain \"]]>\": $(repr(v))")
+        Node{S}(T, nothing, nothing, v, nothing)
     elseif T === Element
         isempty(args) && error("Element nodes require at least a tag.")
         t = string(first(args))
@@ -375,6 +381,7 @@ function (T::NodeType)(args...; attrs...)
         t = string(args[1])
         _is_xml_name(t) || error("invalid XML processing-instruction target $(repr(t)): must be an XML 1.0 Name")
         v = length(args) == 2 ? string(args[2]) : nothing
+        v !== nothing && occursin("?>", v) && error("ProcessingInstruction content cannot contain \"?>\": $(repr(v))")
         Node{S}(T, t, nothing, v, nothing)
     elseif T === Document
         !isempty(attrs) && error("Document nodes do not accept attributes.")

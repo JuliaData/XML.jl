@@ -766,6 +766,15 @@ end
         @test tag(Element("ns:item")) == "ns:item"
         @test tag(Element("café")) == "café"
         @test tag(ProcessingInstruction("php", "echo")) == "php"
+
+        # content containing its own close delimiter is un-representable (write would split it)
+        @test_throws Exception Comment("a-->b")
+        @test_throws Exception CData("a]]>b")
+        @test_throws Exception ProcessingInstruction("t", "a?>b")
+        # the delimiter's characters individually (not the full close sequence) are fine
+        @test value(Comment("a-b->c")) == "a-b->c"
+        @test value(CData("a]b]>c")) == "a]b]>c"
+        @test value(ProcessingInstruction("t", "a? >b")) == "a? >b"
     end
 end
 
