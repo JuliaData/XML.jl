@@ -50,7 +50,7 @@ function _collect_tests!(tests, node, base_dir)
             haskey(attrs, "URI") || continue
             push!(tests, (
                 type = get(attrs, "TYPE", ""),
-                entities = get(attrs, "ENTITIES", ""),
+                entities = get(attrs, "ENTITIES", "none"),  # testcases.dtd defaults ENTITIES to "none" when the attribute is omitted
                 id = get(attrs, "ID", ""),
                 uri = joinpath(base_dir, attrs["URI"]),
                 version = get(attrs, "VERSION", "1.0"),
@@ -148,10 +148,11 @@ notwf_tests = filter(t -> t.type == "not-wf", xml10_tests)
         end
         # XML.jl is non-validating and this suite runs at :strict, so it rejects structural +
         # syntactic ill-formedness but NOT validity errors needing DTD/entity processing (undefined
-        # entities, ID/IDREF, attribute types…). It therefore does not reject all 940 not-wf cases of
-        # the pinned xmlts20130923 suite. Assert a no-regression floor on the count it DOES reject
-        # (rose 156→169 when :strict landed); bump it as coverage grows. Categorising the rest is Phase 6.5.
-        @test n_pass >= 169
+        # entities, ID/IDREF, attribute types…). It therefore does not reject all 1257 in-scope not-wf
+        # cases of the pinned xmlts20130923 suite. Assert a no-regression floor on the count it DOES
+        # reject (367 at present; it rose sharply when :strict gained raw-character-range checking and
+        # DOCTYPE/XML-declaration placement checks). Bump it as coverage grows.
+        @test n_pass >= 367
         n_fail > 0 && @info "W3C not-wf: $n_fail not yet rejected (out-of-scope validity errors: DTD/entity)" examples=first(failures, 20)
         @info "W3C not-well-formed: $n_pass / $(n_pass + n_fail) rejected"
     end
