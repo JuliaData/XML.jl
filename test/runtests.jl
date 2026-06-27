@@ -85,6 +85,19 @@ end
         @test nodetype(parse("""<?xml version="1.0"?><a/>""", Node)) == Document
     end
 
+    @testset "rejects a document with markup but no root element (§2.1)" begin
+        # §2.1: a well-formed document has exactly one root. Prolog-only markup (a comment,
+        # XML/PI declaration, or DOCTYPE) with no root is not well-formed (libxml2: "no root").
+        @test_throws ErrorException parse("<!-- comment -->", Node)
+        @test_throws ErrorException parse("<!DOCTYPE x>", Node)
+        @test_throws ErrorException parse("""<?xml version="1.0"?>""", Node)
+        @test_throws ErrorException parse("<?pi go?>", Node)
+        # truly-empty and whitespace-only input stay lenient (an empty Document); :lenient opts out
+        @test nodetype(parse("", Node)) == Document
+        @test nodetype(parse("   ", Node)) == Document
+        @test nodetype(parse("<!-- comment -->", Node; wellformed=:lenient)) == Document
+    end
+
     @testset "rejects misplaced or duplicate DOCTYPE (§2.1 prolog)" begin
         # A DOCTYPE belongs in the prolog: a single declaration, before the root element.
         @test_throws ErrorException parse("<!DOCTYPE x><!DOCTYPE x><x/>", Node)   # duplicate
@@ -1492,11 +1505,13 @@ end
     end
 
     @testset "complex DTD file (structure test)" begin
-        # complex_dtd.xml uses parameter entity references (%text;) which parse_dtd
-        # does not expand, so we just verify parsing the XML document itself works
+        # complex_dtd.xml uses parameter entity references (%text;) which parse_dtd does not
+        # expand, so we just verify parsing the fixture works. It is an XML declaration plus an
+        # internal-subset DOCTYPE with no root element, i.e. not a well-formed document — read it
+        # with :lenient, since the default :structural now requires a root element (§2.1).
         path = joinpath(@__DIR__, "data", "complex_dtd.xml")
         isfile(path) || return
-        doc = read(path, Node)
+        doc = read(path, Node; wellformed=:lenient)
         dtd_node = first(filter(x -> nodetype(x) == DTD, children(doc)))
         @test nodetype(dtd_node) == DTD
         @test contains(value(dtd_node), "test")

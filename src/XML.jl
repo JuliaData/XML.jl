@@ -748,25 +748,31 @@ _nothingify(v::Vector) = isempty(v) ? nothing : v
 @inline _is_name_start(c::Char) =
     ('a' <= c <= 'z') || ('A' <= c <= 'Z') || c == '_' || c == ':' || !isascii(c)
 
-# Document-shape well-formedness (`:structural`/`:strict`): exactly one root element, any
-# top-level Text must be whitespace only, and a DOCTYPE must be a single declaration in the
-# prolog (before the root). (`:lenient` skips this — the call is gated + DCE'd.)
+# Document-shape well-formedness (`:structural`/`:strict`): exactly one root element (prolog
+# markup with no root is rejected; truly-empty and whitespace-only input stay lenient — an empty
+# Document), any top-level Text must be whitespace only, and a DOCTYPE must be a single
+# declaration in the prolog (before the root). (`:lenient` skips this — gated + DCE'd.)
 function _check_document_wellformed(children)
     nroots = 0
     ndtds = 0
+    has_markup = false   # a Comment / PI / Declaration / CData / DTD at the top level
     for c in children
         nt = nodetype(c)
         if nt === Element
             nroots += 1
-        elseif nt === Text && !isempty(strip(value(c)))
-            error("not well-formed: non-whitespace text at the top level")
-        elseif nt === DTD
-            ndtds += 1
-            nroots > 0 && error("not well-formed: DOCTYPE must precede the root element")
+        elseif nt === Text
+            isempty(strip(value(c))) || error("not well-formed: non-whitespace text at the top level")
+        else
+            has_markup = true
+            if nt === DTD
+                ndtds += 1
+                nroots > 0 && error("not well-formed: DOCTYPE must precede the root element")
+            end
         end
     end
     nroots > 1 && error("not well-formed: multiple root elements (found $nroots)")
     ndtds > 1 && error("not well-formed: multiple DOCTYPE declarations (found $ndtds)")
+    nroots == 0 && has_markup && error("not well-formed: no root element")
 end
 
 # XML §2.2 Char production — the code points a character reference may legally denote. Stricter
