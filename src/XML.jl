@@ -748,19 +748,25 @@ _nothingify(v::Vector) = isempty(v) ? nothing : v
 @inline _is_name_start(c::Char) =
     ('a' <= c <= 'z') || ('A' <= c <= 'Z') || c == '_' || c == ':' || !isascii(c)
 
-# Document-shape well-formedness (`:structural`/`:strict`): exactly one root element, and any
-# top-level Text must be whitespace only. (`:lenient` skips this — the call is gated + DCE'd.)
+# Document-shape well-formedness (`:structural`/`:strict`): exactly one root element, any
+# top-level Text must be whitespace only, and a DOCTYPE must be a single declaration in the
+# prolog (before the root). (`:lenient` skips this — the call is gated + DCE'd.)
 function _check_document_wellformed(children)
     nroots = 0
+    ndtds = 0
     for c in children
         nt = nodetype(c)
         if nt === Element
             nroots += 1
         elseif nt === Text && !isempty(strip(value(c)))
             error("not well-formed: non-whitespace text at the top level")
+        elseif nt === DTD
+            ndtds += 1
+            nroots > 0 && error("not well-formed: DOCTYPE must precede the root element")
         end
     end
     nroots > 1 && error("not well-formed: multiple root elements (found $nroots)")
+    ndtds > 1 && error("not well-formed: multiple DOCTYPE declarations (found $ndtds)")
 end
 
 # XML §2.2 Char production — the code points a character reference may legally denote. Stricter
@@ -867,6 +873,8 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
             push!(last(children_stack), Node{S}(CData, nothing, nothing, _to(S, raw(token, xml)), nothing))
 
         elseif k === TokenKinds.DOCTYPE_CONTENT
+            W !== :lenient && length(children_stack) > 1 &&
+                error("not well-formed: DOCTYPE declaration inside element content")
             push!(last(children_stack), Node{S}(DTD, nothing, nothing, _to(S, lstrip(raw(token, xml))), nothing))
 
         elseif k === TokenKinds.PI_OPEN

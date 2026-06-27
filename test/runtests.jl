@@ -85,6 +85,18 @@ end
         @test nodetype(parse("""<?xml version="1.0"?><a/>""", Node)) == Document
     end
 
+    @testset "rejects misplaced or duplicate DOCTYPE (§2.1 prolog)" begin
+        # A DOCTYPE belongs in the prolog: a single declaration, before the root element.
+        @test_throws ErrorException parse("<!DOCTYPE x><!DOCTYPE x><x/>", Node)   # duplicate
+        @test_throws ErrorException parse("<x/><!DOCTYPE x>", Node)               # after the root
+        @test_throws ErrorException parse("<r><!DOCTYPE x></r>", Node)            # nested in content
+        # the well-formed case still parses, including at :strict
+        @test nodetype(parse("<!DOCTYPE x><x/>", Node)) == Document
+        @test nodetype(parse("<!DOCTYPE x><x/>", Node; wellformed=:strict)) == Document
+        # :lenient opts out
+        @test nodetype(parse("<x/><!DOCTYPE x>", Node; wellformed=:lenient)) == Document
+    end
+
     @testset ":lenient opts out of well-formedness enforcement" begin
         @test nodetype(parse("<a/><b/>", Node; wellformed=:lenient)) == Document
         @test nodetype(parse("<></>", Node; wellformed=:lenient)) == Document
