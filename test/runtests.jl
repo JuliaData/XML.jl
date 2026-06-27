@@ -2798,6 +2798,19 @@ end
         @test isempty(results)
     end
 
+    @testset "unsupported axis fails fast (not a silent empty result)" begin
+        # axis::test syntax (child::, self::, descendant::, following-sibling::, parent::, ...) is
+        # out of this subset — it must error, not lex as a literal element name matching nothing.
+        @test_throws Exception xpath(doc, "child::users")
+        @test_throws Exception xpath(doc, "/root/child::users")
+        @test_throws Exception xpath(doc, "self::root")
+        @test_throws Exception xpath(doc, "descendant::user")
+        @test_throws Exception xpath(doc, "following-sibling::user")
+        @test_throws Exception xpath(doc, "parent::node()")
+        # a single ":" (a namespaced name) is NOT an axis — it stays a normal name test
+        @test isempty(xpath(doc, "ns:missing"))
+    end
+
     @testset "has-attribute predicate [@attr]" begin
         results = xpath(doc, "/root/users/user[@role]")
         @test length(results) == 3

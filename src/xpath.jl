@@ -118,6 +118,11 @@ function _xpath_tokenize(expr::AbstractString)
                 j += 1
             end
             name = SubString(s, i, j - 1)
+            # An axis specifier ("axis::test", e.g. child::, descendant::, following-sibling::) is
+            # out of this subset. Reject it rather than treat "axis::test" as a literal element name
+            # (the "::" is swept into the name scan), which silently matches nothing. A single ":"
+            # (a namespaced name like "ns:item") is fine.
+            occursin("::", name) && error("unsupported XPath axis in $(repr(String(name))): only the implicit child and @attribute axes are supported")
             # Check for function calls: text(), node()
             if j <= n && s[j] == '('
                 j2 = findnext(')', s, j + 1)
@@ -292,22 +297,14 @@ function xpath(node::Node{S}, expr::AbstractString) where S
     tokens = _xpath_tokenize(expr)
     isempty(tokens) && return Node{S}[]
 
-    # Determine root for .. navigation
-    root = node.nodetype === Document ? node : node
+    root = node   # context node for `..` navigation
 
-    i = 1
-    # Start context
-    if tokens[1].kind === XPATH_ROOT
-        # Absolute path — start from the document or its root element
-        if node.nodetype === Document
-            current = Node{S}[node]
-        else
-            current = Node{S}[node]
-        end
-        i = 2
-    else
-        current = Node{S}[node]
-    end
+    # Start context: the walk begins at `node` itself. A leading "/" (absolute path) just consumes
+    # the XPATH_ROOT token so the first step matches node's children. Node has no parent link, so an
+    # absolute path from a non-Document node cannot re-anchor at the document root — it is evaluated
+    # relative to `node`; pass a Document (or doc[1]) for a true absolute path.
+    current = Node{S}[node]
+    i = tokens[1].kind === XPATH_ROOT ? 2 : 1
 
     while i <= length(tokens)
         tok = tokens[i]
