@@ -10,10 +10,21 @@ instead of building a full tree in memory.
 
 Supports the same read-only interface as `Node`: [`nodetype`](@ref), [`tag`](@ref),
 [`attributes`](@ref), [`value`](@ref), [`children`](@ref), plus integer and string indexing.
+Accessors return `SubString{String}` views into the original document, so navigating a large
+document through `LazyNode` does not duplicate its text data.
 
-Accessor methods (`tag`, `value`, `keys`, `attributes`) return `SubString{String}` views
-into the original document rather than allocated `String`s, so reading a large document
-through `LazyNode` does not duplicate its text data.
+# Performance — which reader to use
+
+`LazyNode` holds **no materialized tree**, only the source string, so its resident footprint is
+roughly the document size — about an order of magnitude smaller than the equivalent `Node` tree.
+The trade-off is that it **re-tokenizes on every access**: one traversal is somewhat slower than
+`Node`, and *repeated* traversals are dramatically slower (each pass re-scans the whole document),
+whereas a `Node` tree is built once and then walked cheaply.
+
+- **Forward streaming of a large document** → [`Cursor`](@ref) — fastest, allocation-free.
+- **Repeated or random access** → [`Node`](@ref) — builds the tree once.
+- **`LazyNode`** → low-memory, *read-once* navigation, or as a holdable snapshot of a
+  [`Cursor`](@ref) position (`LazyNode(c)` / `Cursor(::LazyNode)`).
 """
 struct LazyNode{S <: AbstractString}
     data::S

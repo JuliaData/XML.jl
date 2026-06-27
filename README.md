@@ -6,6 +6,8 @@
 
 <br>
 
+> **Upgrading from XML.jl 0.3 to 0.4?** See the [migration guide](MIGRATING_TO_v0.4.md).
+
 # Quickstart
 
 ```julia
