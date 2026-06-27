@@ -57,6 +57,10 @@ iteration) and preserves document order.
 zero-copy parsing). `::Node` annotations still work. If you dispatched on `::AbstractXMLNode`, note
 that `Node` is no longer a subtype of it.
 
+The zero-copy `Node{SubString{String}}` variant returns text and attribute values **raw** — entities
+such as `&amp;` are *not* decoded, since decoding would require allocating a new string. The default
+`Node` (`Node{String}`), `LazyNode`, and `Cursor` all decode entities into values.
+
 ### `LazyNode` is an immutable view
 
 ```julia
@@ -77,6 +81,17 @@ string, not attributes:
 
 ```julia
 ProcessingInstruction("xml-stylesheet", "type=\"text/xsl\" href=\"style.xsl\"")
+```
+
+Element and PI names must be valid XML names, and `Comment` / `CData` / `ProcessingInstruction`
+content may not contain its own close delimiter — so a constructed node can never serialize to
+malformed XML. These now raise instead of producing un-parseable output:
+
+```julia
+Element("")        # empty name  ->  would write "</>"
+Element("1bad")    # name starts with a digit
+Comment("a-->b")   # "-->" would close the comment early
+CData("a]]>b")     # "]]>" would close the section early
 ```
 
 ## Behavioral changes (same call, different result)
@@ -101,14 +116,41 @@ Review these even if your code compiles unchanged:
    0.3.x now raises `"Duplicate attribute: …"`.
 
 5. **Stricter parsing by default.** `parse`/`read` default to `wellformed = :structural`, which
-   rejects multiple root elements, non-whitespace text outside the root, and empty/invalid names:
+   rejects: multiple root elements; a document with **no** root element; non-whitespace text outside
+   the root; empty or invalid element names; a literal `<` in an attribute value; and a misplaced,
+   duplicate, or nested DOCTYPE or XML declaration.
 
    ```julia
    parse(str, Node)                          # :structural (default)
    parse(str, Node; wellformed = :lenient)   # previous permissive behavior
-   parse(str, Node; wellformed = :strict)    # also rejects `--` in comments, empty/invalid
-                                             # PI targets, out-of-range character references
+   parse(str, Node; wellformed = :strict)    # see below
    ```
+
+   `:strict` additionally rejects: `--` (or a trailing `-`) inside a comment; an empty or invalid
+   processing-instruction target; and any character — whether a numeric **reference** (`&#0;`) or a
+   **raw** literal character — outside the XML 1.0 §2.2 `Char` range (e.g. NUL and other control
+   characters).
+
+   A consequence of requiring a root element: input that is **not a complete document** — a
+   standalone DTD file, or a prolog-only fragment — is now rejected at `:structural`. Read it with
+   `wellformed = :lenient`:
+
+   ```julia
+   read("schema.dtd", Node; wellformed = :lenient)   # a DTD file has no root element
+   ```
+
+7. **Inter-element whitespace is preserved.** `parse`/`read` keep whitespace-only text between
+   elements as `Text` nodes (0.3.x dropped it by default). So `children(root)` may include leading
+   `Text` nodes, and `children(root)[1]` is **not** necessarily the first child *element*. Filter by
+   `nodetype` (or use `XML.simple_value` / the typed accessors) if you need elements only:
+
+   ```julia
+   first(c for c in children(root) if nodetype(c) === Element)
+   ```
+
+8. **`LazyNode` and `Cursor` do not check well-formedness.** Only `Node` enforces the `wellformed`
+   level; `parse(x, LazyNode)` and `Cursor(x)` tokenize without validating and do not accept a
+   `wellformed` keyword. Parse through `Node` if you need well-formedness checking.
 
 6. **No memory-mapping.** `read` no longer memory-maps the input file.
 
@@ -144,6 +186,15 @@ allocation-free). For repeated or random access, prefer `Node` (it builds the tr
 cheaply). Reach for `LazyNode` only when you need low-memory, *read-once* navigation: it holds no
 tree (≈ an order of magnitude less resident memory than `Node`) but re-tokenizes on every traversal,
 so it is the slowest choice for repeated walks.
+
+## Known limitations
+
+- **`parent` / `depth` / `siblings` and the XPath `..` axis address nodes by value.** Because `Node`
+  is an immutable value type, these locate the node within the tree by structural equality (`===`).
+  For a tree containing **value-identical** sibling nodes — e.g. two empty `<item/>` elements — they
+  may return the result for the *first* such node rather than the specific one you passed. Trees whose
+  repeated nodes differ in content are unaffected. A redesign (path-based addressing) is planned for a
+  later release.
 
 ## See also
 

@@ -166,7 +166,7 @@ xpath(root, "//b/text()")    # Text nodes inside all <b>s
 | `[@attr='v']` | Attribute-value predicate |
 | `text()` | Text node children |
 | `node()` | All node children |
-| `@attr` | Attribute value (returns strings) |
+| `@attr` | Attribute value (as a `Text` node) |
 
 <br>
 

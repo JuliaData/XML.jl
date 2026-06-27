@@ -32,9 +32,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   into values — so `value(node)` returns decoded text (`&`, not `&amp;`). Round-trips are preserved
   because `write` re-escapes.
 - **Duplicate attribute names now raise an error** during parsing.
-- **`parse`/`read` reject malformed documents by default** (`wellformed = :structural`): multiple root
-  elements, non-whitespace text outside the root, and empty/invalid names. Pass `wellformed = :lenient`
-  to restore the previous permissive behavior.
+- **`parse`/`read` reject malformed documents by default** (`wellformed = :structural`): multiple
+  root elements, a document with no root element, non-whitespace text outside the root, empty/invalid
+  element names, a literal `<` in an attribute value, and a misplaced/duplicate/nested DOCTYPE or XML
+  declaration. `:strict` additionally rejects `--` (or a trailing `-`) in comments, empty/invalid PI
+  targets, and characters — numeric references *and* raw literal characters — outside the XML §2.2
+  `Char` range. Pass `wellformed = :lenient` to restore the previous permissive behavior; note that a
+  standalone DTD file or a prolog-only fragment (no root element) now needs `:lenient`.
+- **`Node` constructors validate names and content.** Element/PI names must be valid XML names, and
+  `Comment`/`CData`/`ProcessingInstruction` content may not contain its own close delimiter (`-->`,
+  `]]>`, `?>`), so a constructed node can no longer serialize to malformed XML.
 - **`escape` is no longer idempotent** — every `&` is escaped, so `escape("&amp;") == "&amp;amp;"`;
   call it only on raw, unescaped text ([#52]).
 - **`read` no longer memory-maps** the input file.
@@ -49,8 +56,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Removed
 - **`XML.Raw`** and the Raw/LazyNode streaming internals — use `parse(x, Node)` / `read(file, Node)`
   for an in-memory tree, or the new `Cursor` API for streaming.
-- **`next` / `prev`** (LazyNode traversal) — parse to a `Node` and use `children` / integer indexing,
-  or the `Cursor` API (`next!`).
+- **`next` / `prev`** (LazyNode traversal), and **`prev!`** (the 0.3.x in-place `LazyNode` advance) —
+  parse to a `Node` and use `children` / integer indexing, or the `Cursor` API. (`next!` still exists
+  but now advances a `Cursor`, not a `LazyNode`; there is no `prev!` — `Cursor` is forward-only.)
 - **Single-argument `parent(node)` / `depth(node)`** — use `parent(child, root)` / `depth(child, root)`.
 - **`nodes_equal(a, b)`** — use `a == b`.
 - **`escape!` / `unescape!`** — escaping/unescaping now happens automatically in `write` / `parse`.
@@ -66,7 +74,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tokenizer: quotes inside DTD comments** — a `"`/`'` inside a `<!-- -->` comment in a DTD internal
   subset no longer triggers an "Unterminated quoted string" error.
 - Numeric character references are now escaped/unescaped correctly ([#17]).
-- `unescape` no longer double-unescapes; each reference is processed exactly once ([#53]).
+- `unescape` no longer double-unescapes; each reference is processed exactly once ([#53]). It is now
+  single-pass, so a numeric reference resolving to `&` is never re-scanned as a named entity —
+  `unescape("&#38;amp;")` is `"&amp;"`, not `"&"`.
+- A leading U+FEFF byte-order-mark character in an in-memory string is now stripped by
+  `parse(_, LazyNode)` and `Cursor` as well as `parse(_, Node)`, so all three readers agree.
+- A truncated comment/CDATA/PI/DOCTYPE at end of input raises a clear "unterminated …" error instead
+  of being silently accepted (`Node`) or crashing `value()` (`LazyNode`/`Cursor`).
+- Odd-length UTF-16 input that begins with a BOM raises a clear error instead of an opaque
+  `reinterpret` failure.
+- Processing-instruction content keeps its trailing whitespace on round-trip (only the leading
+  separator after the target is dropped, per §2.6).
+- `parse_dtd` reports a clear error on parameter-entity references (`%name;`) instead of an opaque
+  internal error.
+- XPath: unsupported axis syntax (`child::`, `descendant::`, …) now raises instead of silently
+  returning the wrong result; dead scaffolding in `xpath` was removed.
 
 ## [0.3.9] - 2026-06-20
 

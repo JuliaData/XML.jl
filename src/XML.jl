@@ -272,6 +272,12 @@ Return the parent of `child` within the tree rooted at `root`.
 
 Since `Node` does not store parent pointers, this performs a tree search from `root`.
 Throws an error if `child` is not found or if `child === root`.
+
+!!! warning "Value identity"
+    `Node` is an immutable value type, so the search matches by structural equality (`===`). In a
+    tree containing value-identical sibling nodes (e.g. two empty `<item/>` elements), this may
+    return the parent of the *first* match rather than the specific node passed. The same applies to
+    [`depth`](@ref), [`siblings`](@ref), and the XPath `..` axis. A path-based redesign is planned.
 """
 function Base.parent(child::Node, root::Node)
     child === root && error("Root node has no parent.")

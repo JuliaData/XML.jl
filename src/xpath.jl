@@ -13,7 +13,7 @@
 #   [@attr='v']  attribute-value predicate
 #   text()       text node children
 #   node()       all node children
-#   @attr        attribute value (returns strings)
+#   @attr        attribute value (as a Text node)
 
 #-----------------------------------------------------------------------------# Token types
 
