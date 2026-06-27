@@ -40,6 +40,7 @@ The cursor is a single mutable object reused across the whole walk. See the
 aliasing-contract note on [`next!`](@ref).
 """
 function Cursor(data::S) where {S <: AbstractString}
+    data = _drop_bom(data)   # a leading U+FEFF BOM char is an encoding signature, not content (§4.3.3)
     st = _CURSOR_XT.StatefulTokenizer(_CURSOR_XT.Tokenizer(data, 1))
     Cursor{S}(st, _CURSOR_XT.no_token(data), Document, 0, 0, false, false)
 end

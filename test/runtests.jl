@@ -1103,6 +1103,21 @@ end
         # raise a clear error rather than crash the UTF-8 parser downstream.
         @test_throws "UTF-16 without a BOM" read(IOBuffer(UInt8[0x00,0x3C,0x00,0x61,0x00,0x2F,0x00,0x3E]), Node)  # UTF-16 BE, no BOM
         @test_throws "UTF-16 without a BOM" read(IOBuffer(UInt8[0x3C,0x00,0x61,0x00,0x2F,0x00,0x3E,0x00]), Node)  # UTF-16 LE, no BOM
+
+        # A leading U+FEFF as a *character* in an in-memory string is an encoding signature,
+        # not content — every reader must drop it, not surface it as a leading Text node, so
+        # Node / LazyNode / Cursor agree on the same string.
+        let bom = "﻿<r>x</r>"
+            @test nodetype(parse(bom, Node)[1])     == Element
+            @test tag(parse(bom, Node)[1])          == "r"
+            @test nodetype(parse(bom, LazyNode)[1]) == Element
+            @test tag(parse(bom, LazyNode)[1])      == "r"
+            c = XML.Cursor(bom); XML.next!(c)
+            @test nodetype(c) == Element
+            @test tag(c)      == "r"
+            # a string without a BOM is unaffected
+            @test tag(parse("<r>x</r>", LazyNode)[1]) == "r"
+        end
     end
 end
 

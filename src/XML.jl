@@ -712,6 +712,11 @@ Base.read(io::IO, ::Type{Node}; wellformed::Symbol=:structural) = parse(String(_
 # parse(::AbstractString), where the bytes have already decoded to a U+FEFF char.)
 _drop_bom(s::String)::String = startswith(s, '\ufeff') ? s[nextind(s, 1):end] : s
 
+# Generic (type-preserving) form so a leading U+FEFF is also dropped inside the type-parametric
+# Cursor constructor (SubString today, StringView when mmap lands), not only on the String
+# parse(_, Node)/LazyNode paths — keeping all three readers consistent on a BOM'd string.
+_drop_bom(s::AbstractString) = startswith(s, Char(0xFEFF)) ? SubString(s, nextind(s, firstindex(s))) : s
+
 Base.parse(::Type{Node}, xml::AbstractString; wellformed::Symbol=:structural) = parse(xml, Node; wellformed)
 
 function Base.parse(xml::AbstractString, ::Type{Node}; wellformed::Symbol=:structural)
