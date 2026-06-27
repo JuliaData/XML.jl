@@ -180,12 +180,20 @@ end
         @test value(doc[1][2]) == " B "
     end
 
-    @testset ":strict rejects \"--\" inside a comment" begin
+    @testset ":strict rejects \"--\" or a trailing \"-\" in a comment (§2.5)" begin
         # XML §2.5: the string "--" must not occur within comments.
         @test_throws Exception parse("<root><!-- a -- b --></root>", Node; wellformed=:strict)
         # :structural (default) and :lenient accept it
         @test nodetype(parse("<root><!-- a -- b --></root>", Node)) == Document
         @test nodetype(parse("<root><!-- a -- b --></root>", Node; wellformed=:lenient)) == Document
+
+        # §2.5 also forbids a "-" immediately before "-->" (the "--->" straddle that a
+        # content-token-only "--" check misses).
+        @test_throws Exception parse("<root><!-- foo ---></root>", Node; wellformed=:strict)
+        @test nodetype(parse("<root><!-- foo ---></root>", Node)) == Document
+        @test nodetype(parse("<root><!-- foo ---></root>", Node; wellformed=:lenient)) == Document
+        # a "-" NOT abutting the close is well-formed even at :strict
+        @test nodetype(parse("<root><!-- a - b --></root>", Node; wellformed=:strict)) == Document
     end
 end
 

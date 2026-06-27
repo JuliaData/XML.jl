@@ -859,6 +859,7 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
         elseif k === TokenKinds.COMMENT_CONTENT
             cmt = raw(token, xml)
             W === :strict && occursin("--", cmt) && error("not well-formed: \"--\" within a comment")
+            W === :strict && endswith(cmt, '-') && error("not well-formed: \"-\" immediately before \"-->\" in a comment (XML 1.0 §2.5)")
             push!(last(children_stack), Node{S}(Comment, nothing, nothing, _to(S, cmt), nothing))
 
         elseif k === TokenKinds.CDATA_CONTENT
