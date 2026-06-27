@@ -161,7 +161,7 @@ end
         @test length(children(doc[1])) == 0
     end
 
-    @testset ":strict rejects character references outside the XML Char range" begin
+    @testset ":strict rejects characters outside the XML Char range (references and raw)" begin
         # XML §2.2 Char: #x0, surrogates, and code points > #x10FFFF are not legal characters.
         @test_throws Exception parse("<root>&#0;</root>", Node; wellformed=:strict)        # NUL
         @test_throws Exception parse("<root>&#xD800;</root>", Node; wellformed=:strict)    # surrogate
@@ -169,8 +169,19 @@ end
         @test_throws Exception parse("""<e a="&#0;"/>""", Node; wellformed=:strict)        # in an attribute too
         # legal refs still parse under :strict
         @test simple_value(parse("<root>&#x41;&#x9;</root>", Node; wellformed=:strict)[1]) == "A\t"
-        # :structural (default) and :lenient do not enforce the Char range
+
+        # The RAW (literal) form of an illegal character is rejected too, not only the reference
+        # form — in text, attributes, comments, CDATA, and PI content.
+        @test_throws Exception parse("<root>a\x00b</root>", Node; wellformed=:strict)
+        @test_throws Exception parse("<root x=\"a\x00b\"/>", Node; wellformed=:strict)
+        @test_throws Exception parse("<root><!--a\x00b--></root>", Node; wellformed=:strict)
+        @test_throws Exception parse("<root><![CDATA[a\x00b]]></root>", Node; wellformed=:strict)
+        @test_throws Exception parse("<root><?t a\x00b?></root>", Node; wellformed=:strict)
+        # legal content (incl. tab/newline) still parses at :strict
+        @test nodetype(parse("<root>ok\ttext\n</root>", Node; wellformed=:strict)) == Document
+        # :structural (default) and :lenient do not enforce the Char range (ref or raw)
         @test nodetype(parse("<root>&#0;</root>", Node)) == Document
+        @test nodetype(parse("<root>a\x00b</root>", Node)) == Document
     end
 end
 

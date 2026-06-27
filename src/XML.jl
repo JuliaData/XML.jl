@@ -802,6 +802,16 @@ _is_xml_char(cp::Integer) =
     cp == 0x9 || cp == 0xA || cp == 0xD ||
     (0x20 <= cp <= 0xD7FF) || (0xE000 <= cp <= 0xFFFD) || (0x10000 <= cp <= 0x10FFFF)
 
+# `:strict` only: reject a raw character outside the XML §2.2 Char range (e.g. NUL / C0 controls).
+# Without this, a literal illegal character passes while its &#...; reference form is rejected — a
+# reference-vs-raw asymmetry. DCE'd off the :strict path, so :lenient/:structural pay nothing.
+function _check_chars_strict(s::AbstractString)
+    for c in s
+        _is_xml_char(UInt32(c)) ||
+            error("not well-formed: character U+$(uppercase(string(UInt32(c); base = 16, pad = 4))) is outside the legal XML range (XML 1.0 §2.2)")
+    end
+end
+
 # `:strict` only: reject any numeric character reference whose code point is outside the XML Char
 # range. Gated + DCE'd off the :strict path, and only called when a token actually carries
 # entities, so :lenient/:structural pay nothing.
@@ -833,6 +843,7 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
 
         if k === TokenKinds.TEXT
             rawtext = raw(token, xml)
+            W === :strict && _check_chars_strict(rawtext)
             W === :strict && token.has_entities && _check_charrefs_strict(rawtext)
             v = _text_value(S, rawtext, token.has_entities, convert_text)
             push!(last(children_stack), Node{S}(Text, nothing, nothing, v, nothing))
@@ -866,6 +877,7 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
         elseif k === TokenKinds.ATTR_VALUE
             rawval = attr_value(token, xml)
             W !== :lenient && occursin('<', rawval) && error("not well-formed: '<' in attribute value (XML 1.0 §3.1)")
+            W === :strict && _check_chars_strict(rawval)
             W === :strict && token.has_entities && _check_charrefs_strict(rawval)
             val = _text_value(S, rawval, token.has_entities, convert_text)
             name = _to(S, pending_attr_name)
@@ -889,12 +901,15 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
 
         elseif k === TokenKinds.COMMENT_CONTENT
             cmt = raw(token, xml)
+            W === :strict && _check_chars_strict(cmt)
             W === :strict && occursin("--", cmt) && error("not well-formed: \"--\" within a comment")
             W === :strict && endswith(cmt, '-') && error("not well-formed: \"-\" immediately before \"-->\" in a comment (XML 1.0 §2.5)")
             push!(last(children_stack), Node{S}(Comment, nothing, nothing, _to(S, cmt), nothing))
 
         elseif k === TokenKinds.CDATA_CONTENT
-            push!(last(children_stack), Node{S}(CData, nothing, nothing, _to(S, raw(token, xml)), nothing))
+            cdata = raw(token, xml)
+            W === :strict && _check_chars_strict(cdata)
+            push!(last(children_stack), Node{S}(CData, nothing, nothing, _to(S, cdata), nothing))
 
         elseif k === TokenKinds.DOCTYPE_CONTENT
             W !== :lenient && length(children_stack) > 1 &&
@@ -909,6 +924,7 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
 
         elseif k === TokenKinds.PI_CONTENT
             content = lstrip(raw(token, xml))
+            W === :strict && _check_chars_strict(content)
             pending_pi_value = isempty(content) ? nothing : _to(S, content)
 
         elseif k === TokenKinds.PI_CLOSE
