@@ -4,6 +4,15 @@ using XML: escape, unescape, h, parse_dtd
 using XML: ParsedDTD, ElementDecl, AttDecl, EntityDecl, NotationDecl
 using Test
 
+# Run every testset below under one parent testset, so a failure or error in any single testset does
+# not abort the rest of the file. We deliberately do NOT wrap the file body in a single
+# `@testset begin … end` block: that compiles the whole ~3700-line body as one top-level thunk and is
+# pathologically slow to compile. Instead each `@testset` stays its own top-level statement but nests
+# under `_ROOT_TS` (a nested testset records into its parent rather than throwing at finish);
+# `_ROOT_TS`'s finish() at the bottom prints the aggregated summary and throws once if anything failed.
+const _ROOT_TS = Test.DefaultTestSet("XML.jl")
+Test.push_testset(_ROOT_TS)
+
 #==============================================================================#
 #                              ESCAPE / UNESCAPE                               #
 #==============================================================================#
@@ -3701,10 +3710,14 @@ end
     end
 end
 
-include("test_abstracttrees_ext.jl")
-include("test_pugixml.jl")
-include("test_libexpat.jl")
-include("test_libxml2_testcases.jl")
-include("test_w3c.jl")
-include("test_tokenizer.jl")
-include("test_cursor.jl")
+# Each included suite is wrapped in a @testset so a load-time error in one file can't skip the rest.
+@testset "test_abstracttrees_ext" begin include("test_abstracttrees_ext.jl") end
+@testset "test_pugixml" begin include("test_pugixml.jl") end
+@testset "test_libexpat" begin include("test_libexpat.jl") end
+@testset "test_libxml2_testcases" begin include("test_libxml2_testcases.jl") end
+@testset "test_w3c" begin include("test_w3c.jl") end
+@testset "test_tokenizer" begin include("test_tokenizer.jl") end
+@testset "test_cursor" begin include("test_cursor.jl") end
+
+Test.pop_testset()
+Test.finish(_ROOT_TS)   # prints the aggregated summary and throws (exit 1) if anything failed
