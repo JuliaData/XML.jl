@@ -1712,6 +1712,13 @@ end
         @test nodetype(parse("<r><!--c--></r>", Node)) == Document
         @test nodetype(parse("<r><!----></r>", Node)) == Document
     end
+
+    @testset "unterminated quoted string in a DOCTYPE uses the tokenizer error convention" begin
+        # skip_quoted threw a bare ErrorException with no position; it now uses err(msg, pos)
+        # like every other tokenizer error (ArgumentError with position context).
+        @test_throws ArgumentError parse("<!DOCTYPE r SYSTEM \"abc", Node; wellformed=:lenient)
+        @test_throws "tokenizer error at position" parse("<!DOCTYPE r SYSTEM \"abc", Node; wellformed=:lenient)
+    end
 end
 
 #==============================================================================#

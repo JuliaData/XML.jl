@@ -242,7 +242,7 @@ function skip_quoted(data::AbstractString, pos::Int)::Int
         peek(data, pos) == q && return pos + 1
         pos += 1
     end
-    error("Unterminated quoted string")
+    err("unterminated quoted string", pos)
 end
 
 # Throw a tokenizer error with position context (noinline to keep error paths out of hot code)
