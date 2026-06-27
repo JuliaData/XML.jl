@@ -892,7 +892,7 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
             pending_pi_value = nothing
 
         elseif k === TokenKinds.PI_CONTENT
-            content = strip(raw(token, xml))
+            content = lstrip(raw(token, xml))
             pending_pi_value = isempty(content) ? nothing : _to(S, content)
 
         elseif k === TokenKinds.PI_CLOSE

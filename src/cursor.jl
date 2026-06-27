@@ -168,7 +168,7 @@ function value(c::Cursor)
         r = iterate(it)
         r === nothing && return nothing
         r[1].kind === _CURSOR_XT.TokenKinds.PI_CONTENT || return nothing
-        content = strip(raw(r[1], _data(c)))
+        content = lstrip(raw(r[1], _data(c)))
         return isempty(content) ? nothing : content
     end
     nothing

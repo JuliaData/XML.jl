@@ -85,7 +85,7 @@ function value(n::LazyNode)
         result = iterate(iter)
         result === nothing && return nothing
         result[1].kind === TokenKinds.PI_CONTENT || return nothing
-        content = strip(raw(result[1], n.data))
+        content = lstrip(raw(result[1], n.data))
         return isempty(content) ? nothing : content
     end
     nothing

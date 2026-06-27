@@ -250,6 +250,20 @@ end
         @test value(pi) == "some data"
     end
 
+    @testset "PI content keeps trailing whitespace, drops leading separator (§2.6)" begin
+        # §2.6: whitespace after the PITarget is the separator (not content), but trailing
+        # whitespace before "?>" IS content — drop only the leading separator (lstrip, not strip).
+        for R in (Node, LazyNode)
+            @test value(parse("<r><?target hello   ?></r>", R)[1][1]) == "hello   "
+        end
+        c = XML.Cursor("<r><?target hello   ?></r>"); XML.next!(c); XML.next!(c)
+        @test value(c) == "hello   "
+        @test value(parse("<r><?t   x?></r>", Node)[1][1]) == "x"                      # leading sep removed
+        @test XML.write(parse("<r><?target hello   ?></r>", Node)[1][1]) == "<?target hello   ?>"  # round-trips
+        @test value(parse("<r><?target   ?></r>", Node)[1][1]) === nothing             # whitespace-only -> nothing
+        @test value(parse("<r><?target?></r>", Node)[1][1]) === nothing                # empty -> nothing
+    end
+
     @testset "PI after root element" begin
         doc = parse("<root/><?post-process?>", Node)
         @test nodetype(doc[2]) == ProcessingInstruction
