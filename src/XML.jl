@@ -40,6 +40,22 @@ function _unescape_charref(ref::AbstractString)
     !isnothing(cp) && isvalid(Char, cp) ? string(Char(cp)) : ref
 end
 
+# One regex matching any supported reference: the five predefined entities plus a decimal
+# or hex numeric character reference. `unescape` applies it in a SINGLE `replace` pass, so a
+# reference that resolves to '&' (e.g. `&#38;`) is never re-scanned as the start of a new
+# entity — `replace` substitutes left-to-right over the original string and never re-reads
+# what it emitted.
+const _ENTITY_RE = r"&(?:amp|lt|gt|apos|quot|#[0-9]+|#[xX][0-9a-fA-F]+);"
+
+function _unescape_entity(m::AbstractString)
+    m == "&amp;"  && return "&"
+    m == "&lt;"   && return "<"
+    m == "&gt;"   && return ">"
+    m == "&apos;" && return "'"
+    m == "&quot;" && return "\""
+    return _unescape_charref(m)   # numeric ref (the only remaining alternative); verbatim if out of range
+end
+
 """
     unescape(x::AbstractString) -> String
     unescape(x::SubString{String}) -> Union{SubString{String}, String}
@@ -54,15 +70,12 @@ no allocation — the common case for typical XML attribute and text content.
 function unescape(x::AbstractString)
     s = string(x)
     occursin('&', s) || return s
-    occursin("&#", s) && (s = replace(s, r"&#[xX]?[0-9a-fA-F]+;" => _unescape_charref))
-    replace(s, "&lt;" => "<", "&gt;" => ">", "&apos;" => "'", "&quot;" => "\"", "&amp;" => "&")
+    replace(s, _ENTITY_RE => _unescape_entity)
 end
 
 function unescape(x::SubString{String})
     occursin('&', x) || return x
-    s = String(x)
-    occursin("&#", s) && (s = replace(s, r"&#[xX]?[0-9a-fA-F]+;" => _unescape_charref))
-    replace(s, "&lt;" => "<", "&gt;" => ">", "&apos;" => "'", "&quot;" => "\"", "&amp;" => "&")
+    replace(String(x), _ENTITY_RE => _unescape_entity)
 end
 
 #-----------------------------------------------------------------------------# NodeType

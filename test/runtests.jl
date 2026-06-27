@@ -2453,6 +2453,16 @@ end
         @test unescape("&amp;&#60;&lt;") == "&<<"
         @test unescape("&#60;tag&#62;") == "<tag>"
 
+        # Single-pass: a resolved character reference is never re-scanned as a new
+        # entity. A numeric ref to '&' must NOT combine with a following "amp;"/"lt;".
+        @test unescape("&#38;amp;") == "&amp;"
+        @test unescape("&#x26;amp;") == "&amp;"
+        @test unescape("&#38;lt;") == "&lt;"
+        @test unescape("&#38;#65;") == "&#65;"   # resolved '&' must not start "&#65;"
+        @test unescape("&#65;amp;") == "Aamp;"   # non-'&' ref leaves the tail literal
+        # ...and through the Node reader end-to-end
+        @test simple_value(parse("<r>&#38;amp;</r>", Node)[1]) == "&amp;"
+
         # In parsed XML text
         doc = parse("<root>&#60;hello&#62;</root>", Node)
         @test simple_value(doc[1]) == "<hello>"
