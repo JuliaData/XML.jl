@@ -816,7 +816,6 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
     decl_attrs = nothing
     pending_pi_tag = SubString(xml, 1, 0)
     pending_pi_value = nothing
-    in_close_tag = false
 
     for token in tokenize(xml)
         k = token.kind
@@ -841,9 +840,6 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
             pop!(children_stack)
             push!(last(children_stack), Node{S}(Element, t, _nothingify(a), nothing, nothing))
 
-        elseif k === TokenKinds.TAG_CLOSE
-            in_close_tag && (in_close_tag = false)
-
         elseif k === TokenKinds.CLOSE_TAG
             close_name = tag_name(token, xml)
             isempty(tags) && error("Closing tag </$close_name> with no matching open tag.")
@@ -852,7 +848,6 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
             a = pop!(attrs_stack)
             c = pop!(children_stack)
             push!(last(children_stack), Node{S}(Element, t, _nothingify(a), nothing, isempty(c) ? nothing : c))
-            in_close_tag = true
 
         elseif k === TokenKinds.ATTR_NAME
             pending_attr_name = raw(token, xml)
