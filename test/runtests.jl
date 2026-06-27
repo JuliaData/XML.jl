@@ -1145,6 +1145,10 @@ end
         # raise a clear error rather than crash the UTF-8 parser downstream.
         @test_throws "UTF-16 without a BOM" read(IOBuffer(UInt8[0x00,0x3C,0x00,0x61,0x00,0x2F,0x00,0x3E]), Node)  # UTF-16 BE, no BOM
         @test_throws "UTF-16 without a BOM" read(IOBuffer(UInt8[0x3C,0x00,0x61,0x00,0x2F,0x00,0x3E,0x00]), Node)  # UTF-16 LE, no BOM
+        # An odd byte count after a UTF-16 BOM is truncated — raise a clear error, not a cryptic
+        # `reinterpret` ArgumentError.
+        @test_throws "odd number of bytes" read(IOBuffer(UInt8[0xFF,0xFE, 0x3C,0x00, 0x61]), Node)  # LE BOM + 3 bytes
+        @test_throws "odd number of bytes" read(IOBuffer(UInt8[0xFE,0xFF, 0x00,0x3C, 0x00]), Node)  # BE BOM + 3 bytes
 
         # A leading U+FEFF as a *character* in an in-memory string is an encoding signature,
         # not content — every reader must drop it, not surface it as a leading Text node, so
