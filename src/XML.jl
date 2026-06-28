@@ -772,9 +772,10 @@ _nothingify(v::Vector) = isempty(v) ? nothing : v
     ('a' <= c <= 'z') || ('A' <= c <= 'Z') || c == '_' || c == ':' || !isascii(c)
 
 # Document-shape well-formedness (`:structural`/`:strict`): exactly one root element (prolog
-# markup with no root is rejected; truly-empty and whitespace-only input stay lenient — an empty
-# Document), any top-level Text must be whitespace only, and a DOCTYPE must be a single
-# declaration in the prolog (before the root). (`:lenient` skips this — gated + DCE'd.)
+# markup with no root is rejected; an empty `""` or a whitespace-only input is still accepted — the
+# former an empty Document, the latter a Document whose only child is whitespace Text), any
+# top-level Text must be whitespace only, and a DOCTYPE must be a single declaration in the prolog
+# (before the root). (`:lenient` skips this — gated + DCE'd.)
 function _check_document_wellformed(children)
     nroots = 0
     ndtds = 0

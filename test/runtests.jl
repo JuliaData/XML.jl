@@ -101,9 +101,12 @@ end
         @test_throws ErrorException parse("<!DOCTYPE x>", Node)
         @test_throws ErrorException parse("""<?xml version="1.0"?>""", Node)
         @test_throws ErrorException parse("<?pi go?>", Node)
-        # truly-empty and whitespace-only input stay lenient (an empty Document); :lenient opts out
+        # empty ("") and whitespace-only input are both accepted, but differ: "" → an empty
+        # Document; "   " → a Document whose only child is whitespace Text. :lenient opts out.
         @test nodetype(parse("", Node)) == Document
+        @test isempty(children(parse("", Node)))
         @test nodetype(parse("   ", Node)) == Document
+        @test nodetype(only(children(parse("   ", Node)))) == Text
         @test nodetype(parse("<!-- comment -->", Node; wellformed=:lenient)) == Document
     end
 

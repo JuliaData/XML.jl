@@ -129,7 +129,9 @@ Review these even if your code compiles unchanged:
    `:strict` additionally rejects: `--` (or a trailing `-`) inside a comment; an empty or invalid
    processing-instruction target; and any character — whether a numeric **reference** (`&#0;`) or a
    **raw** literal character — outside the XML 1.0 §2.2 `Char` range (e.g. NUL and other control
-   characters).
+   characters). Because that adds a full character-range scan over textual content, `:strict` is
+   meaningfully slower than `:structural` on text-heavy documents — a cost paid only when you opt in
+   (`:lenient` and `:structural` are unaffected).
 
    A consequence of requiring a root element: input that is **not a complete document** — a
    standalone DTD file, or a prolog-only fragment — is now rejected at `:structural`. Read it with
@@ -195,6 +197,9 @@ so it is the slowest choice for repeated walks.
   may return the result for the *first* such node rather than the specific one you passed. Trees whose
   repeated nodes differ in content are unaffected. A redesign (path-based addressing) is planned for a
   later release.
+- **Top-level CDATA is not rejected.** A CDATA section in the prolog or epilog — outside the root
+  element — is accepted even at `:strict`, although XML 1.0 (`Misc` excludes `CDATA`) makes it
+  ill-formed. CDATA *inside* an element is of course valid. A stricter check may be added later.
 
 ## See also
 

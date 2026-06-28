@@ -41,7 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   standalone DTD file or a prolog-only fragment (no root element) now needs `:lenient`.
 - **`Node` constructors validate names and content.** Element/PI names must be valid XML names, and
   `Comment`/`CData`/`ProcessingInstruction` content may not contain its own close delimiter (`-->`,
-  `]]>`, `?>`), so a constructed node can no longer serialize to malformed XML.
+  `]]>`, `?>`), which would otherwise split the node on write. (Content is not otherwise validated —
+  e.g. a `Comment` whose text contains `--` is constructed as-is and is rejected only on re-parse at
+  `:strict`.)
 - **`escape` is no longer idempotent** — every `&` is escaped, so `escape("&amp;") == "&amp;amp;"`;
   call it only on raw, unescaped text ([#52]).
 - **`read` no longer memory-maps** the input file.
