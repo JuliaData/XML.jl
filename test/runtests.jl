@@ -1583,6 +1583,16 @@ end
         @test_throws "parameter-entity" parse_dtd("root [<!ELEMENT e %text;>]")
         # a PE-free DTD is unaffected
         @test parse_dtd("note [<!ELEMENT note (#PCDATA)>]").root == "note"
+        # but a bare '%' that is NOT a %name; reference (here in an entity value) must not be
+        # blamed: the real underlying error is surfaced, not the parameter-entity message.
+        notation_err = try
+            parse_dtd("root [ <!ENTITY pct \"100%\"> <!NOTATION n > ]")
+            ""
+        catch e
+            sprint(showerror, e)
+        end
+        @test !isempty(notation_err)                       # the malformed NOTATION still errors
+        @test !occursin("parameter-entity", notation_err)  # …with the true cause, not PE blame
     end
 
     @testset "complex DTD file (structure test)" begin

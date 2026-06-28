@@ -1221,15 +1221,19 @@ end
 Parse a DTD value string (from a `DTD` node) into structured declarations.
 """
 # Public entry: parse a DTD value string into a structured `ParsedDTD`. Best-effort and
-# non-validating — it does not expand parameter-entity references. On a parse failure where the
-# DTD uses a "%name;" reference, surface a clear explanation rather than an opaque internal error.
+# non-validating — it does not expand parameter-entity references. On a parse failure, blame
+# parameter entities only when the DTD actually contains a `%name;` reference; otherwise surface the
+# underlying error (a bare '%' can appear legitimately in an entity value, comment, or system id).
+const _PE_REF_RE = r"%[A-Za-z_:][A-Za-z0-9._:-]*;"
+
 function parse_dtd(value::AbstractString)
     try
         return _parse_dtd_impl(value)
     catch e
-        occursin('%', value) && error("parse_dtd does not expand parameter-entity references " *
-            "(e.g. `%text;`); structured DTD access is best-effort and non-validating, but the raw " *
-            "DTD node still round-trips through write.")
+        occursin(_PE_REF_RE, value) && error(
+            "parse_dtd does not expand parameter-entity references (e.g. `%text;`); structured DTD " *
+            "access is best-effort and non-validating, but the raw DTD node still round-trips " *
+            "through write. (underlying parse error: " * sprint(showerror, e) * ")")
         rethrow(e)
     end
 end
