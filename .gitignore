@@ -1,5 +1,7 @@
 *Manifest.toml
-*generated_xsd.jl
-*.xml
 *.gz
+*.tar
 *.DS_Store
+*.claude
+test/data/w3c/
+benchmarks/data/
