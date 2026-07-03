@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!DOCTYPE test [
+<!-- ===== Bookstore DTD (complex demo) ===== -->
+
+<!-- Reusable parameter entities -->
+<!ENTITY % text  "(#PCDATA | em | code | xref | br)*">
+<!ENTITY % block "p | ul | ol | figure | table">
+
+<!-- Notations (used by unparsed entities) -->
+<!NOTATION jpeg SYSTEM "image/jpeg">
+<!NOTATION png  SYSTEM "image/png">
+
+<!-- Unparsed external entities (binary media) -->
+<!ENTITY cover1 SYSTEM "covers/b123.jpg" NDATA jpeg>
+<!ENTITY cover2 SYSTEM "covers/b456.png" NDATA png>
+
+<!ELEMENT catalog (metadata?, (book | magazine)+)>
+<!ATTLIST catalog
+          tier CDATA #FIXED "retail"
+          xml:lang CDATA #IMPLIED>
+
+<!ELEMENT metadata (publisher?, contact?)>
+<!ELEMENT publisher %text;>
+<!ELEMENT contact (email, phone?)>
+<!ELEMENT email (#PCDATA)>
+<!ELEMENT phone (#PCDATA)>
+
+<!ELEMENT book (title, subtitle?, authors, pubinfo, description?, section*, reviews?, related?)>
+<!ATTLIST book
+          id ID #REQUIRED
+          isbn CDATA #IMPLIED
+          format (hardcover | paperback | ebook) "paperback"
+          inStock (yes | no) #REQUIRED
+          xml:space (default | preserve) "default">
+
+<!ELEMENT magazine (title, issue, article+)>
+<!ATTLIST magazine id ID #REQUIRED>
+<!ELEMENT issue (#PCDATA)>
+
+<!ELEMENT title %text;>
+<!ELEMENT subtitle %text;>
+
+<!ELEMENT authors (author+)>
+<!ELEMENT author (name, affiliation?)>
+<!ATTLIST author id ID #IMPLIED>
+<!ELEMENT name %text;>
+<!ELEMENT affiliation %text;>
+
+<!ELEMENT pubinfo (publisher, year, price?, pages?)>
+<!ELEMENT year  (#PCDATA)>
+<!ELEMENT price (#PCDATA)>
+<!ELEMENT pages (#PCDATA)>
+
+<!ELEMENT description (%block;)*>
+
+<!ELEMENT section (title, (%block;)*, section*)>
+<!ATTLIST section id ID #IMPLIED>
+
+<!ELEMENT p  %text;>
+<!ELEMENT ul (li+)>
+<!ELEMENT ol (li+)>
+<!ELEMENT li %text;>
+
+<!ELEMENT figure (caption?, media)>
+<!ATTLIST figure
+          entity   ENTITY                 #IMPLIED   <!-- refers to cover1/cover2 -->
+          notation NOTATION (jpeg | png) #IMPLIED>
+<!ELEMENT caption %text;>
+<!ELEMENT media EMPTY>
+<!ATTLIST media
+          src CDATA #REQUIRED
+          alt CDATA #IMPLIED>
+
+<!ELEMENT table (thead?, tbody, tfoot?)>
+<!ELEMENT thead (tr+)>
+<!ELEMENT tbody (tr+)>
+<!ELEMENT tfoot (tr+)>
+<!ELEMENT tr (th | td)+>
+<!ELEMENT th %text;>
+<!ELEMENT td %text;>
+
+<!ELEMENT reviews (review+)>
+<!ELEMENT review (rating, p+)>
+<!ATTLIST review by IDREF #REQUIRED
+                  date CDATA #IMPLIED>
+<!ELEMENT rating EMPTY>
+<!ATTLIST rating value (poor | avg | good | excellent) #REQUIRED>
+
+<!ELEMENT related (seealso*)>
+<!ELEMENT seealso EMPTY>
+<!ATTLIST seealso ref IDREF #REQUIRED>
+
+<!ELEMENT article (title, authorrefs, p+)>
+<!ELEMENT authorrefs (authorref+)>
+<!ELEMENT authorref EMPTY>
+<!ATTLIST authorref ref IDREF #REQUIRED>
+
+<!-- Conditional section controlled by a parameter entity -->
+<!ENTITY % longdocs "INCLUDE">
+<![%longdocs;[
+  <!ELEMENT appendix (title, p+)>
+  <!ATTLIST appendix id ID #REQUIRED>
+]]>
+]>
