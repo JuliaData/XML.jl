@@ -1,0 +1,23 @@
+file: 14.16 MB
+validation — stream events:  Cursor=882025  EzXML=1154783
+validation — extract nodes:  XML.jl=882026  EzXML=882022  LightXML(elem only)=313452
+validation — lex tokens:     1850962
+validation — bytes touched:  XML.jl=9968541  EzXML=4173492  (sanity, should be same order)
+
+=== (1) STREAM — file → events, no tree built ===
+  XML.jl Cursor               53.7 ms      17.4 MiB
+  EzXML StreamReader         66.93 ms      35.5 MiB
+
+=== (2) FULL EXTRACTION — parse + pull every tag/text ===
+  XML.jl (String)           134.97 ms     122.3 MiB
+  XML.jl (SubString)        110.37 ms     120.3 MiB
+  EzXML                      61.99 ms      53.8 MiB
+  LightXML (elem)            62.46 ms      57.4 MiB
+
+=== (3) DECOMPOSE — XML.jl pipeline stages ===
+  read file (I/O)             0.58 ms      13.5 MiB
+  lex only (tokenize)        37.43 ms       0.0 MiB
+  parse → DOM               106.64 ms     122.3 MiB
+  traverse only               6.16 ms       0.0 MiB
+
+(build ≈ parse − lex; traverse is on a pre-built tree)

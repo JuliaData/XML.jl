@@ -1,0 +1,6 @@
+dev profile vs v0.3.9  (worktree + subprocess) ...
+
+=== vv0.3.9 — the v0.3.9 column (DOM regimes) ===
+  nodes walked:     567327   (v0.4 walks 882026; v0.4 preserves whitespace Text nodes, 0.3.x dropped them)
+  parse → DOM:      510.28 ms / 1421.7 MiB
+  full extraction:  530.06 ms / 1421.7 MiB
