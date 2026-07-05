@@ -143,8 +143,16 @@ Review these even if your code compiles unchanged:
 
 7. **Inter-element whitespace is preserved.** `parse`/`read` keep whitespace-only text between
    elements as `Text` nodes (0.3.x dropped it by default). So `children(root)` may include leading
-   `Text` nodes, and `children(root)[1]` is **not** necessarily the first child *element*. Filter by
-   `nodetype` (or use `XML.simple_value` / the typed accessors) if you need elements only:
+   `Text` nodes, and `children(root)[1]` is **not** necessarily the first child *element*. Use
+   `eachelement` / `elements` (new in **v0.4.1**) when you need elements only:
+
+   ```julia
+   first(eachelement(root))   # first child element
+   elements(root)             # all child elements, as a Vector
+   ```
+
+   In code that must also run on 0.3.x (where these functions don't exist), filter by `nodetype`
+   instead — it works on both series:
 
    ```julia
    first(c for c in children(root) if nodetype(c) === Element)
