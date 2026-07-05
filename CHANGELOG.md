@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`FlatNode` — a fourth reader: read-only columnar full-DOM** (`parse(xml, FlatNode)`,
+  `read(file, FlatNode)`). The whole document is materialized once into a contiguous store of
+  isbits records (zero-copy byte ranges into the retained source; text/attribute values
+  entity-decoded on access), so building is fast, random access is O(1), and the GC sees a
+  handful of arrays instead of one object per node — *`Node`'s read half at `Cursor`'s GC
+  cost*. Extras over `Node`: O(1) `parent`, O(depth) 1-arg `depth`. By design: read-only,
+  whole-store retention, 2 GiB/`typemax(Int32)` limits (use `Node` beyond). `==`/`hash` on
+  `FlatNode` are positional identity (same store, same node). `Node(flatnode)` materializes
+  a handle as a mutable `Node`; `XML.write` accepts `FlatNode` directly. Same
+  well-formedness levels and error messages as the `Node` parser (#82).
+
 ### Internal
 
 - Source layout: the `src/XML.jl` monolith (1409 lines) is split into dedicated files —
