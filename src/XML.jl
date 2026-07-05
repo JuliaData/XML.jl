@@ -4,6 +4,7 @@ export
     Node, LazyNode, NodeType, Attributes,
     CData, Comment, Declaration, Document, DTD, Element, ProcessingInstruction, Text,
     nodetype, tag, attributes, value, children, children!, eachchildnode, eachattribute,
+    eachelement, elements,
     foreach_attr,
     is_simple, simple_value, is_simple_value, sourcetext,
     depth, siblings,
@@ -232,6 +233,31 @@ Return the child nodes of `node` in document order. Returns an empty tuple `()` 
 that cannot have children (e.g. `Text`, `Comment`, `CData`).
 """
 children(o::Node) = something(o.children, ())
+
+"""
+    eachelement(node)
+
+Lazy iterator over the child *elements* of `node`, skipping every other node type
+(`Text`, `Comment`, `CData`, `ProcessingInstruction`, …). Since v0.4 preserves
+inter-element whitespace, `children` on pretty-printed documents interleaves
+whitespace `Text` nodes with elements — `eachelement` is the idiomatic way to
+iterate the elements only. Works with both `Node` and `LazyNode`.
+
+    for el in eachelement(node)
+        # el isa Element node
+    end
+
+See also [`elements`](@ref).
+"""
+eachelement(node) = Iterators.filter(n -> nodetype(n) === Element, children(node))
+
+"""
+    elements(node) -> Vector
+
+The child *elements* of `node` in document order — the collected counterpart of
+[`eachelement`](@ref).
+"""
+elements(node) = collect(eachelement(node))
 
 """
     is_simple(node) -> Bool

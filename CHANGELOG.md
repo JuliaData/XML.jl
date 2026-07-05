@@ -5,6 +5,15 @@ All notable changes to XML.jl will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.1] - 2026-07-05
+
+### Added
+
+- `eachelement(node)` / `elements(node)` — element-only child iteration for `Node` and
+  `LazyNode`, skipping the whitespace `Text` nodes that v0.4 preserves on pretty-printed
+  documents (and any other non-element node). The explicit idiom for the common
+  "iterate the child elements" loop ([#78](https://github.com/JuliaData/XML.jl/issues/78)).
+
 ## [0.4.0] - 2026-07-03
 
 > **Upgrading from 0.3.x?** See the standalone [v0.4 migration guide](MIGRATING_TO_v0.4.md).
