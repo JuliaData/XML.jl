@@ -444,6 +444,10 @@ function eachchildnode(n::LazyNode{S}) where {S}
     LazyChildIterator{S, typeof(iter)}(n.data, iter, Ref(true))
 end
 
+# eachelement's generic definition filters children(node); for LazyNode, build on the
+# lazy child iterator instead so no intermediate Vector is materialized.
+eachelement(node::LazyNode) = Iterators.filter(n -> nodetype(n) === Element, eachchildnode(node))
+
 function Base.iterate(ci::LazyChildIterator, _ = nothing)
     ci.done[] && return nothing
     for tok in ci.iter

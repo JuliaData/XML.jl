@@ -472,6 +472,21 @@ end
         @test value(doc[1][3][1]) == "y"
     end
 
+    @testset "eachelement/elements skip non-element children" begin
+        xml = "<root>\n  <a>x</a>\n  <!-- note -->\n  <b>y</b>\n</root>"
+        for T in (Node, LazyNode)
+            doc = parse(xml, T)
+            root = only(elements(doc))
+            @test tag(root) == "root"
+            @test length(children(root)) == 7  # 4 Text runs + Comment + 2 Elements
+            @test [tag(el) for el in eachelement(root)] == ["a", "b"]
+            @test elements(root) == collect(eachelement(root))
+            @test all(n -> nodetype(n) === XML.Element, elements(root))
+            a = first(eachelement(root))
+            @test isempty(elements(children(a)[1]))  # Text leaf has no elements
+        end
+    end
+
     @testset "xml:space attribute is preserved during parsing" begin
         doc = parse("""<root xml:space="preserve"><child>  text  </child></root>""", Node)
         @test doc[1]["xml:space"] == "preserve"
