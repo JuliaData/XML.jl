@@ -3746,6 +3746,7 @@ end
 @testset "test_w3c" begin include("test_w3c.jl") end
 @testset "test_tokenizer" begin include("test_tokenizer.jl") end
 @testset "test_cursor" begin include("test_cursor.jl") end
+@testset "test_flatnode" begin include("test_flatnode.jl") end
 
 Test.pop_testset()
 Test.finish(_ROOT_TS)   # prints the aggregated summary and throws (exit 1) if anything failed
