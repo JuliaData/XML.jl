@@ -17,13 +17,16 @@ using .XMLTokenizer:
     XMLTokenizer, tokenize, tag_name, attr_value, pi_target, raw,
     TokenKinds, Token, Tokenizer, TokenizerState
 
-include("escape.jl")
-include("node.jl")
-include("xpath.jl")
-include("lazynode.jl")
-include("cursor.jl")
-include("write.jl")
-include("parse.jl")
+# Include order is the dependency contract: types before readers, readers before entry points.
+include("escape.jl")     # ESCAPE_CHARS + escape/unescape — leaf, everything below may call it
+include("node.jl")       # NodeType, Attributes, Node + accessors/navigation/equality/mutation/show
+include("xpath.jl")      # xpath over Node trees (needs Node + accessors)
+include("lazynode.jl")   # LazyNode reader (needs NodeType/Attributes; extends the generic accessors)
+include("cursor.jl")     # Cursor pull reader (needs NodeType/Attributes)
+# (flatnode.jl will slot here — read-only columnar reader, planned for v0.5)
+include("write.jl")      # XML writer: _write_xml/_write_escaped + XML.write entry points
+include("parse.jl")      # BOM normalization, Base.read entry points, the VPA parser
+include("dtd.jl")        # DTD/DOCTYPE parsing (independent: uses only the tokenizer)
 #-----------------------------------------------------------------------------# h (HTML/XML element builder)
 """
     h(tag, children...; attrs...)
@@ -50,7 +53,6 @@ function (o::Node)(args...; attrs...)
     h(o.tag, old_children..., args...; old_attrs..., attrs...)
 end
 
-include("dtd.jl")
 #-----------------------------------------------------------------------------# deprecations
 Base.@deprecate_binding simplevalue simple_value false
 

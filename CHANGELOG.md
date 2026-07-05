@@ -5,6 +5,15 @@ All notable changes to XML.jl will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Internal
+
+- Source layout: the `src/XML.jl` monolith (1409 lines) is split into dedicated files —
+  `escape.jl`, `node.jl`, `write.jl`, `parse.jl`, `dtd.jl` — alongside the existing
+  `XMLTokenizer.jl`/`lazynode.jl`/`cursor.jl`/`xpath.jl`. Pure moves, no behavior change;
+  `src/XML.jl` is now the commented include manifest.
+
 ## [0.4.1] - 2026-07-05
 
 ### Added
