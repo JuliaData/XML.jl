@@ -16,7 +16,7 @@ struct _FlatRec                       # isbits, no pointers
     first_child::Int32
     next_sibling::Int32
     name_offset::Int32; name_len::Int32     # Element tag / PI target
-    value_offset::Int32; value_len::Int32   # Text/Comment/CData/DTD/PI content; < 0 ⇒ entities
+    value_offset::Int32; value_len::Int32   # content; offset == -1 ⇒ NO value (vs empty ""); len < 0 ⇒ entities
     attr_first::Int32; attr_count::Int32
 end
 
@@ -105,7 +105,7 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
     recs = _FlatRec[]
     attrs = _FlatAttr[]
     sizehint!(recs, ncodeunits(xml) >> 4)
-    push!(recs, _FlatRec(Document, Int32(0), Int32(0), Int32(0), Int32(0), Int32(0), Int32(0), Int32(0), Int32(0), Int32(0)))
+    push!(recs, _FlatRec(Document, Int32(0), Int32(0), Int32(0), Int32(0), Int32(0), Int32(-1), Int32(0), Int32(0), Int32(0)))
     pstack    = Int32[1]
     lastchild = Int32[0]
     K = TokenKinds
@@ -133,7 +133,7 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
             noff, nlen = _frng(nm)
             idx = Int32(length(recs) + 1)
             p = _fattach!(recs, pstack, lastchild, idx)
-            push!(recs, _FlatRec(Element, p, Int32(0), Int32(0), noff, nlen, Int32(0), Int32(0), Int32(0), Int32(0)))
+            push!(recs, _FlatRec(Element, p, Int32(0), Int32(0), noff, nlen, Int32(-1), Int32(0), Int32(0), Int32(0)))
             push!(pstack, idx); push!(lastchild, Int32(0))
             cur = idx
 
@@ -174,7 +174,7 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
                 error("not well-formed: XML declaration inside element content")
             idx = Int32(length(recs) + 1)
             p = _fattach!(recs, pstack, lastchild, idx)
-            push!(recs, _FlatRec(Declaration, p, Int32(0), Int32(0), Int32(0), Int32(0), Int32(0), Int32(0), Int32(0), Int32(0)))
+            push!(recs, _FlatRec(Declaration, p, Int32(0), Int32(0), Int32(0), Int32(0), Int32(-1), Int32(0), Int32(0), Int32(0)))
             cur = idx
 
         elseif k === K.COMMENT_CONTENT
@@ -210,7 +210,7 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
             noff, nlen = _frng(target)
             idx = Int32(length(recs) + 1)
             p = _fattach!(recs, pstack, lastchild, idx)
-            push!(recs, _FlatRec(ProcessingInstruction, p, Int32(0), Int32(0), noff, nlen, Int32(0), Int32(0), Int32(0), Int32(0)))
+            push!(recs, _FlatRec(ProcessingInstruction, p, Int32(0), Int32(0), noff, nlen, Int32(-1), Int32(0), Int32(0), Int32(0)))
             pend = idx
 
         elseif k === K.PI_CONTENT
@@ -256,10 +256,9 @@ end
 
 function value(n::FlatNode)
     r = _rec(n)
-    len = r.value_len
-    len == 0 && return nothing
-    raw = _fsub(n.store, r.value_offset, abs(len))
-    len < 0 ? unescape(raw) : raw
+    r.value_offset < 0 && return nothing          # absent (empty content is offset ≥ 0, len 0)
+    raw = _fsub(n.store, r.value_offset, abs(r.value_len))
+    r.value_len < 0 ? unescape(raw) : raw
 end
 
 function attributes(n::FlatNode)
@@ -406,9 +405,8 @@ function Base.show(io::IO, n::FlatNode)
         print(io, '>')
     elseif r.kind === ProcessingInstruction
         print(io, " <?", tag(n), "?>")
-    elseif r.value_len != 0
-        v = value(n)
-        s = v === nothing ? "" : v
+    elseif r.value_offset >= 0
+        s = something(value(n), "")
         print(io, ' ', repr(first(s, 40)), ncodeunits(s) > 40 ? "…" : "")
     end
     nc = r.kind === Document || r.kind === Element ? length(n) : 0

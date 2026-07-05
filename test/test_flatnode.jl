@@ -38,6 +38,17 @@ const RICH_XML = """<?xml version="1.0"?><!DOCTYPE root [<!ENTITY x "y">]>
     if isfile(path)
         @test flat_agrees_with_node(read(path, FlatNode), read(path, Node))
     end
+
+    # Empty content is a VALUE ("" — value_offset ≥ 0), distinct from no value (nothing,
+    # value_offset == -1). Caught by W3C parity (sun/invalid/empty.xml, oasis p15/p18).
+    empties = "<r x=\"\"><!----><![CDATA[]]><?pi?></r>"
+    fe, ne = parse(empties, FlatNode), parse(empties, Node)
+    @test flat_agrees_with_node(fe, ne)
+    rootels = children(only(eachelement(fe)))
+    @test value(rootels[1]) == "" && nodetype(rootels[1]) === XML.Comment
+    @test value(rootels[2]) == "" && nodetype(rootels[2]) === XML.CData
+    @test value(rootels[3]) === nothing && nodetype(rootels[3]) === XML.ProcessingInstruction
+    @test attributes(only(eachelement(fe))) == ["x" => ""]
 end
 
 @testset "accessor surface" begin
@@ -130,4 +141,34 @@ end
     @test simple_value(only(eachelement(read(IOBuffer(utf8_bom), FlatNode)))) == "x"
     utf16le = vcat([0xFF, 0xFE], reinterpret(UInt8, Vector{UInt16}(transcode(UInt16, "<r>x</r>"))))
     @test simple_value(only(eachelement(read(IOBuffer(utf16le), FlatNode)))) == "x"
+end
+
+# W3C conformance parity: FlatNode must agree with the Node parser on every document of
+# the pinned suite — decoded-equivalent trees on the well-formed corpus, and the exact
+# same accept/reject verdict on the not-well-formed corpus. (`valid_tests`/`notwf_tests`
+# are globals from test_w3c.jl, which runs earlier in the suite; guard for standalone runs.)
+if @isdefined(valid_tests)
+    @testset "W3C parity with the Node parser" begin
+        n_cmp = 0
+        for test in valid_tests
+            isfile(test.uri) || continue
+            n = try read(test.uri, Node; wellformed = :strict) catch; continue end
+            f = read(test.uri, FlatNode; wellformed = :strict)
+            @test flat_agrees_with_node(f, n)
+            n_cmp += 1
+        end
+        @info "W3C valid: FlatNode ≡ Node on $n_cmp documents"
+
+        n_agree = 0
+        disagreements = String[]
+        for test in notwf_tests
+            isfile(test.uri) || continue
+            rejects_node = try read(test.uri, Node; wellformed = :strict); false catch; true end
+            rejects_flat = try read(test.uri, FlatNode; wellformed = :strict); false catch; true end
+            rejects_node == rejects_flat ? (n_agree += 1) : push!(disagreements, test.id)
+        end
+        isempty(disagreements) || @warn "verdict disagreements" disagreements=first(disagreements, 20)
+        @test isempty(disagreements)
+        @info "W3C not-wf: identical verdicts on $n_agree documents"
+    end
 end
