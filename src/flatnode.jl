@@ -406,6 +406,8 @@ is_simple(n::FlatNode) = (r = _rec(n);
     r.kind === Element && r.attr_count == 0 && r.first_child != 0 &&
     (c = @inbounds n.store.recs[r.first_child]; c.next_sibling == 0 && (c.kind === Text || c.kind === CData)))
 
+is_simple_value(n::FlatNode) = is_simple(n) ? value(FlatNode(n.store, _rec(n).first_child)) : nothing
+
 function simple_value(n::FlatNode)
     is_simple(n) || error("`simple_value` requires a simple node: an Element with no attributes and exactly one Text or CData child. See `is_simple`.")
     value(FlatNode(n.store, _rec(n).first_child))

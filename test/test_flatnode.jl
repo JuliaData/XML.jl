@@ -78,10 +78,11 @@ end
     @test root[2] == els[1]
     @test_throws BoundsError root[length(root) + 1]
 
-    # is_simple/simple_value parity with Node
+    # is_simple/simple_value/is_simple_value parity with Node
     elsn = filter(c -> nodetype(c) === XML.Element, children(rootn))
     @test [is_simple(e) for e in els] == [is_simple(e) for e in elsn]
     @test simple_value(els[1]) == simple_value(elsn[1]) == "plain"
+    @test [is_simple_value(e) for e in els] == [is_simple_value(e) for e in elsn]
 
     @test occursin("Element", repr(root))                           # show smoke
 end
