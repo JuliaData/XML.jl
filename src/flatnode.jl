@@ -24,6 +24,7 @@ struct FlatStore
     source::String
     recs::Vector{_FlatRec}            # recs[1] = the Document node
     attrs::Vector{_FlatAttr}
+    spans::Vector{NTuple{2,Int32}}    # per-record source span (start, end) — 0-based, half-open
 end
 
 """
@@ -104,15 +105,20 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
         error("FlatNode stores byte offsets as Int32: source is larger than 2 GiB. Use `parse(xml, Node)`.")
     recs = _FlatRec[]
     attrs = _FlatAttr[]
+    spans = NTuple{2,Int32}[]
     sizehint!(recs, ncodeunits(xml) >> 4)
+    sizehint!(spans, ncodeunits(xml) >> 4)
     push!(recs, _FlatRec(Document, Int32(0), Int32(0), Int32(0), Int32(0), Int32(0), Int32(-1), Int32(0), Int32(0), Int32(0)))
+    push!(spans, (Int32(0), Int32(ncodeunits(xml))))
     pstack    = Int32[1]
     lastchild = Int32[0]
     K = TokenKinds
 
     cur = Int32(0)                    # record receiving ATTR_* (open element or XML declaration)
-    pend = Int32(0)                   # record awaiting its PI_CONTENT — filled in place
+    pend = Int32(0)                   # record awaiting its content / span end — patched in place
     pan_off = Int32(0); pan_len = Int32(0)   # pending attribute name
+    open_off = Int32(0)               # offset of the last COMMENT/CDATA/DOCTYPE opening marker
+    tok_end(t) = Int32(t.offset + t.ncodeunits)
 
     for token in tokenize(xml)
         k = token.kind
@@ -125,6 +131,7 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
             idx = Int32(length(recs) + 1)
             p = _fattach!(recs, pstack, lastchild, idx)
             push!(recs, _FlatRec(Text, p, Int32(0), Int32(0), Int32(0), Int32(0), off, len, Int32(0), Int32(0)))
+            push!(spans, (off, off + abs(len)))
 
         elseif k === K.OPEN_TAG
             nm = tag_name(token, xml)
@@ -134,18 +141,26 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
             idx = Int32(length(recs) + 1)
             p = _fattach!(recs, pstack, lastchild, idx)
             push!(recs, _FlatRec(Element, p, Int32(0), Int32(0), noff, nlen, Int32(-1), Int32(0), Int32(0), Int32(0)))
+            push!(spans, (Int32(token.offset), Int32(0)))
             push!(pstack, idx); push!(lastchild, Int32(0))
             cur = idx
 
         elseif k === K.SELF_CLOSE
+            ci = @inbounds pstack[end]
+            @inbounds spans[ci] = (spans[ci][1], tok_end(token))
             pop!(pstack); pop!(lastchild)
 
         elseif k === K.CLOSE_TAG
             close_name = tag_name(token, xml)
             length(pstack) > 1 || error("Closing tag </$close_name> with no matching open tag.")
-            open_rec = @inbounds recs[pstack[end]]
+            ci = @inbounds pstack[end]
+            open_rec = @inbounds recs[ci]
             t = _fsub_or_empty(xml, open_rec.name_offset, open_rec.name_len)
             t == close_name || error("Mismatched tags: expected </$t>, got </$close_name>.")
+            # the CLOSE_TAG token covers `</name`; the closing `>` (ETag: '</' Name S? '>')
+            # is consumed silently by the tokenizer — locate it to end the element span
+            gt = findnext(==('>'), xml, Int(tok_end(token)) + 1)
+            @inbounds spans[ci] = (spans[ci][1], gt === nothing ? tok_end(token) : Int32(gt))
             pop!(pstack); pop!(lastchild)
 
         elseif k === K.ATTR_NAME
@@ -175,7 +190,18 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
             idx = Int32(length(recs) + 1)
             p = _fattach!(recs, pstack, lastchild, idx)
             push!(recs, _FlatRec(Declaration, p, Int32(0), Int32(0), Int32(0), Int32(0), Int32(-1), Int32(0), Int32(0), Int32(0)))
+            push!(spans, (Int32(token.offset), Int32(0)))
             cur = idx
+            pend = idx
+
+        elseif k === K.XML_DECL_CLOSE
+            @inbounds spans[pend] = (spans[pend][1], tok_end(token))
+
+        elseif k === K.COMMENT_OPEN || k === K.CDATA_OPEN || k === K.DOCTYPE_OPEN
+            open_off = Int32(token.offset)
+
+        elseif k === K.COMMENT_CLOSE || k === K.CDATA_CLOSE || k === K.DOCTYPE_CLOSE || k === K.PI_CLOSE
+            @inbounds spans[pend] = (spans[pend][1], tok_end(token))
 
         elseif k === K.COMMENT_CONTENT
             cmt = raw(token, xml)
@@ -186,6 +212,8 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
             idx = Int32(length(recs) + 1)
             p = _fattach!(recs, pstack, lastchild, idx)
             push!(recs, _FlatRec(Comment, p, Int32(0), Int32(0), Int32(0), Int32(0), off, len, Int32(0), Int32(0)))
+            push!(spans, (open_off, Int32(0)))
+            pend = idx
 
         elseif k === K.CDATA_CONTENT
             cdata = raw(token, xml)
@@ -194,6 +222,8 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
             idx = Int32(length(recs) + 1)
             p = _fattach!(recs, pstack, lastchild, idx)
             push!(recs, _FlatRec(CData, p, Int32(0), Int32(0), Int32(0), Int32(0), off, len, Int32(0), Int32(0)))
+            push!(spans, (open_off, Int32(0)))
+            pend = idx
 
         elseif k === K.DOCTYPE_CONTENT
             W !== :lenient && length(pstack) > 1 &&
@@ -202,6 +232,8 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
             idx = Int32(length(recs) + 1)
             p = _fattach!(recs, pstack, lastchild, idx)
             push!(recs, _FlatRec(DTD, p, Int32(0), Int32(0), Int32(0), Int32(0), off, len, Int32(0), Int32(0)))
+            push!(spans, (open_off, Int32(0)))
+            pend = idx
 
         elseif k === K.PI_OPEN
             target = pi_target(token, xml)
@@ -211,6 +243,7 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
             idx = Int32(length(recs) + 1)
             p = _fattach!(recs, pstack, lastchild, idx)
             push!(recs, _FlatRec(ProcessingInstruction, p, Int32(0), Int32(0), noff, nlen, Int32(-1), Int32(0), Int32(0), Int32(0)))
+            push!(spans, (Int32(token.offset), Int32(0)))
             pend = idx
 
         elseif k === K.PI_CONTENT
@@ -221,14 +254,14 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
                 @inbounds recs[pend] = _fset_value(recs[pend], off, len)
             end
         end
-        # TAG_CLOSE / COMMENT/CDATA_OPEN+CLOSE / PI_CLOSE / XML_DECL_CLOSE / DOCTYPE_OPEN+CLOSE: no tree action
+        # TAG_CLOSE: no tree action (element spans close at CLOSE_TAG/SELF_CLOSE)
     end
 
     if length(pstack) > 1
         open_names = [_fsub_or_empty(xml, recs[i].name_offset, recs[i].name_len) for i in pstack[2:end]]
         error("Unclosed tags: $(join(open_names, ", "))")
     end
-    store = FlatStore(xml, recs, attrs)
+    store = FlatStore(xml, recs, attrs, spans)
     W !== :lenient && _check_document_wellformed(children(FlatNode(store, Int32(1))))
     FlatNode(store, Int32(1))
 end
@@ -276,6 +309,18 @@ function attributes(n::FlatNode)
         ai += Int32(1)
     end
     out
+end
+
+"""
+    sourcetext(n::FlatNode) -> SubString
+
+The node's exact raw source slice, markup included — `<tag …>…</tag>` for an element,
+`<!--…-->` for a comment, and the whole document for the Document node. Zero-copy: the
+store keeps per-record source spans.
+"""
+function sourcetext(n::FlatNode)
+    so, se = @inbounds n.store.spans[n.i]
+    _fsub(n.store, so, se - so)
 end
 
 """

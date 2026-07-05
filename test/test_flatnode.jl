@@ -134,6 +134,30 @@ end
           XML.write(parse("<a/><b/>", Node;     wellformed = :lenient))
 end
 
+@testset "sourcetext (source spans)" begin
+    xml = """<?xml version="1.0"?><!DOCTYPE r [<!ENTITY x "y">]><!-- c --><r a="1">
+  <item>plain</item><![CDATA[cd]]><?pi tgt?><!----><empty/><sp ></sp >
+</r>"""
+    f  = parse(xml, FlatNode; wellformed = :lenient)
+    lz = parse(xml, LazyNode)
+
+    # exact-slice parity with LazyNode's sourcetext, top-level and inside the root
+    for (a, b) in zip(children(f), children(lz))
+        @test isequal(sourcetext(a), sourcetext(b))
+    end
+    root = only(eachelement(f))
+    rootlz = first(Iterators.filter(c -> nodetype(c) === XML.Element, children(lz)))
+    for (a, b) in zip(children(root), children(rootlz))
+        @test isequal(sourcetext(a), sourcetext(b))
+    end
+
+    @test sourcetext(f) == xml                                   # Document = whole source
+    it = first(eachelement(root))
+    @test sourcetext(it) == "<item>plain</item>"
+    # re-parsing an element's slice reproduces the subtree
+    @test Node(only(eachelement(parse(String(sourcetext(it)), FlatNode; wellformed = :lenient)))) == Node(it)
+end
+
 @testset "BOM handling" begin
     bom = "﻿<r>x</r>"
     @test flat_agrees_with_node(parse(bom, FlatNode), parse(bom, Node))
