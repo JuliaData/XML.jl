@@ -247,14 +247,14 @@ Base.read(io::IO, ::Type{FlatNode}; wellformed::Symbol=:structural) =
     parse(String(_normalize_bom(read(io))), FlatNode; wellformed)
 
 #-----------------------------------------------------------------------------# accessors
-nodetype(n::FlatNode) = _rec(n).kind
+@inline nodetype(n::FlatNode) = _rec(n).kind
 
-function tag(n::FlatNode)
+@inline function tag(n::FlatNode)
     r = _rec(n)
     r.name_len > 0 ? _fsub(n.store, r.name_offset, r.name_len) : nothing
 end
 
-function value(n::FlatNode)
+@inline function value(n::FlatNode)
     r = _rec(n)
     r.value_offset < 0 && return nothing          # absent (empty content is offset ≥ 0, len 0)
     raw = _fsub(n.store, r.value_offset, abs(r.value_len))
