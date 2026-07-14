@@ -12,14 +12,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          # XLSX's XML-v0.4 adaptation (JuliaData/XLSX.jl#415). The *registered* XLSX
-          # pins XML 0.3, so testing it against this branch fails by design; test the
-          # adaptation PR instead. Once #415 merges and releases, point this back at
-          # the registered package (PackageSpec(name=...) as before).
-          - package: XLSX
-            repository: JuliaData/XLSX.jl
-            ref: refs/pull/415/head
+        package:
+          - "XLSX"
     steps:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
@@ -28,21 +22,17 @@ jobs:
           arch: x64
           show-versioninfo: true
       - uses: julia-actions/julia-buildpkg@latest
-      - uses: actions/checkout@v7
-        with:
-          repository: ${{ matrix.repository }}
-          ref: ${{ matrix.ref }}
-          path: downstream
       - name: Load this and run the downstream tests
         shell: julia --color=yes {0}
         run: |
           using Pkg
           Pkg.Registry.update()
           Pkg.activate(;temp=true)
-          # this branch's XML + the downstream package's adaptation branch
+          # force it to use this PR's version of the package
+          ENV["JULIA_PKG_DEVDIR"]= mktempdir()
           Pkg.develop([
             PackageSpec(path="."),
-            PackageSpec(path="downstream"),
+            PackageSpec(name="${{ matrix.package }}"),
           ])
           Pkg.update()
           Pkg.test("${{ matrix.package }}")
