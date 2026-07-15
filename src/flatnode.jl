@@ -34,6 +34,10 @@ Read-only handle into a [`FlatStore`](@ref) — XML.jl's fourth reader, alongsid
 (mutable DOM), `LazyNode` (pay-per-traversal) and `Cursor` (pull streaming): *`Node`'s read
 half at `Cursor`'s GC cost*.
 
+!!! warning "Experimental"
+    `FlatNode` is new and marked experimental while its usage settles in the dependent
+    ecosystem: API details may still change in a 0.4.x release. Feedback welcome in #82.
+
     doc = parse(xml, FlatNode)          # or read(filename, FlatNode)
     root = only(eachelement(doc))
     for el in eachelement(root)
@@ -50,8 +54,9 @@ Compared with `Node`:
 - **read-only** — no `push!`/`setindex!`; build documents with `Node` / [`h`](@ref).
 - `parent(node)` and `depth(node)` work directly (O(1) / O(depth)) — the store keeps
   parent links, which `Node` does not.
-- `==` and `hash` are **positional identity**: two `FlatNode`s are equal iff they point at
-  the same node of the same store (compare content by converting: `Node(a) == Node(b)`).
+- `==`/`isequal`/`hash` are **structural** (equal decoded content), like every reader —
+  cross-reader comparisons included. Positional identity — same node of the same store —
+  is [`issamenode`](@ref).
 - retention is all-or-nothing: any live handle keeps the whole store (and source) alive.
 - documents are limited to 2 GiB / `typemax(Int32)` nodes; parse with `Node` beyond that.
 
@@ -62,9 +67,6 @@ struct FlatNode
     store::FlatStore
     i::Int32
 end
-
-Base.:(==)(a::FlatNode, b::FlatNode) = a.store === b.store && a.i == b.i
-Base.hash(a::FlatNode, h::UInt) = hash(a.i, hash(objectid(a.store), h))
 
 @inline _rec(n::FlatNode) = @inbounds n.store.recs[n.i]
 @inline _fsub(store::FlatStore, off::Int32, len::Int32) =

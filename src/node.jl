@@ -210,6 +210,8 @@ is_simple_value(o::Node) = is_simple(o) ? o.children[1].value : nothing
 
 #-----------------------------------------------------------------------------# tree navigation
 
+const _AMBIGUOUS_NODE_MSG = "ambiguous: the node matches multiple indistinguishable occurrences in the tree; use FlatNode for positional navigation."
+
 """
     parent(child::Node, root::Node) -> Node
 
@@ -219,26 +221,34 @@ Since `Node` does not store parent pointers, this performs a tree search from `r
 Throws an error if `child` is not found or if `child === root`.
 
 !!! warning "Value identity"
-    `Node` is an immutable value type, so the search matches by structural equality (`===`). In a
-    tree containing value-identical sibling nodes (e.g. two empty `<item/>` elements), this may
-    return the parent of the *first* match rather than the specific node passed. The same applies to
-    [`depth`](@ref), [`siblings`](@ref), and the XPath `..` axis. A path-based redesign is planned.
+    `Node` is an immutable value type, so the search matches by value (`===`). In a tree
+    containing several value-identical nodes (e.g. two empty `<item/>` elements), the
+    occurrence the caller meant cannot be determined, and an error is raised instead of
+    silently answering for the first match. The same applies to [`depth`](@ref),
+    [`siblings`](@ref), and the XPath `..` axis. `FlatNode` navigates positionally and has
+    no such ambiguity.
 """
 function Base.parent(child::Node, root::Node)
     child === root && error("Root node has no parent.")
-    result = _find_parent(child, root)
-    isnothing(result) && error("Node not found in tree.")
-    result
+    acc = Node[]
+    _find_parents!(acc, child, root)
+    isempty(acc) && error("Node not found in tree.")
+    length(acc) > 1 && error(_AMBIGUOUS_NODE_MSG)
+    acc[1]
 end
 
-# Depth-first search for `child` within `current`; returns the containing node or nothing.
-function _find_parent(child::Node, current::Node)
+# Depth-first search for occurrences of `child` within `current`, collecting each
+# occurrence's parent; stops after a second occurrence — one is a result, two is ambiguous.
+function _find_parents!(acc::Vector{Node}, child::Node, current::Node)
     for c in children(current)
-        c === child && return current
-        result = _find_parent(child, c)
-        isnothing(result) || return result
+        if c === child
+            push!(acc, current)
+            length(acc) >= 2 && return acc
+        end
+        _find_parents!(acc, child, c)
+        length(acc) >= 2 && return acc
     end
-    nothing
+    acc
 end
 
 """
@@ -247,24 +257,30 @@ end
 Return the depth of `child` within the tree rooted at `root` (root has depth 0).
 
 Since `Node` does not store parent pointers, this performs a tree search from `root`.
-Throws an error if `child` is not found in the tree.
+Throws an error if `child` is not found in the tree, or if it matches several
+value-identical occurrences (see the warning in [`parent`](@ref)).
 """
 function depth(child::Node, root::Node)
     child === root && return 0
-    result = _find_depth(child, root, 0)
-    isnothing(result) && error("Node not found in tree.")
-    result
+    acc = Int[]
+    _find_depths!(acc, child, root, 0)
+    isempty(acc) && error("Node not found in tree.")
+    length(acc) > 1 && error(_AMBIGUOUS_NODE_MSG)
+    acc[1]
 end
 
-# Depth-first search returning the depth of `child` relative to `current` (where children
-# of `current` are at depth `d + 1`), or nothing if not found.
-function _find_depth(child::Node, current::Node, d::Int)
+# Depth-first search collecting the depth of each occurrence of `child` relative to
+# `current` (children of `current` are at depth `d + 1`); stops after a second occurrence.
+function _find_depths!(acc::Vector{Int}, child::Node, current::Node, d::Int)
     for c in children(current)
-        c === child && return d + 1
-        result = _find_depth(child, c, d + 1)
-        isnothing(result) || return result
+        if c === child
+            push!(acc, d + 1)
+            length(acc) >= 2 && return acc
+        end
+        _find_depths!(acc, child, c, d + 1)
+        length(acc) >= 2 && return acc
     end
-    nothing
+    acc
 end
 
 """
@@ -273,7 +289,8 @@ end
 Return the siblings of `child` (other children of the same parent) within the tree rooted
 at `root`.  The returned vector does not include `child` itself.
 
-Throws an error if `child` is the root or is not found in the tree.
+Throws an error if `child` is the root, is not found in the tree, or matches several
+value-identical occurrences (see the warning in [`parent`](@ref)).
 """
 function siblings(child::Node, root::Node)
     p = parent(child, root)
@@ -341,30 +358,61 @@ end
 #-----------------------------------------------------------------------------# equality
 # Treat `nothing` and an empty collection as equivalent so that an absent attribute /
 # children field compares equal to an explicitly empty one.
-_eq(::Nothing, ::Nothing) = true
-_eq(::Nothing, b) = isempty(b)
-_eq(a, ::Nothing) = isempty(a)
-_eq(a, b) = a == b
-
-# Attribute equality is order-insensitive per XML spec.
+# Attribute equality is order-insensitive per XML spec; an absent (`nothing`) attribute
+# set equals an empty one. Containers differ per reader (Attributes, lazy iterators,
+# decoded pairs), so collect to pairs before comparing; keys are unique by
+# well-formedness, which makes the pairwise membership test sound.
 function _attrs_eq(a, b)
-    a_empty = isnothing(a) || isempty(a)
-    b_empty = isnothing(b) || isempty(b)
+    va = isnothing(a) ? nothing : [k => v for (k, v) in a]
+    vb = isnothing(b) ? nothing : [k => v for (k, v) in b]
+    a_empty = isnothing(va) || isempty(va)
+    b_empty = isnothing(vb) || isempty(vb)
     a_empty && b_empty && return true
-    (a_empty != b_empty) && return false
-    length(a) != length(b) && return false
-    for p in a
-        p in b || return false
+    (a_empty || b_empty) && return false
+    length(va) == length(vb) || return false
+    for p in va
+        any(==(p), vb) || return false
     end
     true
 end
 
-function Base.:(==)(a::Node, b::Node)
-    a.nodetype == b.nodetype &&
-    a.tag == b.tag &&
-    _attrs_eq(a.attributes, b.attributes) &&
-    a.value == b.value &&
-    _eq(a.children, b.children)
+# Structural equality and hash over the generic accessor surface (nodetype/tag/
+# attributes/value/children), shared by every tree reader and the cross-reader case —
+# the `Base` bindings live in identity.jl, after all reader types exist. Attribute order
+# is insignificant; child order is significant; absent (`nothing`) attributes/children
+# compare and hash like empty ones.
+function _structural_eq(a, b)
+    nodetype(a) === nodetype(b) || return false
+    tag(a) == tag(b) || return false
+    _attrs_eq(attributes(a), attributes(b)) || return false
+    value(a) == value(b) || return false
+    ca, cb = children(a), children(b)
+    sa, sb = iterate(ca), iterate(cb)
+    while sa !== nothing && sb !== nothing
+        _structural_eq(sa[1], sb[1]) || return false
+        sa, sb = iterate(ca, sa[2]), iterate(cb, sb[2])
+    end
+    sa === nothing && sb === nothing
+end
+
+# Commutative ⊻ over attribute pair hashes mirrors `_attrs_eq`'s order-insensitivity;
+# duplicate keys are excluded by well-formedness.
+function _structural_hash(n, h::UInt)
+    h = hash(nodetype(n), h)
+    h = hash(tag(n), h)
+    ha = UInt(0)
+    a = attributes(n)
+    if !isnothing(a)
+        for kv in a
+            ha ⊻= hash(kv)
+        end
+    end
+    h = hash(ha, h)
+    h = hash(value(n), h)
+    for c in children(n)
+        h = _structural_hash(c, h)
+    end
+    h
 end
 
 #-----------------------------------------------------------------------------# indexing

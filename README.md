@@ -40,7 +40,7 @@ XML.jl ships four readers behind one set of accessors (`nodetype`, `tag`, `attri
 |---|---|---|---|---|
 | `Cursor` | no (nothing) | impossible (forward-only) | — | ~0 |
 | `LazyNode` | virtual | re-decode per visit (pay-per-traversal) | no | ~0 |
-| `FlatNode` | yes, compact (columnar) | O(1), paid once | no | ~0 |
+| `FlatNode` *(experimental)* | yes, compact (columnar) | O(1), paid once | no | ~0 |
 | `Node` | yes, objects | O(1), paid once | **yes** | high |
 
 Rules of thumb: one forward pass → `Cursor` · extract a little, memory-tight → `LazyNode` ·
