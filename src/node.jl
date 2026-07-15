@@ -210,6 +210,8 @@ is_simple_value(o::Node) = is_simple(o) ? o.children[1].value : nothing
 
 #-----------------------------------------------------------------------------# tree navigation
 
+const _AMBIGUOUS_NODE_MSG = "ambiguous: the node matches multiple indistinguishable occurrences in the tree; use FlatNode for positional navigation."
+
 """
     parent(child::Node, root::Node) -> Node
 
@@ -219,26 +221,34 @@ Since `Node` does not store parent pointers, this performs a tree search from `r
 Throws an error if `child` is not found or if `child === root`.
 
 !!! warning "Value identity"
-    `Node` is an immutable value type, so the search matches by structural equality (`===`). In a
-    tree containing value-identical sibling nodes (e.g. two empty `<item/>` elements), this may
-    return the parent of the *first* match rather than the specific node passed. The same applies to
-    [`depth`](@ref), [`siblings`](@ref), and the XPath `..` axis. A path-based redesign is planned.
+    `Node` is an immutable value type, so the search matches by value (`===`). In a tree
+    containing several value-identical nodes (e.g. two empty `<item/>` elements), the
+    occurrence the caller meant cannot be determined, and an error is raised instead of
+    silently answering for the first match. The same applies to [`depth`](@ref),
+    [`siblings`](@ref), and the XPath `..` axis. `FlatNode` navigates positionally and has
+    no such ambiguity.
 """
 function Base.parent(child::Node, root::Node)
     child === root && error("Root node has no parent.")
-    result = _find_parent(child, root)
-    isnothing(result) && error("Node not found in tree.")
-    result
+    acc = Node[]
+    _find_parents!(acc, child, root)
+    isempty(acc) && error("Node not found in tree.")
+    length(acc) > 1 && error(_AMBIGUOUS_NODE_MSG)
+    acc[1]
 end
 
-# Depth-first search for `child` within `current`; returns the containing node or nothing.
-function _find_parent(child::Node, current::Node)
+# Depth-first search for occurrences of `child` within `current`, collecting each
+# occurrence's parent; stops after a second occurrence — one is a result, two is ambiguous.
+function _find_parents!(acc::Vector{Node}, child::Node, current::Node)
     for c in children(current)
-        c === child && return current
-        result = _find_parent(child, c)
-        isnothing(result) || return result
+        if c === child
+            push!(acc, current)
+            length(acc) >= 2 && return acc
+        end
+        _find_parents!(acc, child, c)
+        length(acc) >= 2 && return acc
     end
-    nothing
+    acc
 end
 
 """
@@ -247,24 +257,30 @@ end
 Return the depth of `child` within the tree rooted at `root` (root has depth 0).
 
 Since `Node` does not store parent pointers, this performs a tree search from `root`.
-Throws an error if `child` is not found in the tree.
+Throws an error if `child` is not found in the tree, or if it matches several
+value-identical occurrences (see the warning in [`parent`](@ref)).
 """
 function depth(child::Node, root::Node)
     child === root && return 0
-    result = _find_depth(child, root, 0)
-    isnothing(result) && error("Node not found in tree.")
-    result
+    acc = Int[]
+    _find_depths!(acc, child, root, 0)
+    isempty(acc) && error("Node not found in tree.")
+    length(acc) > 1 && error(_AMBIGUOUS_NODE_MSG)
+    acc[1]
 end
 
-# Depth-first search returning the depth of `child` relative to `current` (where children
-# of `current` are at depth `d + 1`), or nothing if not found.
-function _find_depth(child::Node, current::Node, d::Int)
+# Depth-first search collecting the depth of each occurrence of `child` relative to
+# `current` (children of `current` are at depth `d + 1`); stops after a second occurrence.
+function _find_depths!(acc::Vector{Int}, child::Node, current::Node, d::Int)
     for c in children(current)
-        c === child && return d + 1
-        result = _find_depth(child, c, d + 1)
-        isnothing(result) || return result
+        if c === child
+            push!(acc, d + 1)
+            length(acc) >= 2 && return acc
+        end
+        _find_depths!(acc, child, c, d + 1)
+        length(acc) >= 2 && return acc
     end
-    nothing
+    acc
 end
 
 """
@@ -273,7 +289,8 @@ end
 Return the siblings of `child` (other children of the same parent) within the tree rooted
 at `root`.  The returned vector does not include `child` itself.
 
-Throws an error if `child` is the root or is not found in the tree.
+Throws an error if `child` is the root, is not found in the tree, or matches several
+value-identical occurrences (see the warning in [`parent`](@ref)).
 """
 function siblings(child::Node, root::Node)
     p = parent(child, root)

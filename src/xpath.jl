@@ -224,8 +224,11 @@ function _xpath_step(nodes::Vector{Node{S}}, token::XPathToken, root::Node{S}) w
     elseif k === XPATH_DOTDOT
         for n in nodes
             n === root && continue
-            p = _find_parent(n, root)
-            isnothing(p) || push!(result, p)
+            acc = Node[]
+            _find_parents!(acc, n, root)
+            isempty(acc) && continue
+            length(acc) > 1 && error(_AMBIGUOUS_NODE_MSG)
+            push!(result, acc[1])
         end
 
     elseif k === XPATH_TEXT_FN
