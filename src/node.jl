@@ -358,37 +358,45 @@ end
 #-----------------------------------------------------------------------------# equality
 # Treat `nothing` and an empty collection as equivalent so that an absent attribute /
 # children field compares equal to an explicitly empty one.
-_eq(::Nothing, ::Nothing) = true
-_eq(::Nothing, b) = isempty(b)
-_eq(a, ::Nothing) = isempty(a)
-_eq(a, b) = a == b
-
-# Attribute equality is order-insensitive per XML spec.
+# Attribute equality is order-insensitive per XML spec; an absent (`nothing`) attribute
+# set equals an empty one. Containers differ per reader (Attributes, lazy iterators,
+# decoded pairs), so collect to pairs before comparing; keys are unique by
+# well-formedness, which makes the pairwise membership test sound.
 function _attrs_eq(a, b)
-    a_empty = isnothing(a) || isempty(a)
-    b_empty = isnothing(b) || isempty(b)
+    va = isnothing(a) ? nothing : [k => v for (k, v) in a]
+    vb = isnothing(b) ? nothing : [k => v for (k, v) in b]
+    a_empty = isnothing(va) || isempty(va)
+    b_empty = isnothing(vb) || isempty(vb)
     a_empty && b_empty && return true
-    (a_empty != b_empty) && return false
-    length(a) != length(b) && return false
-    for p in a
-        p in b || return false
+    (a_empty || b_empty) && return false
+    length(va) == length(vb) || return false
+    for p in va
+        any(==(p), vb) || return false
     end
     true
 end
 
-function Base.:(==)(a::Node, b::Node)
-    a.nodetype == b.nodetype &&
-    a.tag == b.tag &&
-    _attrs_eq(a.attributes, b.attributes) &&
-    a.value == b.value &&
-    _eq(a.children, b.children)
+# Structural equality and hash over the generic accessor surface (nodetype/tag/
+# attributes/value/children), shared by every tree reader and the cross-reader case —
+# the `Base` bindings live in identity.jl, after all reader types exist. Attribute order
+# is insignificant; child order is significant; absent (`nothing`) attributes/children
+# compare and hash like empty ones.
+function _structural_eq(a, b)
+    nodetype(a) === nodetype(b) || return false
+    tag(a) == tag(b) || return false
+    _attrs_eq(attributes(a), attributes(b)) || return false
+    value(a) == value(b) || return false
+    ca, cb = children(a), children(b)
+    sa, sb = iterate(ca), iterate(cb)
+    while sa !== nothing && sb !== nothing
+        _structural_eq(sa[1], sb[1]) || return false
+        sa, sb = iterate(ca, sa[2]), iterate(cb, sb[2])
+    end
+    sa === nothing && sb === nothing
 end
 
-# Structural hash over the generic accessor surface (nodetype/tag/attributes/value/
-# children) so every reader — and the cross-reader case — can share it. Mirrors the
-# `==` rules above: attribute order is insignificant (commutative ⊻ of pair hashes;
-# duplicate keys are excluded by well-formedness), child order is significant, and
-# absent (`nothing`) attributes/children hash like empty ones.
+# Commutative ⊻ over attribute pair hashes mirrors `_attrs_eq`'s order-insensitivity;
+# duplicate keys are excluded by well-formedness.
 function _structural_hash(n, h::UInt)
     h = hash(nodetype(n), h)
     h = hash(tag(n), h)
@@ -406,8 +414,6 @@ function _structural_hash(n, h::UInt)
     end
     h
 end
-
-Base.hash(o::Node, h::UInt) = _structural_hash(o, h)
 
 #-----------------------------------------------------------------------------# indexing
 Base.getindex(o::Node, i::Integer) = children(o)[i]

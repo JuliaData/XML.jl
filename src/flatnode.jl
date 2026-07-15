@@ -63,9 +63,6 @@ struct FlatNode
     i::Int32
 end
 
-Base.:(==)(a::FlatNode, b::FlatNode) = a.store === b.store && a.i == b.i
-Base.hash(a::FlatNode, h::UInt) = hash(a.i, hash(objectid(a.store), h))
-
 @inline _rec(n::FlatNode) = @inbounds n.store.recs[n.i]
 @inline _fsub(store::FlatStore, off::Int32, len::Int32) =
     @inbounds SubString(store.source, off + 1, prevind(store.source, off + len + 1))

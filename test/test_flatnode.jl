@@ -1,21 +1,6 @@
-# FlatNode — the read-only columnar reader: decoded equivalence with Node, accessor
-# surface, positional identity, well-formedness parity with the Node parser.
-
-# Recursive decoded comparison: FlatNode must agree with Node{String} on kind, tag,
-# decoded value, decoded attributes, and tree shape.
-function flat_agrees_with_node(a, b)
-    nodetype(a) === nodetype(b) || return false
-    isequal(tag(a), tag(b)) || return false
-    isequal(value(a), value(b)) || return false
-    aa, ba = attributes(a), attributes(b)
-    (aa === nothing) === (ba === nothing) || return false
-    if aa !== nothing
-        [String(k) => String(v) for (k, v) in aa] == [String(k) => String(v) for (k, v) in ba] || return false
-    end
-    ca, cb = children(a), children(b)
-    length(ca) == length(cb) || return false
-    all(flat_agrees_with_node(x, y) for (x, y) in zip(ca, cb))
-end
+# FlatNode — the read-only columnar reader: decoded equivalence with Node (via the
+# structural cross-reader `==`), accessor surface, positional identity (issamenode),
+# well-formedness parity with the Node parser.
 
 const RICH_XML = """<?xml version="1.0"?><!DOCTYPE root [<!ENTITY x "y">]>
 <!-- top comment -->
@@ -31,19 +16,19 @@ const RICH_XML = """<?xml version="1.0"?><!DOCTYPE root [<!ENTITY x "y">]>
 @testset "decoded equivalence with Node" begin
     f = parse(RICH_XML, FlatNode)
     n = parse(RICH_XML, Node)
-    @test flat_agrees_with_node(f, n)
+    @test f == n
     @test XML.write(f) == XML.write(n)
 
     path = joinpath(@__DIR__, "data", "books.xml")
     if isfile(path)
-        @test flat_agrees_with_node(read(path, FlatNode), read(path, Node))
+        @test read(path, FlatNode) == read(path, Node)
     end
 
     # Empty content is a VALUE ("" — value_offset ≥ 0), distinct from no value (nothing,
     # value_offset == -1). Caught by W3C parity (sun/invalid/empty.xml, oasis p15/p18).
     empties = "<r x=\"\"><!----><![CDATA[]]><?pi?></r>"
     fe, ne = parse(empties, FlatNode), parse(empties, Node)
-    @test flat_agrees_with_node(fe, ne)
+    @test fe == ne
     rootels = children(only(eachelement(fe)))
     @test value(rootels[1]) == "" && nodetype(rootels[1]) === XML.Comment
     @test value(rootels[2]) == "" && nodetype(rootels[2]) === XML.CData
@@ -71,7 +56,7 @@ end
 
     # parent is O(1) and defined; depth counts from the Document node
     @test parent(f) === nothing
-    @test parent(root) == f && parent(els[1]) == root
+    @test issamenode(parent(root), f) && issamenode(parent(els[1]), root)
     @test depth(f) == 1 && depth(root) == 2 && depth(els[1]) == 3
 
     # indexing walks children (whitespace Text nodes included, as everywhere in v0.4)
@@ -87,17 +72,19 @@ end
     @test occursin("Element", repr(root))                           # show smoke
 end
 
-@testset "positional identity (== and hash)" begin
+@testset "structural ==/hash, positional issamenode" begin
     f = parse(RICH_XML, FlatNode)
     root = only(eachelement(f))
     els = collect(eachelement(root))
-    @test els[1] == els[1] && els[1] != els[2]
+    @test els[1] == els[1] && els[1] != els[2]      # the two <item>s differ in content
     @test hash(els[1]) != hash(els[2])
-    @test length(unique([els[1], els[1], els[2]])) == 2             # the #55 behavior, fixed here
-    # two parses of the same document are DIFFERENT stores: handles compare unequal;
-    # compare content by materializing.
+    @test length(unique([els[1], els[1], els[2]])) == 2
+    @test issamenode(els[1], els[1])
+    @test !issamenode(els[1], els[2])
+    # two parses of the same document: structurally equal, positionally distinct.
     f2 = parse(RICH_XML, FlatNode)
-    @test f != f2
+    @test f == f2
+    @test !issamenode(f, f2)
     @test Node(f) == Node(f2)
 end
 
@@ -161,7 +148,7 @@ end
 
 @testset "BOM handling" begin
     bom = "﻿<r>x</r>"
-    @test flat_agrees_with_node(parse(bom, FlatNode), parse(bom, Node))
+    @test parse(bom, FlatNode) == parse(bom, Node)
     utf8_bom = vcat([0xEF, 0xBB, 0xBF], Vector{UInt8}("<r>x</r>"))
     @test simple_value(only(eachelement(read(IOBuffer(utf8_bom), FlatNode)))) == "x"
     utf16le = vcat([0xFF, 0xFE], reinterpret(UInt8, Vector{UInt16}(transcode(UInt16, "<r>x</r>"))))
@@ -179,7 +166,7 @@ if @isdefined(valid_tests)
             isfile(test.uri) || continue
             n = try read(test.uri, Node; wellformed = :strict) catch; continue end
             f = read(test.uri, FlatNode; wellformed = :strict)
-            @test flat_agrees_with_node(f, n)
+            @test f == n
             n_cmp += 1
         end
         @info "W3C valid: FlatNode ≡ Node on $n_cmp documents"
