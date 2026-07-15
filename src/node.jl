@@ -367,6 +367,31 @@ function Base.:(==)(a::Node, b::Node)
     _eq(a.children, b.children)
 end
 
+# Structural hash over the generic accessor surface (nodetype/tag/attributes/value/
+# children) so every reader — and the cross-reader case — can share it. Mirrors the
+# `==` rules above: attribute order is insignificant (commutative ⊻ of pair hashes;
+# duplicate keys are excluded by well-formedness), child order is significant, and
+# absent (`nothing`) attributes/children hash like empty ones.
+function _structural_hash(n, h::UInt)
+    h = hash(nodetype(n), h)
+    h = hash(tag(n), h)
+    ha = UInt(0)
+    a = attributes(n)
+    if !isnothing(a)
+        for kv in a
+            ha ⊻= hash(kv)
+        end
+    end
+    h = hash(ha, h)
+    h = hash(value(n), h)
+    for c in children(n)
+        h = _structural_hash(c, h)
+    end
+    h
+end
+
+Base.hash(o::Node, h::UInt) = _structural_hash(o, h)
+
 #-----------------------------------------------------------------------------# indexing
 Base.getindex(o::Node, i::Integer) = children(o)[i]
 Base.getindex(o::Node, ::Colon) = children(o)
