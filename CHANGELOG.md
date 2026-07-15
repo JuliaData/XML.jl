@@ -5,7 +5,47 @@ All notable changes to XML.jl will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.2] - 2026-07-16
+
+### Added
+
+- **`FlatNode` — a fourth reader: read-only columnar full-DOM** (`parse(xml, FlatNode)`,
+  `read(file, FlatNode)`). The whole document is materialized once into a contiguous store of
+  isbits records (zero-copy byte ranges into the retained source; text/attribute values
+  entity-decoded on access), so building is fast, random access is O(1), and the GC sees a
+  handful of arrays instead of one object per node — *`Node`'s read half at `Cursor`'s GC
+  cost*. Extras over `Node`: O(1) `parent`, O(depth) 1-arg `depth`. By design: read-only,
+  whole-store retention, 2 GiB/`typemax(Int32)` limits (use `Node` beyond). `Node(flatnode)`
+  materializes a handle as a mutable `Node`; `XML.write` accepts `FlatNode` directly. Same
+  well-formedness levels and error messages as the `Node` parser. **Marked experimental**
+  while its usage settles in the dependent ecosystem: API details may still change in a
+  0.4.x release (#82).
+
+- **`issamenode(a, b)` — positional identity for the handle readers** (`FlatNode`: same
+  store + same index; `LazyNode`: same source object + same token): "is this the same node
+  of the same document", which neither `==` (structural equality) nor `===` (egal is
+  content-based on immutable handles) can express (#83).
+
+### Changed
+
+- **`==`/`isequal`/`hash` are structural for every tree reader, cross-reader included** —
+  same decoded nodetype/tag/attributes (order-insensitive)/value/children (in document
+  order), recursively. `Node` already compared structurally; `LazyNode` (previously the
+  egal fallback) and `FlatNode` (previously positional) now match it, and
+  `Node == LazyNode == FlatNode` holds for equal content (#83). Migration: code that used
+  `FlatNode` `==` as "same node" should use `issamenode`.
+
+- **Search-based `Node` navigation raises an error on indistinguishable occurrences**:
+  `parent`/`depth`/`siblings`/XPath `..` match by egal, which is content-based on parsed
+  immutable nodes — in a tree with several value-identical occurrences (e.g. twin
+  `<item/>` elements) they silently answered for the first match, yielding wrong depths
+  and sibling lists. Unambiguous calls are unchanged. Migration: for positional navigation
+  in such documents, use `FlatNode` (parent links, no ambiguity).
+
+### Fixed
+
+- **`hash(::Node)` restores the `==`/`hash` contract** (#55): `Node` compared structurally
+  but hashed by `objectid`, so `unique`/`Dict`/`Set` misbehaved on equal nodes.
 
 ### Internal
 

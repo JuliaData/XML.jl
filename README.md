@@ -31,6 +31,25 @@ doc[end][2]  # Second child of root
 
 <br>
 
+# Choosing a reader
+
+XML.jl ships four readers behind one set of accessors (`nodetype`, `tag`, `attributes`,
+`value`, `children`, `eachelement`, …). Pick by what you do with the document:
+
+| Reader | DOM materialized? | Revisit a node | Mutable | GC cost |
+|---|---|---|---|---|
+| `Cursor` | no (nothing) | impossible (forward-only) | — | ~0 |
+| `LazyNode` | virtual | re-decode per visit (pay-per-traversal) | no | ~0 |
+| `FlatNode` *(experimental)* | yes, compact (columnar) | O(1), paid once | no | ~0 |
+| `Node` | yes, objects | O(1), paid once | **yes** | high |
+
+Rules of thumb: one forward pass → `Cursor` · extract a little, memory-tight → `LazyNode` ·
+read-heavy full document, repeated traversals → `FlatNode` (*`Node`'s read half at `Cursor`'s
+GC cost*) · build or edit documents → `Node`. `FlatNode` and `LazyNode` retain the source
+string as long as any handle lives.
+
+<br>
+
 # `Node` Interface
 
 Every node in the XML DOM is represented by `Node`, a single type parametrized on its string storage.

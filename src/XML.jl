@@ -1,13 +1,13 @@
 module XML
 
 export
-    Node, LazyNode, NodeType, Attributes,
+    Node, LazyNode, FlatNode, NodeType, Attributes,
     CData, Comment, Declaration, Document, DTD, Element, ProcessingInstruction, Text,
     nodetype, tag, attributes, value, children, children!, eachchildnode, eachattribute,
     eachelement, elements,
     foreach_attr,
     is_simple, simple_value, is_simple_value, sourcetext,
-    depth, siblings,
+    depth, siblings, issamenode,
     Cursor, next!, for_each_child, @for_each_child, skip_element!, eof,
     xpath,
     h
@@ -23,7 +23,8 @@ include("node.jl")       # NodeType, Attributes, Node + accessors/navigation/equ
 include("xpath.jl")      # xpath over Node trees (needs Node + accessors)
 include("lazynode.jl")   # LazyNode reader (needs NodeType/Attributes; extends the generic accessors)
 include("cursor.jl")     # Cursor pull reader (needs NodeType/Attributes)
-# (flatnode.jl will slot here — read-only columnar reader, planned for v0.5)
+include("flatnode.jl")   # FlatNode read-only columnar reader (needs node.jl types; checks live in parse.jl)
+include("identity.jl")   # structural ==/hash bindings + issamenode (needs all reader types above)
 include("write.jl")      # XML writer: _write_xml/_write_escaped + XML.write entry points
 include("parse.jl")      # BOM normalization, Base.read entry points, the VPA parser
 include("dtd.jl")        # DTD/DOCTYPE parsing (independent: uses only the tokenizer)
