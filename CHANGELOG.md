@@ -31,9 +31,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`==`/`isequal`/`hash` are structural for every tree reader, cross-reader included** —
   same decoded nodetype/tag/attributes (order-insensitive)/value/children (in document
   order), recursively. `Node` already compared structurally; `LazyNode` (previously the
-  egal fallback) and `FlatNode` (previously positional) now match it, and
-  `Node == LazyNode == FlatNode` holds for equal content (#83). Migration: code that used
-  `FlatNode` `==` as "same node" should use `issamenode`.
+  default egal fallback) now matches it, the new `FlatNode` ships with these semantics
+  from the start, and `Node == LazyNode == FlatNode` holds for equal content (#83).
 
 - **Search-based `Node` navigation raises an error on indistinguishable occurrences**:
   `parent`/`depth`/`siblings`/XPath `..` match by egal, which is content-based on parsed
