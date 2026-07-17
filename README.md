@@ -125,14 +125,14 @@ print(XML.write(node))
 
 # Reading
 
-Every tree reader shares the same entry points — the reader is the second argument:
+Every reader shares the same entry points — the reader is the second argument:
 
 ```julia
-read(filename, Node)     # or LazyNode, or FlatNode
-parse(str, Node)         # or LazyNode, or FlatNode
+read(filename, Node)     # or LazyNode, FlatNode, Cursor
+parse(str, Node)         # or LazyNode, FlatNode, Cursor
 ```
 
-`Cursor` is constructed directly: `Cursor(str)` (equivalently `parse(Cursor, str)`), and from a file via `Cursor(read(filename, String))`.
+`Cursor` can also be constructed directly from any `AbstractString`: `Cursor(str)`.
 
 <br>
 
@@ -200,7 +200,7 @@ while next!(cur) !== nothing
 end
 ```
 
-From a file: `Cursor(read(filename, String))`. `Cursor` accepts any `AbstractString`, including a `StringView` over `Mmap` for files too large for the heap (same recipe as under `LazyNode` below).
+From a file or stream: `read(filename, Cursor)` / `read(io, Cursor)`, with the same byte-level BOM normalization as the tree readers (UTF-8 BOM strip, UTF-16 transcoding). The `Cursor(str)` constructor also accepts any `AbstractString` directly, including a `StringView` over `Mmap` for files too large for the heap (same recipe as under `LazyNode` below).
 
 Two structured helpers carry the depth bookkeeping for you: `for_each_child(f, cur)` applies `f` to each *immediate* child of the current node (nestable — composing calls gives a full depth-first walk), and `skip_element!(cur)` jumps past the current element's entire subtree in one byte-level scan — the cheap way to classify nodes without tokenizing their contents. `@for_each_child` is the inlined-body macro form for hot extraction loops, and `Cursor(data, startpos)` starts a cursor at a known byte offset to walk just a subtree.
 
