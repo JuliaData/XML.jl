@@ -30,11 +30,15 @@ end
 
 """
     Cursor(data::AbstractString)
-    parse(Cursor, data::AbstractString)
+    parse(data::AbstractString, Cursor)
+    read(filename::AbstractString, Cursor)
+    read(io::IO, Cursor)
 
 A forward, in-place [`StAX`-style] pull cursor over the XML `data`. Advance it
 with [`next!`](@ref); read the current position with [`nodetype`](@ref),
 [`tag`](@ref), [`value`](@ref), [`attributes`](@ref), [`depth`](@ref).
+(`parse(Cursor, data)` also works.) The `read` forms apply the same byte-level
+BOM normalization as the tree readers: UTF-8 BOM strip, UTF-16 LE/BE transcoding.
 
 The cursor is a single mutable object reused across the whole walk. See the
 aliasing-contract note on [`next!`](@ref).

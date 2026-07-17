@@ -5,6 +5,16 @@ All notable changes to XML.jl will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`parse(str, Cursor)`, `read(filename, Cursor)`, `read(io, Cursor)`** — `Cursor` gains the
+  tree readers' entry points: same argument order, and the `read` forms apply the same
+  byte-level BOM normalization (UTF-8 BOM strip, UTF-16 LE/BE transcoding; a BOM-less UTF-16
+  file now gets the named §4.3.3 error instead of a tokenizer error). `Cursor(str)` and
+  `parse(Cursor, str)` are unchanged (#89).
+
 ## [0.4.2] - 2026-07-16
 
 ### Added
