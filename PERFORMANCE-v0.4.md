@@ -21,10 +21,7 @@ Performance isn't one number — it splits by *what you do with the document*. 1
 | **XML.jl `Cursor`** | **54 ms** | **17 MiB** |
 | EzXML `StreamReader` | 67 ms | 35 MiB |
 
-Structured pull helpers keep scans cheap without hand-tracked depth: `for_each_child`
-applies a function to the *immediate* children of the current node (nestable — composing
-calls yields a full depth-first walk), and `skip_element!` jumps a whole subtree in one
-byte-level scan, so structural walks classify nodes without tokenizing their contents.
+Structured pull helpers keep scans cheap without hand-tracked depth: `for_each_child` applies a function to the *immediate* children of the current node (nestable — composing calls yields a full depth-first walk), and `skip_element!` jumps a whole subtree in one byte-level scan, so structural walks classify nodes without tokenizing their contents.
 
 **Full DOM** (parse + walk everything) — libxml2 wins the build; XML.jl materialises an 882 K-node Julia tree, EzXML a leaner C one:
 
@@ -47,15 +44,15 @@ byte-level scan, so structural walks classify nodes without tokenizing their con
 
 The lexer is allocation-free; **the whole libxml2 gap is *materialising* the native tree, not scanning it**.
 
-**`FlatNode` (v0.4.2, experimental) — the flat node store, realized.** The store this document originally sketched as future work now exists: one contiguous array of isbits records with index links instead of per-node pointers, an eager *read-only* alternative to the pointer-tree `Node`. Its edge is mostly constant-factor (denser packing, no per-node allocation, no Julia-GC mark-rescan of millions of objects); the one *asymptotic* part is external-memory / cache complexity — a document-order scan of a contiguous store costs Θ(n/B) cache-line transfers versus up to Θ(n) for a *scattered* tree (Aggarwal–Vitter 1988; Frigo et al. 1999). Measured on the same XMark document:
+**`FlatNode` (v0.4.2, experimental).** One contiguous array of isbits records with index links instead of per-node pointers — an eager *read-only* alternative to the pointer-tree `Node`. Most of its advantage is a better *constant factor*: it does the same O(n) work as the `Node` build, just with denser packing, no per-node allocation, and no Julia-GC mark-rescan of millions of objects. The asymptotics change only in the [external-memory (cache) model](https://en.wikipedia.org/wiki/External_memory_algorithm): a document-order scan of a contiguous store costs Θ(n/B) cache-line transfers versus up to Θ(n) for a *scattered* tree ([Aggarwal–Vitter 1988](https://dl.acm.org/doi/10.1145/48529.48535); [Frigo et al. 1999](https://en.wikipedia.org/wiki/Cache-oblivious_algorithm)). Measured on the same XMark document:
 
-| Full DOM, per reader | build | walk every node | extract all values | retained |
+| Full DOM, per reader | build | walk every node | extract all values | DOM size in memory |
 |---|--:|--:|--:|--:|
 | **`FlatNode`** | **50.5 ms** | **2.98 ms** | 10.2 ms | **54.9 MiB** |
 | `Node` | 93.7 ms | 5.8 ms | **6.3 ms** | 80.0 MiB |
 | EzXML (libxml2) | 37.9 ms | — | — | — |
 
-Build allocations: 73.7 MiB (`FlatNode`) vs 122.3 MiB (`Node`). The libxml2 *build* gap narrows from ~2–3× to ~1.3×, and traversal doubles its lead (contiguous scan); the one pattern where `Node` keeps an edge is pure value extraction on an already-built tree — direct field reads versus computed `SubString` views.
+Build allocations: 73.7 MiB (`FlatNode`) vs 122.3 MiB (`Node`), and the libxml2 *build* gap narrows from ~2–3× to ~1.3×. Beyond the cheaper build, access itself is faster on `FlatNode`: full walks run ~2× faster (the contiguous scan), and `parent`/`depth` are O(1) index hops where `Node` must search down from the root. The one pattern where `Node` keeps an edge is pure value extraction on an already-built tree (6.3 vs 10.2 ms): direct field reads beat computed `SubString` views.
 
 **Choose by access pattern:** stream / low-memory / read-only full-DOM / repeated traversal → **XML.jl**; a one-shot build-and-extract is the one job where a libxml2 binder still builds ~1.3× faster (was ~2–3× before `FlatNode`) — either way, pure Julia, no C dependency. Against its own past, v0.4 is **~4.8× faster and ~12× leaner than 0.3.9** (which used ~1.4 GiB for this file) — see [`benchmarks/profile.jl`](benchmarks/profile.jl), [`benchmarks/profile_vs_039.jl`](benchmarks/profile_vs_039.jl), [`benchmarks/compare.jl`](benchmarks/compare.jl).
 
