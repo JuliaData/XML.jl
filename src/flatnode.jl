@@ -36,7 +36,7 @@ half at `Cursor`'s GC cost*.
 
 !!! warning "Experimental"
     `FlatNode` is new and marked experimental while its usage settles in the dependent
-    ecosystem: API details may still change in a 0.4.x release. Feedback welcome in #82.
+    ecosystem: API details may still change in a 0.4.x release. Feedback welcome in #83.
 
     doc = parse(xml, FlatNode)          # or read(filename, FlatNode)
     root = only(eachelement(doc))

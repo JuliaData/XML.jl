@@ -1,6 +1,6 @@
 # XML.jl v0.4 — Performance
 
-The headline cross-library figures live in the [README](README.md#benchmarks). This document is the decomposition behind them — what XML.jl does by regime, and the theory that makes the lexer and parser "optimal".
+The headline cross-library figures live in the [README](README.md#benchmarks). This document is the decomposition behind them — what XML.jl does by access pattern, and the theory that makes the lexer and parser "optimal".
 
 XML parsing splits into two language-theory levels, and v0.4 hits the **asymptotic lower bound** of each — the sense in which the lexer and parser are "optimal". The gap to a C library like [libxml2](https://en.wikipedia.org/wiki/Libxml2) is constant-factor (C tuning, a leaner non-Julia-heap tree), not asymptotic — and only on full-DOM building; XML.jl is *faster* streaming (below).
 
@@ -10,7 +10,7 @@ XML parsing splits into two language-theory levels, and v0.4 hits the **asymptot
 
 **Julia-level constant factors.** The well-formedness level is a type parameter (`Val{W}`), so `:strict`/`:structural` checks are [dead-code-eliminated](https://en.wikipedia.org/wiki/Dead-code_elimination) when inactive (confirmed in the LLVM); `Node{S}` is parametric, so `parse(s, Node{SubString{String}})` keeps **zero-copy views** while `parse(s, Node)` owns `String`s; a `has_entities` flag skips entity decoding when a token holds no `&`.
 
-## By regime
+## By access pattern
 
 Performance isn't one number — it splits by *what you do with the document*. 14 MB [XMark](https://projects.cwi.nl/xmark/) file (XML.jl and EzXML walk the same ~882 K nodes); **lower is better.**
 
@@ -20,6 +20,11 @@ Performance isn't one number — it splits by *what you do with the document*. 1
 |---|--:|--:|
 | **XML.jl `Cursor`** | **54 ms** | **17 MiB** |
 | EzXML `StreamReader` | 67 ms | 35 MiB |
+
+Structured pull helpers keep scans cheap without hand-tracked depth: `for_each_child`
+applies a function to the *immediate* children of the current node (nestable — composing
+calls yields a full depth-first walk), and `skip_element!` jumps a whole subtree in one
+byte-level scan, so structural walks classify nodes without tokenizing their contents.
 
 **Full DOM** (parse + walk everything) — libxml2 wins the build; XML.jl materialises an 882 K-node Julia tree, EzXML a leaner C one:
 
@@ -40,12 +45,22 @@ Performance isn't one number — it splits by *what you do with the document*. 1
 | build the tree — the VPA | ~70 ms | 122 MiB |
 | traverse a built tree | 6 ms | 0 B |
 
-The lexer is allocation-free; **the whole libxml2 gap is *materialising* the native tree, not scanning it** — which a future flat node store (one contiguous array of records, index links instead of per-node pointers) could close, as an eager alternative to the pointer-tree `Node`. Its edge would be mostly constant-factor (denser packing, no per-node allocation, no Julia-GC mark-rescan of millions of objects); the one *asymptotic* part is external-memory / cache complexity — a document-order scan of a contiguous store costs Θ(n/B) cache-line transfers versus up to Θ(n) for a *scattered* tree (Aggarwal–Vitter 1988; Frigo et al. 1999), and only for sequential access.
+The lexer is allocation-free; **the whole libxml2 gap is *materialising* the native tree, not scanning it**.
 
-**Choose by regime:** stream / low-memory / repeated-traversal → **XML.jl**; one-shot full-DOM → a libxml2 binder; either way, pure Julia, no C dependency. Against its own past, v0.4 is **~4.8× faster and ~12× leaner than 0.3.9** (which used ~1.4 GiB for this file) — see [`benchmarks/profile.jl`](benchmarks/profile.jl), [`benchmarks/profile_vs_039.jl`](benchmarks/profile_vs_039.jl), [`benchmarks/compare.jl`](benchmarks/compare.jl).
+**`FlatNode` (v0.4.2, experimental) — the flat node store, realized.** The store this document originally sketched as future work now exists: one contiguous array of isbits records with index links instead of per-node pointers, an eager *read-only* alternative to the pointer-tree `Node`. Its edge is mostly constant-factor (denser packing, no per-node allocation, no Julia-GC mark-rescan of millions of objects); the one *asymptotic* part is external-memory / cache complexity — a document-order scan of a contiguous store costs Θ(n/B) cache-line transfers versus up to Θ(n) for a *scattered* tree (Aggarwal–Vitter 1988; Frigo et al. 1999). Measured on the same XMark document:
+
+| Full DOM, per reader | build | walk every node | extract all values | retained |
+|---|--:|--:|--:|--:|
+| **`FlatNode`** | **50.5 ms** | **2.98 ms** | 10.2 ms | **54.9 MiB** |
+| `Node` | 93.7 ms | 5.8 ms | **6.3 ms** | 80.0 MiB |
+| EzXML (libxml2) | 37.9 ms | — | — | — |
+
+Build allocations: 73.7 MiB (`FlatNode`) vs 122.3 MiB (`Node`). The libxml2 *build* gap narrows from ~2–3× to ~1.3×, and traversal doubles its lead (contiguous scan); the one pattern where `Node` keeps an edge is pure value extraction on an already-built tree — direct field reads versus computed `SubString` views.
+
+**Choose by access pattern:** stream / low-memory / read-only full-DOM / repeated traversal → **XML.jl**; a one-shot build-and-extract is the one job where a libxml2 binder still builds ~1.3× faster (was ~2–3× before `FlatNode`) — either way, pure Julia, no C dependency. Against its own past, v0.4 is **~4.8× faster and ~12× leaner than 0.3.9** (which used ~1.4 GiB for this file) — see [`benchmarks/profile.jl`](benchmarks/profile.jl), [`benchmarks/profile_vs_039.jl`](benchmarks/profile_vs_039.jl), [`benchmarks/compare.jl`](benchmarks/compare.jl).
 
 > **`:strict`** adds a character-range scan over text (a second O(content) pass), ~8× slower than `:structural` on text-heavy input; `:lenient` / `:structural` are unaffected.
 
 ---
 
-_Measured 2026-06-28/29, Apple M5 (single-threaded), Julia 1.12.6; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3), XMLDict 0.4.2. Sources: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl), [`benchmarks/profile.jl`](benchmarks/profile.jl)._
+_Measured 2026-06-28/29, Apple M5 (single-threaded), Julia 1.12.6; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3), XMLDict 0.4.2. Sources: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl), [`benchmarks/profile.jl`](benchmarks/profile.jl). The `FlatNode` table: measured 2026-07-17, XML.jl 0.4.2, same machine and Julia; source [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl)._
