@@ -25,6 +25,13 @@ end
 Base.read(filename::AbstractString, ::Type{Node}; wellformed::Symbol=:structural) = parse(String(_normalize_bom(read(filename))), Node; wellformed)
 Base.read(io::IO, ::Type{Node}; wellformed::Symbol=:structural) = parse(String(_normalize_bom(read(io))), Node; wellformed)
 
+# Cursor shares the tree readers' entry points (#89): same argument order, same byte-level
+# BOM normalization. The Cursor(str) constructor alone only drops an already-decoded U+FEFF,
+# so a UTF-16 file needs this path (like read(_, Node)) to be transcoded.
+Base.read(filename::AbstractString, ::Type{Cursor}) = Cursor(String(_normalize_bom(read(filename))))
+Base.read(io::IO, ::Type{Cursor}) = Cursor(String(_normalize_bom(read(io))))
+Base.parse(xml::AbstractString, ::Type{Cursor}) = Cursor(String(xml))
+
 #-----------------------------------------------------------------------------# parse
 # A leading U+FEFF (BOM as a character) isn't content — drop it so a BOM'd in-memory string
 # parses cleanly. (The read path strips the BOM bytes via _normalize_bom; this covers

@@ -272,4 +272,48 @@ using XML: Cursor, next!, for_each_child, @for_each_child, skip_element!, eof, n
         c = at_v("<r><v>9</v></r>"); is_simple_value(c)
         @test String(tag(c)) == "v" && is_simple_value(c) == "9"
     end
+
+    @testset "entry points align with the tree readers (#89)" begin
+        xml = """<?xml version="1.0"?><root a="é"><child>texte</child></root>"""
+        eltags(cur) = (ts = String[];
+                       while next!(cur) !== nothing
+                           nodetype(cur) === XML.Element && push!(ts, String(tag(cur)))
+                       end;
+                       ts)
+
+        # reader-second parse, like the other readers
+        @test eltags(parse(xml, Cursor)) == eltags(Cursor(xml)) == ["root", "child"]
+
+        # read from a stream
+        @test eltags(read(IOBuffer(xml), Cursor)) == ["root", "child"]
+
+        # read from a file: same acceptance as read(filename, Node) — BOM handling included
+        # (UTF-8 BOM strip; UTF-16 LE/BE transcoding, which the Cursor(str) constructor's
+        # decoded-U+FEFF drop alone cannot provide)
+        dir = mktempdir()
+        u16 = transcode(UInt16, xml)
+        variants = ["utf8_plain" => Vector{UInt8}(xml),
+                    "utf8_bom"   => vcat([0xEF, 0xBB, 0xBF], Vector{UInt8}(xml)),
+                    "utf16_le"   => collect(reinterpret(UInt8, vcat(UInt16(0xFEFF), u16))),
+                    "utf16_be"   => collect(reinterpret(UInt8, bswap.(vcat(UInt16(0xFEFF), u16))))]
+        for (name, bytes) in variants
+            f = joinpath(dir, name * ".xml")
+            write(f, bytes)
+            cur = read(f, Cursor)
+            seen = String[]
+            aval = nothing
+            while next!(cur) !== nothing
+                nodetype(cur) === XML.Element || continue
+                push!(seen, String(tag(cur)))
+                tag(cur) == "root" && (aval = String(attributes(cur)["a"]))
+            end
+            @test seen == ["root", "child"]
+            @test aval == "é"
+        end
+
+        # BOM-less UTF-16: the named §4.3.3 diagnostic, not a tokenizer error
+        nobom = joinpath(dir, "utf16_nobom.xml")
+        write(nobom, collect(reinterpret(UInt8, u16)))
+        @test_throws "UTF-16 without a BOM" read(nobom, Cursor)
+    end
 end
