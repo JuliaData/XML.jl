@@ -12,8 +12,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`parse(str, Cursor)`, `read(filename, Cursor)`, `read(io, Cursor)`** — `Cursor` gains the
   tree readers' entry points: same argument order, and the `read` forms apply the same
   byte-level BOM normalization (UTF-8 BOM strip, UTF-16 LE/BE transcoding; a BOM-less UTF-16
-  file now gets the named §4.3.3 error instead of a tokenizer error). `Cursor(str)` and
-  `parse(Cursor, str)` are unchanged (#89).
+  file now gets the explicit `"UTF-16 without a BOM is not well-formed (XML 1.0 §4.3.3)"`
+  error instead of a cryptic tokenizer one). `Cursor(str)` and `parse(Cursor, str)` are
+  unchanged (#89).
 
 ## [0.4.2] - 2026-07-16
 
