@@ -43,7 +43,14 @@ XML.jl ships four readers behind one set of accessors (`nodetype`, `tag`, `attri
 | `FlatNode` *(experimental)* | yes, compact (columnar) | O(1), paid once | no | ~0 |
 | `Node` | yes, objects | O(1), paid once | **yes** | high |
 
-Rules of thumb: one forward pass → `Cursor` (fastest scan, ~zero allocation) · extract a little from a large document → `LazyNode` (opening is free; you pay per node visited) · read-heavy full document, repeated traversals → `FlatNode` (the random-access read API of `Node` at almost none of its GC cost: fastest build and walk, O(1) revisits) · build or edit documents → `Node`. `FlatNode` and `LazyNode` retain the source string as long as any handle lives. Measured numbers: see [Performance by access pattern](#performance-by-access-pattern).
+Rules of thumb:
+
+- one forward pass → `Cursor` (fastest scan, ~zero allocation)
+- extract a little from a large document → `LazyNode` (opening is free; you pay per node touched)
+- read-heavy full document, repeated traversals → `FlatNode` (the random-access read API of `Node` at almost none of its GC cost: fastest build and walk, O(1) revisits)
+- build or edit documents → `Node`
+
+`FlatNode` and `LazyNode` retain the source string as long as any handle lives. Measured numbers: see [Performance by access pattern](#performance-by-access-pattern).
 
 <br>
 
@@ -261,11 +268,13 @@ for el in eachelement(root)
 end
 ```
 
-Same read-only accessor surface as the other readers, plus `sourcetext`. By design: read-only (build with `Node`); any live handle retains the whole store and source string; documents are limited to 2 GiB. `Node(flatnode)` materializes a handle (and its subtree) as a mutable `Node`; `XML.write` accepts a `FlatNode` directly. Positional identity — "same node of the same document" — is `issamenode(a, b)`.
+Same read-only accessor surface as the other readers, including `sourcetext(node)` — the zero-copy `SubString` of a node's original source text, available on the two readers that retain the source (`FlatNode`, `LazyNode`) and not on `Node`. By design: read-only — creating or modifying documents is `Node`'s job; any live handle retains the whole store and source string; documents are limited to 2 GiB. `Node(flatnode)` materializes a handle (and its subtree) as a mutable `Node`; `XML.write` accepts a `FlatNode` directly. Positional identity — "same node of the same document" — is `issamenode(a, b)`.
 
 > **Experimental** — new in v0.4.2: API details may still change in a 0.4.x release while ecosystem usage settles. Feedback welcome on the [issue tracker](https://github.com/JuliaData/XML.jl/issues).
 
-### Under the hood
+<br>
+
+# Under the hood
 
 All four readers sit on `XML.XMLTokenizer`, a zero-allocation streaming tokenizer (a token is a kind plus a byte range into the source). It is usable directly for token-level tooling — see the `XML.XMLTokenizer` module docstrings.
 
@@ -326,6 +335,6 @@ Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl). Data: `books.xml
 
 EzXML and LightXML wrap libxml2 (C): faster on raw parse, slower on in-Julia traversal.
 
-For the per-regime decomposition (streaming / full-DOM / stage breakdown) and the theory behind these numbers, see [**PERFORMANCE-v0.4.md**](PERFORMANCE-v0.4.md).
+For the per-access-pattern decomposition (streaming / partial reads / full DOM / stage breakdown) and the theory behind these numbers, see [**PERFORMANCE-v0.4.md**](PERFORMANCE-v0.4.md).
 
 _Measured 2026-06-28/29, Apple M5 (single-threaded), Julia 1.12.6; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3), XMLDict 0.4.2. Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl)._
