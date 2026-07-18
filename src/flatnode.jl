@@ -36,7 +36,8 @@ random-access read API of `Node` at almost none of its GC cost.
 
 !!! warning "Experimental"
     `FlatNode` is new and marked experimental while its usage settles in the dependent
-    ecosystem: API details may still change in a 0.4.x release. Feedback welcome in #83.
+    ecosystem: API details may still change in a 0.4.x release. Feedback is welcome on
+    the issue tracker.
 
     doc = parse(xml, FlatNode)          # or read(filename, FlatNode)
     root = only(eachelement(doc))

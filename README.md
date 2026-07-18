@@ -219,7 +219,7 @@ doc = read("file.xml", LazyNode)
 
 `LazyNode` supports the same read-only interface as `Node`: `nodetype`, `tag`, `attributes`, `value`, `children`, `is_simple`, `simple_value`, plus integer and string indexing.
 
-`LazyNode` is for *partial* reads only: opening is a no-op wrapper (~0.5 µs whatever the file size) and you pay per node visited — unbeatable for touching a fraction of a large document. Walking the *whole* tree re-tokenizes each level, which comes out slower than building `FlatNode` or `Node` outright and walking that (264 ms vs ~54/~100 ms build+walk on the 14 MB corpus below) — see [Performance by access pattern](#performance-by-access-pattern).
+`LazyNode` is for *partial* reads only: opening is a no-op wrapper (~0.5 µs whatever the file size) and you pay per node *touched* — a touch spans the node's subtree, and nothing is cached, so repeated visits pay the full price again. Unbeatable for leaf-ward hops and kilobyte-scale documents; for whole-tree walks (264 ms vs ~54/~100 ms build+walk on the 14 MB corpus below), repeated queries, or plucking one child out of a huge container, build `FlatNode` or `Node` instead — see [Performance by access pattern](#performance-by-access-pattern).
 
 For streaming and high-throughput workloads, several extra accessors avoid materializing intermediate collections:
 
@@ -263,7 +263,7 @@ end
 
 Same read-only accessor surface as the other readers, plus `sourcetext`. By design: read-only (build with `Node`); any live handle retains the whole store and source string; documents are limited to 2 GiB. `Node(flatnode)` materializes a handle (and its subtree) as a mutable `Node`; `XML.write` accepts a `FlatNode` directly. Positional identity — "same node of the same document" — is `issamenode(a, b)`.
 
-> **Experimental** — new in v0.4.2: API details may still change in a 0.4.x release while ecosystem usage settles. Feedback welcome in [#83](https://github.com/JuliaData/XML.jl/issues/83).
+> **Experimental** — new in v0.4.2: API details may still change in a 0.4.x release while ecosystem usage settles. Feedback welcome on the [issue tracker](https://github.com/JuliaData/XML.jl/issues).
 
 ### Under the hood
 
