@@ -211,7 +211,7 @@ From a file or stream: `read(filename, Cursor)` / `read(io, Cursor)`, with the s
 
 Two structured helpers carry the depth bookkeeping for you: `for_each_child(f, cur)` applies `f` to each *immediate* child of the current node (nestable — composing calls gives a full depth-first walk), and `skip_element!(cur)` jumps past the current element's entire subtree in one byte-level scan — the cheap way to classify nodes without tokenizing their contents. `@for_each_child` is the inlined-body macro form for hot extraction loops, and `Cursor(data, startpos)` starts a cursor at a known byte offset to walk just a subtree.
 
-A `Cursor` is one object that *mutates* as it advances: every variable referring to it sees its current position, so read what you need while the loop is on the node. To keep a node beyond further `next!` calls, take an immutable snapshot of the position with `LazyNode(cur)` — the accumulate-while-scanning idiom: `push!(found, LazyNode(cur))` keeps each hit, where `push!(found, cur)` would collect many references to one moved object. (XLSX.jl uses exactly this snapshot to hold on to `<sheetData>` before `skip_element!` jumps past it.)
+A `Cursor` is one object that *mutates* as it advances: every variable referring to it sees its current position, so read what you need while the loop is on the node. To keep a node beyond further `next!` calls, take an immutable snapshot of the position with `LazyNode(cur)` — the accumulate-while-scanning idiom: `push!(found, LazyNode(cur))` keeps each hit, where `push!(found, cur)` would collect many references to one moved object. (XLSX.jl v0.12 uses exactly this snapshot to hold on to `<sheetData>` before `skip_element!` jumps past it.)
 
 <br>
 
