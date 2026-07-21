@@ -289,7 +289,7 @@ for el in eachelement(root)
 end
 ```
 
-Same read-only accessor surface as the other readers, including `sourcetext(node)` — the zero-copy `SubString` of a node's original source text, available on the two readers that retain the source (`FlatNode`, `LazyNode`) and not on `Node`. By design: read-only — creating or modifying documents is `Node`'s job; any live handle retains the whole store and source string; documents are limited to 2 GiB. `Node(flatnode)` materializes a handle (and its subtree) as a mutable `Node`; `XML.write` accepts a `FlatNode` directly. Positional identity — "same node of the same document" — is `issamenode(a, b)`.
+Same read-only accessor surface as the other readers, including `sourcetext(node)` — the zero-copy `SubString` of a node's original source text, available on the two readers that retain the source (`FlatNode`, `LazyNode`) and not on `Node`. By design: read-only — creating or modifying documents is `Node`'s job; any live handle retains the whole store and source string; documents are limited to 2 GiB. `Node(flatnode)` materializes a handle (and its subtree) as a mutable `Node`; `XML.write` accepts a `FlatNode` directly. Positional identity — "same node of the same document" — is `issamenode(a, b)`, defined like `sourcetext` for the two handle readers (`FlatNode`, `LazyNode`); it does not apply to `Node`, a self-contained value with no document anchor.
 
 > **Experimental** — new in v0.4.2: API details may still change in a 0.4.x release while ecosystem usage settles. Feedback welcome on the [issue tracker](https://github.com/JuliaData/XML.jl/issues).
 
