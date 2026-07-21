@@ -16,17 +16,24 @@ using XML
 filename = joinpath(dirname(pathof(XML)), "..", "test", "data", "books.xml")
 
 doc = read(filename, Node)
+# Document (4 children)
 
 children(doc)
-# 2-Element Vector{Node}:
-#  Node Declaration <?xml version="1.0"?>
-#  Node Element <catalog> (12 children)
+# 4-element Vector{Node{String}}:
+#  Declaration <?xml version="1.0"?>
+#  Text "\n"
+#  Element <catalog> (25 children)
+#  Text "\n"
+```
 
-doc[end]  # The root node
-# Node Element <catalog> (12 children)
+The `Text "\n"` children are real: whitespace between elements is part of the document, and XML.jl 0.4 keeps it (0.3 dropped it — see the [migration guide](MIGRATING_TO_v0.4.md)). Use `elements` (or the lazy iterator `eachelement`) when you want the child *elements* only:
 
-doc[end][2]  # Second child of root
-# Node Element <book id="bk102"> (6 children)
+```julia
+catalog = only(elements(doc))  # the root element
+# Element <catalog> (25 children)
+
+elements(catalog)[2]  # second <book> element
+# Element <book id="bk102"> (13 children)
 ```
 
 <br>
@@ -119,7 +126,7 @@ node = h.parent(
     h.child("first child content", id="id1"),
     h.child("second child content", id="id2")
 )
-# Node Element <parent> (2 children)
+# Element <parent> (2 children)
 
 print(XML.write(node))
 # <parent>
