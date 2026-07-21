@@ -29,22 +29,22 @@ Structured pull helpers keep scans cheap without hand-tracked depth: `for_each_c
 
 | Full DOM extract | time | memory |
 |---|--:|--:|
-| EzXML (libxml2) | **62 ms** | **54 MiB** |
-| LightXML (elements only) | 62 ms | 57 MiB |
-| XML.jl (`SubString`, zero-copy) | 110 ms | 120 MiB |
-| XML.jl (`String`) | 135 ms | 122 MiB |
+| EzXML (libxml2) | **61 ms** | **54 MiB** |
+| LightXML (elements only) | 63 ms | 57 MiB |
+| XML.jl (`SubString`, zero-copy) | 103 ms | 120 MiB |
+| XML.jl (`String`) | 115 ms | 122 MiB |
 | XML.jl **v0.3.9** (previous release) | 530 ms | 1422 MiB |
 
-**Decomposed** (XML.jl):
+**Decomposed** (XML.jl, the `String` variant — the stages sum to its row above):
 
 | Stage | time | allocated |
 |---|--:|--:|
 | read file (I/O) | 0.6 ms | — |
-| **lex — the DFA** | **37 ms** | **0 B** |
-| build the tree — the VPA | ~70 ms | 122 MiB |
-| traverse a built tree | 6 ms | 0 B |
+| **lex — the DFA** | **36 ms** | **0 B** |
+| build the tree — the VPA | ~73 ms | 122 MiB |
+| traverse a built tree | 7 ms | 0 B |
 
-The lexer is allocation-free; **the whole libxml2 gap is *materialising* the native tree, not scanning it**.
+The lexer is allocation-free; **the whole libxml2 gap is *materialising* the native tree, not scanning it** — and ~26 ms of the build is garbage-collector time for the 882 K fresh objects.
 
 **`FlatNode` (v0.4.2, experimental).** One contiguous array of isbits records with index links instead of per-node pointers — an eager *read-only* alternative to the pointer-tree `Node`. Most of its advantage is a better *constant factor*: it does the same O(n) work as the `Node` build, just with denser packing, no per-node allocation, and no Julia-GC mark-rescan of millions of objects. The asymptotics change only in the [external-memory model](https://en.wikipedia.org/wiki/External_memory_algorithm) ([Aggarwal–Vitter 1988](https://dl.acm.org/doi/10.1145/48529.48535)) — the model of a *two-level memory hierarchy*, formulated for disk vs RAM and applied here to CPU cache vs RAM: it counts memory-block *transfers* instead of instructions, with **B** defined as how many records fit in one transferred block. A document-order scan of a contiguous store moves Θ(n/B) blocks — one per block-full of records — while a pointer tree *scattered* across the heap can move up to Θ(n), one per node. Concretely, a `_FlatRec` is 40 bytes — ten `Int32`-sized fields (kind, three tree links, tag span, value span, attribute range; 32-bit throughout because the 2 GiB source bound lets every offset and index fit an `Int32`, halving the store) — so a 64–128-byte cache line carries one to three records. And the scan is [*cache-oblivious*](https://en.wikipedia.org/wiki/Cache-oblivious_algorithm) ([Frigo et al. 1999](https://en.wikipedia.org/wiki/Cache-oblivious_algorithm)): sequential access achieves Θ(n/B) for *every* B simultaneously, so neither the code nor the analysis needs the actual line size — the bound holds at each level of the cache hierarchy at once, hardware prefetchers included. Measured on the same XMark document:
 
@@ -56,10 +56,10 @@ The lexer is allocation-free; **the whole libxml2 gap is *materialising* the nat
 
 Build allocations: 73.7 MiB (`FlatNode`) vs 122.3 MiB (`Node`), and the libxml2 *build* gap narrows from ~2–3× to ~1.3×. Beyond the cheaper build, access itself is faster on `FlatNode`: full walks run ~2× faster (the contiguous scan), and `parent`/`depth` are O(1) index hops where `Node` must search down from the root. The one pattern where `Node` keeps an edge is pure value extraction on an already-built tree (6.3 vs 10.2 ms): direct field reads beat computed `SubString` views.
 
-**Choose by access pattern:** stream / low-memory / read-only full-DOM / repeated traversal → **XML.jl**; a one-shot build-and-extract is the one job where a libxml2 binder still builds ~1.3× faster (was ~2–3× before `FlatNode`) — either way, pure Julia, no C dependency. Against its own past, v0.4 is **~4.8× faster and ~12× leaner than 0.3.9** (which used ~1.4 GiB for this file) — see [`benchmarks/profile.jl`](benchmarks/profile.jl), [`benchmarks/profile_vs_039.jl`](benchmarks/profile_vs_039.jl), [`benchmarks/compare.jl`](benchmarks/compare.jl).
+**Choose by access pattern:** stream / low-memory / read-only full-DOM / repeated traversal → **XML.jl**; a one-shot build-and-extract is the one job where a libxml2 binder still builds ~1.3× faster (was ~2–3× before `FlatNode`) — either way, pure Julia, no C dependency. Against its own past, v0.4 is **~5× faster and ~12× leaner than 0.3.9** (which used ~1.4 GiB for this file) — see [`benchmarks/profile.jl`](benchmarks/profile.jl), [`benchmarks/profile_vs_039.jl`](benchmarks/profile_vs_039.jl), [`benchmarks/compare.jl`](benchmarks/compare.jl).
 
 > **`:strict`** adds a character-range scan over text (a second O(content) pass), ~8× slower than `:structural` on text-heavy input; `:lenient` / `:structural` are unaffected.
 
 ---
 
-_Measured 2026-06-28/29, Apple M5 (single-threaded), Julia 1.12.6; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3), XMLDict 0.4.2. Sources: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl), [`benchmarks/profile.jl`](benchmarks/profile.jl). The `FlatNode` table: measured 2026-07-17, XML.jl 0.4.2, same machine and Julia; source [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl)._
+_Stream, Full-DOM and Decomposed tables: measured 2026-07-22 (the `v0.3.9` row: 2026-06-28), Apple M5 (single-threaded), Julia 1.12.6; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3). Source: [`benchmarks/profile.jl`](benchmarks/profile.jl). The `FlatNode` table: measured 2026-07-17, XML.jl 0.4.2, same machine and Julia; source [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl)._
