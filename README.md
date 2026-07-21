@@ -158,7 +158,21 @@ XML.write(io::IO, node)            # write to stream
 XML.write(node)                    # return String
 ```
 
-`XML.write` respects `xml:space="preserve"` on elements, suppressing automatic indentation.
+`XML.write` respects `xml:space="preserve"` on elements, suppressing automatic indentation — whitespace between child elements is written verbatim instead of being reformatted:
+
+```julia
+with    = parse("<msg xml:space=\"preserve\"><b>A</b>   <b>B</b></msg>", Node)
+without = parse("<msg><b>A</b>   <b>B</b></msg>", Node)
+
+print(XML.write(only(elements(with))))    # byte-identical round-trip
+# <msg xml:space="preserve"><b>A</b>   <b>B</b></msg>
+
+print(XML.write(only(elements(without)))) # pretty-printed — the three spaces are gone
+# <msg>
+#   <b>A</b>
+#   <b>B</b>
+# </msg>
+```
 
 `XML.write` accepts `Node`, `LazyNode` (zero-copy of the original source; `normalize=true` re-parses and pretty-prints) and `FlatNode` (materializes through `Node` first). *Building* and *editing* documents is `Node`-only — the other readers are read-only.
 
