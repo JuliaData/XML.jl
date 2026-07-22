@@ -21,6 +21,8 @@ Performance isn't one number — it splits by *what you do with the document*. 1
 | **XML.jl `Cursor`** | **54 ms** | **17 MiB** |
 | EzXML `StreamReader` | 67 ms | 35 MiB |
 
+_Table 1 — streaming: events only, no tree built._
+
 Structured pull helpers keep scans cheap without hand-tracked depth: `for_each_child` applies a function to the *immediate* children of the current node (nestable — composing calls yields a full depth-first walk), and `skip_element!` jumps a whole subtree in one byte-level scan, so structural walks classify nodes without tokenizing their contents.
 
 **Partial reads** (`LazyNode`) — opening is a no-op wrapper (~0.5 µs on this 14 MB file) and nothing is ever cached: each visit re-tokenizes and rebuilds its small handles (~1 KB allocated per repeated look-up), so costs repeat per visit. One measured caveat shapes the pattern: yielding a child currently *pre-skips* (tokenizes) that child's whole subtree to position for its sibling, so merely touching this document's root element costs ~35 ms (its subtree is nearly the whole file) and a 9-node descent to the first `<item>` ~50 ms. Partial reads are therefore cheap when the *touched* nodes have small spans — leaf-ward hops, flat or kilobyte-scale documents (typical web-service responses parse in well under a millisecond) — while on a document dominated by one huge container, a `FlatNode`/`Node` build amortizes almost immediately, and *repeated* look-ups tip the scale even faster.
@@ -35,7 +37,9 @@ Structured pull helpers keep scans cheap without hand-tracked depth: `for_each_c
 | XML.jl (`String`) | 115 ms | 122 MiB |
 | XML.jl **v0.3.9** (previous release) | 530 ms | 1422 MiB |
 
-**Decomposed** (XML.jl, the `String` variant — the stages sum to its row above):
+_Table 2 — full-DOM extraction (parse + pull every tag/text), cross-library._
+
+**Decomposed** (XML.jl, the `String` variant — the stages sum to its Table 2 row):
 
 | Stage | time | allocated |
 |---|--:|--:|
@@ -43,6 +47,8 @@ Structured pull helpers keep scans cheap without hand-tracked depth: `for_each_c
 | **lex — the DFA** | **36 ms** | **0 B** |
 | build the tree — the VPA | ~73 ms | 122 MiB |
 | traverse a built tree | 7 ms | 0 B |
+
+_Table 3 — the XML.jl pipeline, decomposed (`String` variant)._
 
 The lexer is allocation-free; **the whole libxml2 gap is *materialising* the native tree, not scanning it**. Nor are the build's ~73 ms all construction: ~26 ms *of* them are garbage-collector pauses (BenchmarkTools' per-sample GC time) — the allocation-free lex cannot trigger a collection, so every GC pause inside a parse lands in the build, the toll of 882 K fresh objects.
 
@@ -54,7 +60,7 @@ The lexer is allocation-free; **the whole libxml2 gap is *materialising* the nat
 | `Node` | 93.7 ms | 5.8 ms | **6.3 ms** | 80.0 MiB |
 | EzXML (libxml2) | 37.9 ms | — | — | — |
 
-_This table's conditions differ from the ones above — minimum over repeated runs (not median), `wellformed = :lenient` (not the default `:structural`), and *DOM size* is the **retained** live tree (`Base.summarysize`), not allocations — which is why `Node` (the same `String` variant) shows 93.7 ms / 80 MiB here vs ~109 ms parse / 122 MiB allocated above. Compare within a table, not across._
+_Table 4 — per-reader full-DOM comparison. Its conditions differ from Tables 1–3: minimum over repeated runs (not median), `wellformed = :lenient` (not the default `:structural`), its *build* column is the **whole `parse` call** — Table 3's lex **and** build stages together — and *DOM size* is the **retained** live tree (`Base.summarysize`), not allocations. That is why `Node` (the same `String` variant) shows 93.7 ms / 80 MiB here vs 36 + ~73 = 109 ms full parse / 122 MiB allocated in Tables 2–3. Compare within a table, not across._
 
 Build allocations: 73.7 MiB (`FlatNode`) vs 122.3 MiB (`Node`), and the libxml2 *build* gap narrows from ~2–3× to ~1.3×. Beyond the cheaper build, access itself is faster on `FlatNode`: full walks run ~2× faster (the contiguous scan), and `parent`/`depth` are O(1) index hops where `Node` must search down from the root. The one pattern where `Node` keeps an edge is pure value extraction on an already-built tree (6.3 vs 10.2 ms): direct field reads beat computed `SubString` views.
 
