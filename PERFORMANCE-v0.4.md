@@ -87,6 +87,7 @@ Build allocations: 73.7 MiB (`FlatNode`) vs 122.3 MiB (`Node`), and the libxml2 
 
 Stream / low-memory / read-only full-DOM / repeated traversal → **XML.jl**; a one-shot build-and-extract is the one job where a libxml2 binder still builds ~1.4× faster (was ~2.7× before `FlatNode`) — either way, pure Julia, no C dependency. Against its own past, v0.4 is **~5× faster and ~12× leaner than 0.3.9** (which used ~1.4 GiB for this file) — see [`benchmarks/profile.jl`](benchmarks/profile.jl), [`benchmarks/profile_vs_039.jl`](benchmarks/profile_vs_039.jl), [`benchmarks/compare.jl`](benchmarks/compare.jl).
 
+> [!NOTE]
 > **`:strict`** adds a character-range scan over text (a second O(content) pass); the overhead scales with the document's *text share* — ~1.1× on the markup-heavy XMark corpus, up to ~20× on a pure-text document; `:lenient` / `:structural` are unaffected.
 
 ---
