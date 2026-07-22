@@ -16,17 +16,24 @@ using XML
 filename = joinpath(dirname(pathof(XML)), "..", "test", "data", "books.xml")
 
 doc = read(filename, Node)
+# Document (4 children)
 
 children(doc)
-# 2-Element Vector{Node}:
-#  Node Declaration <?xml version="1.0"?>
-#  Node Element <catalog> (12 children)
+# 4-element Vector{Node{String}}:
+#  Declaration <?xml version="1.0"?>
+#  Text "\n"
+#  Element <catalog> (25 children)
+#  Text "\n"
+```
 
-doc[end]  # The root node
-# Node Element <catalog> (12 children)
+The `Text "\n"` children are real: whitespace between elements is part of the document, and XML.jl 0.4 keeps it (0.3 dropped it — see the [migration guide](MIGRATING_TO_v0.4.md)). Use `elements` (or the lazy iterator `eachelement`) when you want the child *elements* only:
 
-doc[end][2]  # Second child of root
-# Node Element <book id="bk102"> (6 children)
+```julia
+catalog = only(elements(doc))  # the root element
+# Element <catalog> (25 children)
+
+elements(catalog)[2]  # second <book> element
+# Element <book id="bk102"> (13 children)
 ```
 
 <br>
@@ -43,10 +50,14 @@ XML.jl ships four readers behind one set of accessors (`nodetype`, `tag`, `attri
 | `FlatNode` *(experimental)* | yes, compact (columnar) | O(1), paid once | no | ~0 |
 | `Node` | yes, objects | O(1), paid once | **yes** | high |
 
-Rules of thumb: one forward pass → `Cursor` · extract a little, memory-tight → `LazyNode` ·
-read-heavy full document, repeated traversals → `FlatNode` (*`Node`'s read half at `Cursor`'s
-GC cost*) · build or edit documents → `Node`. `FlatNode` and `LazyNode` retain the source
-string as long as any handle lives.
+Rules of thumb:
+
+- one forward pass → `Cursor` (fastest scan, ~zero allocation)
+- extract a little from a large document → `LazyNode` (opening is free; you pay per node touched)
+- read-heavy full document, repeated traversals → `FlatNode` (the random-access read API of `Node` at almost none of its GC cost: fastest build and walk, O(1) revisits)
+- build or edit documents → `Node`
+
+`FlatNode` and `LazyNode` retain the source string as long as any handle lives. Measured numbers: see [Performance by access pattern](#performance-by-access-pattern).
 
 <br>
 
@@ -115,7 +126,7 @@ node = h.parent(
     h.child("first child content", id="id1"),
     h.child("second child content", id="id2")
 )
-# Node Element <parent> (2 children)
+# Element <parent> (2 children)
 
 print(XML.write(node))
 # <parent>
@@ -128,13 +139,14 @@ print(XML.write(node))
 
 # Reading
 
-```julia
-# From a file:
-read(filename, Node)
+Every reader shares the same entry points — the reader is the second argument:
 
-# From a string:
-parse(str, Node)
+```julia
+read(filename, Node)     # or LazyNode, FlatNode, Cursor
+parse(str, Node)         # or LazyNode, FlatNode, Cursor
 ```
+
+`Cursor` can also be constructed directly from any `AbstractString`: `Cursor(str)`.
 
 <br>
 
@@ -146,7 +158,23 @@ XML.write(io::IO, node)            # write to stream
 XML.write(node)                    # return String
 ```
 
-`XML.write` respects `xml:space="preserve"` on elements, suppressing automatic indentation.
+`XML.write` respects `xml:space="preserve"` on elements, suppressing automatic indentation — whitespace between child elements is written verbatim instead of being reformatted:
+
+```julia
+with    = parse("<msg xml:space=\"preserve\"><b>A</b>   <b>B</b></msg>", Node)
+without = parse("<msg><b>A</b>   <b>B</b></msg>", Node)
+
+print(XML.write(only(elements(with))))    # byte-identical round-trip
+# <msg xml:space="preserve"><b>A</b>   <b>B</b></msg>
+
+print(XML.write(only(elements(without)))) # pretty-printed — the three spaces are gone
+# <msg>
+#   <b>A</b>
+#   <b>B</b>
+# </msg>
+```
+
+`XML.write` accepts `Node`, `LazyNode` (zero-copy of the original source; `normalize=true` re-parses and pretty-prints) and `FlatNode` (materializes through `Node` first). *Building* and *editing* documents is `Node`-only — the other readers are read-only.
 
 <br>
 
@@ -189,28 +217,22 @@ xpath(root, "//b/text()")    # Text nodes inside all <b>s
 
 <br>
 
-# Streaming Tokenizer
+# `Cursor`
 
-For large files or when you need fine-grained control, `XML.XMLTokenizer` provides a streaming tokenizer that yields tokens without building a DOM. Token kinds live in the `XML.XMLTokenizer.TokenKinds` baremodule (e.g. `TokenKinds.OPEN_TAG`, `TokenKinds.TEXT`).
+The forward, StAX-style pull reader: one mutable cursor walks the document in document order — no tree, one tokenizing scan, ~zero allocation. Advance with `next!`; read the current position with the usual accessors (`nodetype`, `tag`, `attributes`, `value`, `depth`):
 
 ```julia
-using XML.XMLTokenizer: tokenize
-
-for token in tokenize("<root><child attr=\"val\">text</child></root>")
-    println(token.kind, " => ", repr(String(token.raw)))
+cur = Cursor(xml_string)
+while next!(cur) !== nothing
+    nodetype(cur) === Element && tag(cur) == "book" && println(attributes(cur))
 end
-# OPEN_TAG => "<root"
-# TAG_CLOSE => ">"
-# OPEN_TAG => "<child"
-# ATTR_NAME => "attr"
-# ATTR_VALUE => "\"val\""
-# TAG_CLOSE => ">"
-# TEXT => "text"
-# CLOSE_TAG => "</child"
-# TAG_CLOSE => ">"
-# CLOSE_TAG => "</root"
-# TAG_CLOSE => ">"
 ```
+
+From a file or stream: `read(filename, Cursor)` / `read(io, Cursor)`, with the same byte-level BOM normalization as the tree readers (UTF-8 BOM strip, UTF-16 transcoding). The `Cursor(str)` constructor also accepts any `AbstractString` directly, including a `StringView` over `Mmap` for files too large for the heap (same recipe as under `LazyNode` below).
+
+Two structured helpers carry the depth bookkeeping for you: `for_each_child(f, cur)` applies `f` to each *immediate* child of the current node (nestable — composing calls gives a full depth-first walk), and `skip_element!(cur)` jumps past the current element's entire subtree in one byte-level scan — the cheap way to classify nodes without tokenizing their contents. `@for_each_child` is the inlined-body macro form for hot extraction loops, and `Cursor(data, startpos)` starts a cursor at a known byte offset to walk just a subtree.
+
+A `Cursor` is one object that *mutates* as it advances: every variable referring to it sees its current position, so read what you need while the loop is on the node. To keep a node beyond further `next!` calls, take an immutable snapshot of the position with `LazyNode(cur)` — the accumulate-while-scanning idiom: `push!(found, LazyNode(cur))` keeps each hit, where `push!(found, cur)` would collect many references to one moved object. (XLSX.jl v0.12 uses exactly this snapshot to hold on to `<sheetData>` before `skip_element!` jumps past it.)
 
 <br>
 
@@ -224,6 +246,8 @@ doc = read("file.xml", LazyNode)
 ```
 
 `LazyNode` supports the same read-only interface as `Node`: `nodetype`, `tag`, `attributes`, `value`, `children`, `is_simple`, `simple_value`, plus integer and string indexing.
+
+`LazyNode` is for *partial* reads only: opening is a no-op wrapper (~0.5 µs whatever the file size) and you pay per node *touched* — a touch spans the node's subtree, and nothing is cached, so repeated visits pay the full price again. Unbeatable for leaf-ward hops and kilobyte-scale documents; for whole-tree walks (276 ms vs ~55/~106 ms build+walk on the 14 MB corpus below), repeated queries, or plucking one child out of a huge container, build `FlatNode` or `Node` instead — see [Performance by access pattern](#performance-by-access-pattern).
 
 For streaming and high-throughput workloads, several extra accessors avoid materializing intermediate collections:
 
@@ -240,7 +264,7 @@ XML.write(n; normalize=true) # re-parse + pretty-print, collapses source whitesp
 
 ### Memory-mapped files
 
-For very large files, combine `LazyNode` with memory mapping to avoid reading the entire file into heap memory:
+Memory mapping is optional — `LazyNode`'s laziness is about *node materialization*, and it pays off on in-memory strings just as well. For files too large to read into heap memory, combine it with a `StringView` over `Mmap`:
 
 ```julia
 using XML, Mmap, StringViews
@@ -250,6 +274,30 @@ doc = open("very_large.xml") do io
     parse(sv, LazyNode)
 end
 ```
+
+<br>
+
+# `FlatNode` *(experimental)*
+
+The whole document parsed once into a contiguous columnar store — the random-access read API of `Node` at almost none of its GC cost: fast build, O(1) random access and O(1) `parent`, and the garbage collector sees a handful of arrays instead of one object per node.
+
+```julia
+doc = parse(xml_string, FlatNode)     # or read("file.xml", FlatNode)
+root = only(eachelement(doc))
+for el in eachelement(root)
+    tag(el), attributes(el), value(el)
+end
+```
+
+Same read-only accessor surface as the other readers, including `sourcetext(node)` — the zero-copy `SubString` of a node's original source text, available on the two readers that retain the source (`FlatNode`, `LazyNode`) and not on `Node`. By design: read-only — creating or modifying documents is `Node`'s job; any live handle retains the whole store and source string; documents are limited to 2 GiB. `Node(flatnode)` materializes a handle (and its subtree) as a mutable `Node`; `XML.write` accepts a `FlatNode` directly. Positional identity — "same node of the same document" — is `issamenode(a, b)`, defined like `sourcetext` for the two handle readers (`FlatNode`, `LazyNode`); it does not apply to `Node`, a self-contained value with no document anchor.
+
+> **Experimental** — new in v0.4.2: API details may still change in a 0.4.x release while ecosystem usage settles. Feedback welcome on the [issue tracker](https://github.com/JuliaData/XML.jl/issues).
+
+<br>
+
+# Under the hood
+
+All four readers sit on `XML.XMLTokenizer`, a zero-allocation streaming tokenizer (a token is a kind plus a byte range into the source). It is usable directly for token-level tooling — see the `XML.XMLTokenizer` module docstrings.
 
 <br>
 
@@ -275,21 +323,39 @@ end
 
 <br>
 
+# Performance by access pattern
+
+One number cannot rank the readers — cost depends on what you do with the document. Same ~14 MB / 882 K-node XMark document as the cross-library table below, XML.jl v0.4.2 (source: [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl); **lower is better**; median of repeated runs at the default settings):
+
+| | build | walk every node | extract all values | DOM size in memory |
+|---|--:|--:|--:|--:|
+| `Cursor` | — (streams) | 35.1 ms (its one scan) | — | — (no DOM) |
+| `LazyNode` | ~0 (a wrapper) | 276 ms (re-tokenizes) | — | — (source only) |
+| `FlatNode` | 51.8 ms | 3.0 ms | 10.6 ms | 54.9 MiB |
+| `Node` | 99.9 ms | 6.3 ms | 6.5 ms | 80.0 MiB |
+| EzXML (libxml2) | 37.7 ms | — | — | — |
+
+Reading the table: `Cursor`'s walk *is* its parse — one tokenizing scan, nothing retained. `LazyNode` opens for free and pays per node visited — unbeatable for touching a *fraction* of a large document, and (as the walk column shows) the wrong tool for visiting all of it. `FlatNode` builds ~2× faster than `Node`, walks ~2× faster, holds ~30% less memory, and its `parent`/`depth` are O(1) where `Node` searches from the root; pure value extraction on an already-built tree is the one pattern where `Node`'s direct fields win. libxml2 still builds fastest — the remaining gap is materialization, not scanning (see [PERFORMANCE-v0.4.md](PERFORMANCE-v0.4.md)).
+
+_Measured 2026-07-22, Apple M5 (single-threaded), Julia 1.12.6, EzXML 1.2.3._
+
+<br>
+
 # Benchmarks
 
-Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl). Data: `books.xml` (~4 KB) and a generated XMark auction document (~14 MB). Median time, **lower is better.**
+Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl). Data: `books.xml` (~4 KB) and a generated XMark auction document (~14 MB). The XML.jl column uses `Node` throughout — the full mutable DOM, the like-for-like counterpart of the libxml2 DOMs the C wrappers build; [Performance by access pattern](#performance-by-access-pattern) above shows how the other readers change the picture. Median time, **lower is better.**
 
 | Benchmark | XML.jl | EzXML | LightXML | XMLDict |
 |---|--:|--:|--:|--:|
-| Parse, small | 0.021 ms | 0.013 ms | 0.011 ms | 0.112 ms |
-| Parse, medium | 109 ms | 46.9 ms | 47.2 ms | 357 ms |
-| Write, small | 0.0056 ms | 0.0057 ms | 0.057 ms | — |
-| Write, medium | 27.4 ms | 21.7 ms | 29.9 ms | — |
+| Parse, small | 0.022 ms | 0.013 ms | 0.011 ms | 0.110 ms |
+| Parse, medium | 110 ms | 46.8 ms | 47.1 ms | 348 ms |
+| Write, small | 0.0056 ms | 0.0059 ms | 0.059 ms | — |
+| Write, medium | 27.7 ms | 21.1 ms | 29.1 ms | — |
 | Collect tags, small | 0.00037 ms | 0.0011 ms | 0.0018 ms | — |
-| Collect tags, medium | 5.57 ms | 10.7 ms | 13.3 ms | — |
+| Collect tags, medium | 5.63 ms | 10.4 ms | 12.9 ms | — |
 
 EzXML and LightXML wrap libxml2 (C): faster on raw parse, slower on in-Julia traversal.
 
-For the per-regime decomposition (streaming / full-DOM / stage breakdown) and the theory behind these numbers, see [**PERFORMANCE-v0.4.md**](PERFORMANCE-v0.4.md).
+For the per-access-pattern decomposition (streaming / partial reads / full DOM / stage breakdown) and the theory behind these numbers, see [**PERFORMANCE-v0.4.md**](PERFORMANCE-v0.4.md).
 
-_Measured 2026-06-28/29, Apple M5 (single-threaded), Julia 1.12.6; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3), XMLDict 0.4.2. Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl)._
+_Measured 2026-07-22, Apple M5 (single-threaded), Julia 1.12.6; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3), XMLDict 0.4.2. Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl)._
