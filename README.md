@@ -247,7 +247,7 @@ doc = read("file.xml", LazyNode)
 
 `LazyNode` supports the same read-only interface as `Node`: `nodetype`, `tag`, `attributes`, `value`, `children`, `is_simple`, `simple_value`, plus integer and string indexing.
 
-`LazyNode` is for *partial* reads only: opening is a no-op wrapper (~0.5 µs whatever the file size) and you pay per node *touched* — a touch spans the node's subtree, and nothing is cached, so repeated visits pay the full price again. Unbeatable for leaf-ward hops and kilobyte-scale documents; for whole-tree walks (264 ms vs ~54/~100 ms build+walk on the 14 MB corpus below), repeated queries, or plucking one child out of a huge container, build `FlatNode` or `Node` instead — see [Performance by access pattern](#performance-by-access-pattern).
+`LazyNode` is for *partial* reads only: opening is a no-op wrapper (~0.5 µs whatever the file size) and you pay per node *touched* — a touch spans the node's subtree, and nothing is cached, so repeated visits pay the full price again. Unbeatable for leaf-ward hops and kilobyte-scale documents; for whole-tree walks (276 ms vs ~55/~106 ms build+walk on the 14 MB corpus below), repeated queries, or plucking one child out of a huge container, build `FlatNode` or `Node` instead — see [Performance by access pattern](#performance-by-access-pattern).
 
 For streaming and high-throughput workloads, several extra accessors avoid materializing intermediate collections:
 
@@ -325,19 +325,19 @@ end
 
 # Performance by access pattern
 
-One number cannot rank the readers — cost depends on what you do with the document. Same ~14 MB / 882 K-node XMark document as the cross-library table below, XML.jl v0.4.2 (source: [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl); **lower is better**; min of repeated runs at `wellformed = :lenient`, where the Benchmarks table below uses medians at the default checking level — compare within each table, not across):
+One number cannot rank the readers — cost depends on what you do with the document. Same ~14 MB / 882 K-node XMark document as the cross-library table below, XML.jl v0.4.2 (source: [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl); **lower is better**; median of repeated runs at the default settings):
 
 | | build | walk every node | extract all values | DOM size in memory |
 |---|--:|--:|--:|--:|
-| `Cursor` | — (streams) | 35.2 ms (its one scan) | — | — (no DOM) |
-| `LazyNode` | ~0 (a wrapper) | 264 ms (re-tokenizes) | — | — (source only) |
-| `FlatNode` | 50.5 ms | 3.0 ms | 10.2 ms | 54.9 MiB |
-| `Node` | 93.7 ms | 5.8 ms | 6.3 ms | 80.0 MiB |
-| EzXML (libxml2) | 37.9 ms | — | — | — |
+| `Cursor` | — (streams) | 35.1 ms (its one scan) | — | — (no DOM) |
+| `LazyNode` | ~0 (a wrapper) | 276 ms (re-tokenizes) | — | — (source only) |
+| `FlatNode` | 51.8 ms | 3.0 ms | 10.6 ms | 54.9 MiB |
+| `Node` | 99.9 ms | 6.3 ms | 6.5 ms | 80.0 MiB |
+| EzXML (libxml2) | 37.7 ms | — | — | — |
 
 Reading the table: `Cursor`'s walk *is* its parse — one tokenizing scan, nothing retained. `LazyNode` opens for free and pays per node visited — unbeatable for touching a *fraction* of a large document, and (as the walk column shows) the wrong tool for visiting all of it. `FlatNode` builds ~2× faster than `Node`, walks ~2× faster, holds ~30% less memory, and its `parent`/`depth` are O(1) where `Node` searches from the root; pure value extraction on an already-built tree is the one pattern where `Node`'s direct fields win. libxml2 still builds fastest — the remaining gap is materialization, not scanning (see [PERFORMANCE-v0.4.md](PERFORMANCE-v0.4.md)).
 
-_Measured 2026-07-17, Apple M5 (single-threaded), Julia 1.12.6, EzXML 1.2.3._
+_Measured 2026-07-22, Apple M5 (single-threaded), Julia 1.12.6, EzXML 1.2.3._
 
 <br>
 
@@ -347,15 +347,15 @@ Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl). Data: `books.xml
 
 | Benchmark | XML.jl | EzXML | LightXML | XMLDict |
 |---|--:|--:|--:|--:|
-| Parse, small | 0.021 ms | 0.013 ms | 0.011 ms | 0.112 ms |
-| Parse, medium | 109 ms | 46.9 ms | 47.2 ms | 357 ms |
-| Write, small | 0.0056 ms | 0.0057 ms | 0.057 ms | — |
-| Write, medium | 27.4 ms | 21.7 ms | 29.9 ms | — |
+| Parse, small | 0.022 ms | 0.013 ms | 0.011 ms | 0.110 ms |
+| Parse, medium | 110 ms | 46.8 ms | 47.1 ms | 348 ms |
+| Write, small | 0.0056 ms | 0.0059 ms | 0.059 ms | — |
+| Write, medium | 27.7 ms | 21.1 ms | 29.1 ms | — |
 | Collect tags, small | 0.00037 ms | 0.0011 ms | 0.0018 ms | — |
-| Collect tags, medium | 5.57 ms | 10.7 ms | 13.3 ms | — |
+| Collect tags, medium | 5.63 ms | 10.4 ms | 12.9 ms | — |
 
 EzXML and LightXML wrap libxml2 (C): faster on raw parse, slower on in-Julia traversal.
 
 For the per-access-pattern decomposition (streaming / partial reads / full DOM / stage breakdown) and the theory behind these numbers, see [**PERFORMANCE-v0.4.md**](PERFORMANCE-v0.4.md).
 
-_Measured 2026-06-28/29, Apple M5 (single-threaded), Julia 1.12.6; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3), XMLDict 0.4.2. Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl)._
+_Measured 2026-07-22, Apple M5 (single-threaded), Julia 1.12.6; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3), XMLDict 0.4.2. Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl)._
