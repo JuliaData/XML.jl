@@ -325,7 +325,7 @@ end
 
 # Performance by access pattern
 
-One number cannot rank the readers — cost depends on what you do with the document. Same ~14 MB / 882 K-node XMark document as the cross-library table below, XML.jl v0.4.2 (source: [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl); **lower is better**):
+One number cannot rank the readers — cost depends on what you do with the document. Same ~14 MB / 882 K-node XMark document as the cross-library table below, XML.jl v0.4.2 (source: [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl); **lower is better**; min of repeated runs at `wellformed = :lenient`, where the Benchmarks table below uses medians at the default checking level — compare within each table, not across):
 
 | | build | walk every node | extract all values | DOM size in memory |
 |---|--:|--:|--:|--:|
