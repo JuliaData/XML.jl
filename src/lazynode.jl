@@ -379,6 +379,31 @@ function sourcetext(n::LazyNode)
     end
 end
 
+"""
+    sourcespan(n::LazyNode) -> UnitRange{Int}
+
+The range of *valid character indices* of the node's original source text within the
+retained source string, so that `source[sourcespan(n)] == sourcetext(n)` — the positional
+counterpart of [`sourcetext`](@ref), for consumers that need *where* the node lives rather
+than its text (verbatim excision and splicing, error context).
+
+The bounds are character indices, not code units: the library performs the `prevind`
+computation, so a node ending on a multi-byte character yields indices that are safe to
+slice with. To splice text *around* a node, step over its boundaries with
+`prevind`/`nextind`:
+
+    s[1:prevind(s, first(span))] * replacement * s[nextind(s, last(span)):end]
+
+Defined for the two source-retaining readers (`LazyNode`, `FlatNode`); like `sourcetext`,
+it does not apply to `Node`, which retains no source.
+"""
+function sourcespan(n::LazyNode)
+    ss = sourcetext(n)
+    o = ss.offset
+    isempty(ss) && return (o + 1):o
+    (o + 1):prevind(ss.string, o + ncodeunits(ss) + 1)
+end
+
 #-----------------------------------------------------------------------------# write
 """
     write(n::LazyNode; normalize::Bool=false, indentsize::Int=2) -> String
