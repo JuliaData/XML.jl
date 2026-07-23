@@ -340,6 +340,15 @@ function sourcespan(n::FlatNode)
 end
 
 """
+    splicetext(n::FlatNode, replacement::AbstractString = "") -> String
+
+Same contract as the `LazyNode` method; the node's span is answered in O(1) from the
+store.
+"""
+splicetext(n::FlatNode, replacement::AbstractString = "") =
+    _splice_span(n.store.source, sourcespan(n), replacement)
+
+"""
     parent(n::FlatNode) -> FlatNode or nothing
 
 O(1) parent lookup (the flat store keeps parent links). Returns `nothing` for the
