@@ -3692,6 +3692,8 @@ end
             span = sourcespan(a)
             stripped = xml[1:prevind(xml, first(span))] * "<c/>" * xml[nextind(xml, last(span)):end]
             @test stripped == "<r>é<c/>œ<b/><!-- ç --></r>"
+            @test splicetext(a, "<c/>") == stripped              # the packaged form
+            @test splicetext(a) == "<r>éœ<b/><!-- ç --></r>"     # default = pure excision
         end
 
         @testset "text node ending on a multibyte character" begin

@@ -178,6 +178,18 @@ end
     stripped = xml[1:prevind(xml, first(sp))] * "<c/>" * xml[nextind(xml, last(sp)):end]
     @test occursin("é<c/>œ", stripped)
     @test parse(stripped, FlatNode) isa FlatNode
+
+    # splicetext packages that idiom: node by node it matches the hand-rolled form,
+    # including the first child (span starts at index 1) and the root (span ends at end)
+    @test splicetext(it, "<c/>") == stripped
+    for n in children(f)
+        spn = sourcespan(n)
+        expected = xml[1:prevind(xml, first(spn))] * "@" * xml[nextind(xml, last(spn)):end]
+        @test splicetext(n, "@") == expected
+    end
+    @test splicetext(it) == xml[1:prevind(xml, first(sp))] * xml[nextind(xml, last(sp)):end]
+    lzit = first(c for c in children(first(c for c in children(lz) if nodetype(c) === XML.Element)) if nodetype(c) === XML.Element)
+    @test splicetext(lzit, "<c/>") == stripped                   # cross-reader parity
 end
 
 @testset "BOM handling" begin
