@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   splice around. O(1) on `FlatNode` (answered from the stored per-record spans). For
   consumers that need a node's *position* rather than its text — verbatim excision and
   splicing without reaching into reader internals (#92).
+- **`splicetext(n, replacement = "")`** on the same two readers: the document source with
+  the node's own text replaced — excised entirely by default. The packaged, multi-byte-safe
+  form of the `sourcespan` splice (#92).
 
 - **`parse(str, Cursor)`, `read(filename, Cursor)`, `read(io, Cursor)`** — `Cursor` gains the
   tree readers' entry points: same argument order, and the `read` forms apply the same
