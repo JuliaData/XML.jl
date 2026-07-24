@@ -3187,14 +3187,15 @@ end
         # pair as ONE space — while white space written as character references survives.
         # Normalization happens on the raw slice, before entity resolution, uniformly
         # across the four readers.
+        getattr(x, name) = Dict(attributes(x))[name]
         function attr_by_reader(xml, name)
-            n = only(elements(parse(xml, Node)))[name]
-            l = only(elements(parse(xml, LazyNode)))[name]
-            f = only(elements(parse(xml, FlatNode)))[name]
+            n = getattr(only(elements(parse(xml, Node))), name)
+            l = getattr(only(elements(parse(xml, LazyNode))), name)
+            f = getattr(only(elements(parse(xml, FlatNode))), name)
             cur = Cursor(xml)
             c = nothing
             while next!(cur) !== nothing
-                nodetype(cur) === Element && (c = attributes(cur)[name])
+                nodetype(cur) === Element && (c = getattr(cur, name))
             end
             (n, l, f, c)
         end

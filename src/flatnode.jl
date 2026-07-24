@@ -306,8 +306,8 @@ function attributes(n::FlatNode)
     for _ in 1:r.attr_count
         a = @inbounds n.store.attrs[ai]
         name = _fsub(n.store, a.name_offset, a.name_len)
-        rawv = _fsub(n.store, a.value_offset, abs(a.value_len))
-        val = a.value_len < 0 ? _as_substring(unescape(rawv)) : rawv
+        rawv = _normalize_attr_ws(_fsub(n.store, a.value_offset, abs(a.value_len)))
+        val = _as_substring(a.value_len < 0 ? unescape(rawv) : rawv)
         push!(out, name => val)
         ai += Int32(1)
     end

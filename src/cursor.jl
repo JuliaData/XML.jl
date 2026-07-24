@@ -178,8 +178,10 @@ function value(c::Cursor)
     nothing
 end
 
-@inline _cursor_decode_attr(tok, data) =
-    tok.has_entities ? unescape(attr_value(tok, data)) : attr_value(tok, data)
+@inline function _cursor_decode_attr(tok, data)
+    v = _normalize_attr_ws(attr_value(tok, data))
+    tok.has_entities ? unescape(v) : v
+end
 @inline _cursor_as_substring(s::SubString{String}) = s
 @inline _cursor_as_substring(s::String) = SubString(s, 1, lastindex(s))
 
