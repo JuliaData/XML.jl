@@ -49,10 +49,9 @@ Structured pull helpers keep scans cheap without hand-tracked depth: `for_each_c
 
 ### Partial reads — `LazyNode`
 
-Opening is a no-op wrapper (~0.5 µs on this 14 MB file) and nothing is ever cached: each visit re-tokenizes and rebuilds its small handles (~1 KB allocated per repeated look-up), so costs repeat per visit. Partial reads are cheap when the *touched* nodes have small spans — leaf-ward hops, flat or kilobyte-scale documents (typical web-service responses parse in well under a millisecond) — and *repeated* look-ups tip the scale toward `FlatNode`/`Node`.
+Opening is a no-op wrapper (~0.5 µs on this 14 MB file) and nothing is ever cached: each visit re-tokenizes and rebuilds its small handles (~1 KB allocated per repeated look-up), so costs repeat per visit. A traversal pays only for the bytes it actually steps over: the child iterator defers a yielded element's subtree skip until the *next sibling* is requested, so descending to a target is O(bytes before it) — touching this document's root element costs ~4 µs, and a nine-node document-order descent ~5 µs. What still costs: *horizontal* scans pay the subtrees they step past (as any index-free forward reader must), and *repeated* look-ups pay again — those two patterns tip the scale toward `FlatNode`/`Node`.
 
-> [!NOTE]
-> **As of v0.4.2**, yielding a child *pre-skips* (tokenizes) that child's whole subtree to position for its sibling — so merely touching this document's root element costs ~35 ms (its subtree is nearly the whole file), and a 9-node descent to the first `<item>` ~50 ms: on a document dominated by one huge container, a `FlatNode`/`Node` build amortizes almost immediately.
+One consumer note: ask only for what you need — a `for` loop over `eachchildnode` fetches the next sibling (and pays its predecessor's deferred subtree skip) at the top of each round, so `break` before that fetch once you are done.
 
 ### Full DOM — parse + walk everything
 
