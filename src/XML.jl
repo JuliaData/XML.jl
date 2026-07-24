@@ -6,7 +6,7 @@ export
     nodetype, tag, attributes, value, children, children!, eachchildnode, eachattribute,
     eachelement, elements,
     foreach_attr,
-    is_simple, simple_value, is_simple_value, sourcetext,
+    is_simple, simple_value, is_simple_value, sourcetext, sourcespan, splicetext,
     depth, siblings, issamenode,
     Cursor, next!, for_each_child, @for_each_child, skip_element!, eof,
     xpath,

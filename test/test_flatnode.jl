@@ -146,6 +146,52 @@ end
     @test Node(only(eachelement(parse(String(sourcetext(it)), FlatNode; wellformed = :lenient)))) == Node(it)
 end
 
+@testset "sourcespan (character-index spans)" begin
+    # Multibyte characters sit at both boundaries of the interesting spans: the <item>
+    # element is preceded by a text node ending in "é" and followed by one starting with "œ".
+    xml = """<?xml version="1.0"?><!DOCTYPE r><!-- ç --><r a="é">é<item>héé</item>œ<empty/><![CDATA[cd]]><?pi tgt?></r>"""
+    f  = parse(xml, FlatNode)
+    lz = parse(xml, LazyNode)
+
+    # invariant + cross-reader parity, on every node of the tree
+    function walk_pairs(a, b)
+        sa, sb = sourcespan(a), sourcespan(b)
+        @test sa isa UnitRange{Int}
+        @test sa == sb
+        @test SubString(xml, sa) == sourcetext(a)
+        @test xml[sa] == sourcetext(a)
+        @test length(children(a)) == length(children(b))
+        for (ca, cb) in zip(children(a), children(b))
+            walk_pairs(ca, cb)
+        end
+    end
+    walk_pairs(f, lz)
+
+    @test sourcespan(f) == firstindex(xml):lastindex(xml)        # Document = whole source
+
+    # O(1) path answers straight from the stored spans
+    it = first(eachelement(only(eachelement(f))))
+    @test xml[sourcespan(it)] == "<item>héé</item>"
+
+    # the documented splice idiom, with multibyte on both sides of the excised span
+    sp = sourcespan(it)
+    stripped = xml[1:prevind(xml, first(sp))] * "<c/>" * xml[nextind(xml, last(sp)):end]
+    @test occursin("é<c/>œ", stripped)
+    @test parse(stripped, FlatNode) isa FlatNode
+
+    # splicetext packages that idiom: node by node it matches the hand-rolled form,
+    # including the first child (span starts at index 1) and the root (span ends at end)
+    @test splicetext(it, "<c/>") == stripped
+    for n in children(f)
+        spn = sourcespan(n)
+        expected = xml[1:prevind(xml, first(spn))] * "@" * xml[nextind(xml, last(spn)):end]
+        @test splicetext(n, "@") == expected
+    end
+    @test splicetext(it) == xml[1:prevind(xml, first(sp))] * xml[nextind(xml, last(sp)):end]
+    lzit = first(c for c in children(first(c for c in children(lz) if nodetype(c) === XML.Element)) if nodetype(c) === XML.Element)
+    @test splicetext(lzit, "<c/>") == stripped                   # cross-reader parity
+end
+
 @testset "BOM handling" begin
     bom = "﻿<r>x</r>"
     @test parse(bom, FlatNode) == parse(bom, Node)

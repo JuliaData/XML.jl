@@ -327,6 +327,28 @@ function sourcetext(n::FlatNode)
 end
 
 """
+    sourcespan(n::FlatNode) -> UnitRange{Int}
+
+O(1): answered straight from the store's per-record source spans. Same contract and
+splice idiom as the `LazyNode` method — valid character indices, with
+`sourcetext(n) == SubString(source, sourcespan(n))`.
+"""
+function sourcespan(n::FlatNode)
+    so, se = @inbounds n.store.spans[n.i]
+    so == se && return (Int(so) + 1):Int(so)
+    (Int(so) + 1):prevind(n.store.source, Int(se) + 1)
+end
+
+"""
+    splicetext(n::FlatNode, replacement::AbstractString = "") -> String
+
+Same contract as the `LazyNode` method; the node's span is answered in O(1) from the
+store.
+"""
+splicetext(n::FlatNode, replacement::AbstractString = "") =
+    _splice_span(n.store.source, sourcespan(n), replacement)
+
+"""
     parent(n::FlatNode) -> FlatNode or nothing
 
 O(1) parent lookup (the flat store keeps parent links). Returns `nothing` for the

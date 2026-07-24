@@ -3665,6 +3665,44 @@ end
         end
     end
 
+    @testset "sourcespan" begin
+        # sourcetext(n) == SubString(source, sourcespan(n)) on every node — valid
+        # character indices, multibyte at both boundaries.
+        xml = "<r>é<a x=\"1\">héé</a>œ<b/><!-- ç --></r>"
+        doc = parse(xml, LazyNode)
+        function check_spans(n)
+            span = sourcespan(n)
+            @test span isa UnitRange{Int}
+            @test SubString(xml, span) == sourcetext(n)
+            @test xml[span] == sourcetext(n)
+            for c in XML.eachchildnode(n)
+                check_spans(c)
+            end
+        end
+        check_spans(doc)
+
+        @testset "document spans the whole source" begin
+            @test sourcespan(doc) == firstindex(xml):lastindex(xml)
+        end
+
+        @testset "splice idiom from the docstring" begin
+            # excise <a …>…</a> — preceded by "é", followed by "œ": the documented
+            # prevind/nextind splice must survive both multibyte boundaries
+            a = first(c for c in children(doc[1]) if nodetype(c) == Element)
+            span = sourcespan(a)
+            stripped = xml[1:prevind(xml, first(span))] * "<c/>" * xml[nextind(xml, last(span)):end]
+            @test stripped == "<r>é<c/>œ<b/><!-- ç --></r>"
+            @test splicetext(a, "<c/>") == stripped              # the packaged form
+            @test splicetext(a) == "<r>éœ<b/><!-- ç --></r>"     # default = pure excision
+        end
+
+        @testset "text node ending on a multibyte character" begin
+            s = "<x>héé</x>"
+            txt = first(c for c in children(parse(s, LazyNode)[1]) if nodetype(c) == Text)
+            @test s[sourcespan(txt)] == "héé"
+        end
+    end
+
     @testset "write(::LazyNode)" begin
         @testset "write returns String" begin
             xml = "<root><child>text</child></root>"

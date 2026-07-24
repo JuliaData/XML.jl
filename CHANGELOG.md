@@ -9,6 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`sourcespan(n) -> UnitRange{Int}`** on the two source-retaining readers (`LazyNode`,
+  `FlatNode`): the range of *valid character indices* the node's original source text
+  occupies, with the invariant `sourcetext(n) == SubString(source, sourcespan(n))` — the
+  library does the `prevind` computation, so multi-byte boundaries are safe to slice and
+  splice around. O(1) on `FlatNode` (answered from the stored per-record spans). For
+  consumers that need a node's *position* rather than its text — verbatim excision and
+  splicing without reaching into reader internals (#92).
+- **`splicetext(n, replacement = "")`** on the same two readers: the document source with
+  the node's own text replaced — excised entirely by default. The packaged, multi-byte-safe
+  form of the `sourcespan` splice (#92).
+
 - **`parse(str, Cursor)`, `read(filename, Cursor)`, `read(io, Cursor)`** — `Cursor` gains the
   tree readers' entry points: same argument order, and the `read` forms apply the same
   byte-level BOM normalization (UTF-8 BOM strip, UTF-16 LE/BE transcoding; a BOM-less UTF-16
