@@ -51,7 +51,18 @@ Structured pull helpers keep scans cheap without hand-tracked depth: `for_each_c
 
 Opening is a no-op wrapper (~0.5 µs on this 14 MB file) and nothing is ever cached: each visit re-tokenizes and rebuilds its small handles (~1 KB allocated per repeated look-up), so costs repeat per visit. A traversal pays only for the bytes it actually steps over: the child iterator defers a yielded element's subtree skip until the *next sibling* is requested, so descending to a target is O(bytes before it) — touching this document's root element costs ~4 µs, and a nine-node document-order descent ~5 µs. What still costs: *horizontal* scans pay the subtrees they step past (as any index-free forward reader must), and *repeated* look-ups pay again — those two patterns tip the scale toward `FlatNode`/`Node`.
 
-One consumer note: ask only for what you need — a `for` loop over `eachchildnode` fetches the next sibling (and pays its predecessor's deferred subtree skip) at the top of each round, so `break` before that fetch once you are done.
+> [!NOTE]
+> Ask only for what you need: a `for` loop over `eachchildnode` fetches the next sibling — and pays its predecessor's deferred subtree skip — at the top of each round, so exit *from within the body* once you are done:
+>
+> ```julia
+> out = LazyNode[]                  # goal: keep the first three children
+> for c in eachchildnode(parent)
+>     push!(out, c)
+>     length(out) == 3 && break     # decided in the body — no fourth fetch
+> end
+> ```
+>
+> Move that test to the top of the body instead — `length(out) == 3 && break; push!(out, c)` — and the loop only learns it is done at round *four*, whose fetch has already paid the third child's deferred subtree skip.
 
 ### Full DOM — parse + walk everything
 
