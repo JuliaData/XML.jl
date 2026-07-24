@@ -3182,6 +3182,70 @@ end
         @test doc[1]["a"] == "a&b"
     end
 
+    @testset "attribute-value normalization (XML 1.0 §3.3.3)" begin
+        # Literal white space (#x9 #xA #xD) in attribute values reads as spaces — the CRLF
+        # pair as ONE space — while white space written as character references survives.
+        # Normalization happens on the raw slice, before entity resolution, uniformly
+        # across the four readers.
+        function attr_by_reader(xml, name)
+            n = only(elements(parse(xml, Node)))[name]
+            l = only(elements(parse(xml, LazyNode)))[name]
+            f = only(elements(parse(xml, FlatNode)))[name]
+            cur = Cursor(xml)
+            c = nothing
+            while next!(cur) !== nothing
+                nodetype(cur) === Element && (c = attributes(cur)[name])
+            end
+            (n, l, f, c)
+        end
+
+        @testset "literal whitespace becomes spaces" begin
+            vals = attr_by_reader("<a note=\"L1\nL2\tT\rR\"/>", "note")
+            @test all(==("L1 L2 T R"), vals)
+        end
+
+        @testset "character references survive" begin
+            vals = attr_by_reader("<a note=\"L1&#10;L2&#9;T&#13;R\"/>", "note")
+            @test all(==("L1\nL2\tT\rR"), vals)
+        end
+
+        @testset "the CRLF pair collapses to one space" begin
+            vals = attr_by_reader("<a note=\"L1\r\nL2\"/>", "note")
+            @test all(==("L1 L2"), vals)
+            @test only(elements(parse("<a n=\"x\r\n\r\ny\"/>", Node)))["n"] == "x  y"
+            @test only(elements(parse("<a n=\"x\n\r\ny\"/>", Node)))["n"] == "x  y"
+        end
+
+        @testset "single-attribute fast paths" begin
+            lz = only(elements(parse("<a note=\"p\tq\"/>", LazyNode)))
+            @test get(lz, "note", "") == "p q"
+            cur = Cursor("<a note=\"p\tq\"/>")
+            while next!(cur) !== nothing
+                nodetype(cur) === Element && @test get(cur, "note", "") == "p q"
+            end
+        end
+
+        @testset "eachattribute path" begin
+            el = only(elements(parse("<a x=\"1\n2\" y=\"&#10;\"/>", LazyNode)))
+            @test collect(XML.eachattribute(el)) == ["x" => "1 2", "y" => "\n"]
+        end
+
+        @testset "W3C xmltest 043: attribute wrapped across a CRLF line" begin
+            # byte-for-byte the suite's xmltest/valid/sa/043.xml (CRLF line ends); its
+            # canonical reference out/043.xml expects a1="foo bar" — one space
+            xml043 = "<!DOCTYPE doc [\r\n<!ATTLIST doc a1 CDATA #IMPLIED>\r\n<!ELEMENT doc (#PCDATA)>\r\n]>\r\n<doc a1=\"foo\r\nbar\"></doc>\r\n"
+            @test only(elements(parse(xml043, Node)))["a1"] == "foo bar"
+        end
+
+        @testset "write escapes attribute whitespace as character references" begin
+            el = XML.Element("a"; note = "L1\nL2\tT\rR")
+            out = XML.write(el)
+            @test occursin("note=\"L1&#10;L2&#9;T&#13;R\"", out)
+            back = only(elements(parse(out, Node)))
+            @test back["note"] == "L1\nL2\tT\rR"         # the value round-trips exactly
+        end
+    end
+
     @testset "Declaration attributes" begin
         doc = parse("""<?xml version="1.0" encoding="UTF-8"?><root/>""", LazyNode)
         decl = doc[1]
