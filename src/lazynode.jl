@@ -458,10 +458,17 @@ function write(filename::AbstractString, n::LazyNode; normalize::Bool=false, ind
 end
 
 #-----------------------------------------------------------------------------# eachchildnode
+# Iterator state: a yielded element's subtree is NOT skipped at yield time — the skip is
+# recorded as pending and performed only when the next sibling is requested, so a
+# traversal that stops early never pays for subtrees nobody asked to step past.
+const _CI_READY   = 0x00
+const _CI_PENDING = 0x01  # an element was yielded; its unskipped subtree lies ahead
+const _CI_DONE    = 0x02
+
 struct LazyChildIterator{S <: AbstractString, I}
     data::S
     iter::I
-    done::Base.RefValue{Bool}
+    state::Base.RefValue{UInt8}
 end
 
 Base.IteratorSize(::Type{<:LazyChildIterator}) = Base.SizeUnknown()
@@ -479,17 +486,17 @@ function eachchildnode(n::LazyNode{S}) where {S}
     nt = n.nodetype
     iter = _lazy_tokenizer(n)
     if nt === Document
-        return LazyChildIterator{S, typeof(iter)}(n.data, iter, Ref(false))
+        return LazyChildIterator{S, typeof(iter)}(n.data, iter, Ref(_CI_READY))
     elseif nt === Element
         for tok in iter
             if tok.kind === TokenKinds.SELF_CLOSE
-                return LazyChildIterator{S, typeof(iter)}(n.data, iter, Ref(true))
+                return LazyChildIterator{S, typeof(iter)}(n.data, iter, Ref(_CI_DONE))
             elseif tok.kind === TokenKinds.TAG_CLOSE
-                return LazyChildIterator{S, typeof(iter)}(n.data, iter, Ref(false))
+                return LazyChildIterator{S, typeof(iter)}(n.data, iter, Ref(_CI_READY))
             end
         end
     end
-    LazyChildIterator{S, typeof(iter)}(n.data, iter, Ref(true))
+    LazyChildIterator{S, typeof(iter)}(n.data, iter, Ref(_CI_DONE))
 end
 
 # eachelement's generic definition filters children(node); for LazyNode, build on the
@@ -497,15 +504,19 @@ end
 eachelement(node::LazyNode) = Iterators.filter(n -> nodetype(n) === Element, eachchildnode(node))
 
 function Base.iterate(ci::LazyChildIterator, _ = nothing)
-    ci.done[] && return nothing
+    s = ci.state[]
+    s === _CI_DONE && return nothing
+    if s === _CI_PENDING
+        ci.state[] = _CI_READY
+        _lazy_skip_element!(ci.iter)
+    end
     for tok in ci.iter
         k = tok.kind
         if k === TokenKinds.TEXT
             return (LazyNode(ci.data, tok, Text), nothing)
         elseif k === TokenKinds.OPEN_TAG
-            node = LazyNode(ci.data, tok, Element)
-            _lazy_skip_element!(ci.iter)
-            return (node, nothing)
+            ci.state[] = _CI_PENDING
+            return (LazyNode(ci.data, tok, Element), nothing)
         elseif k === TokenKinds.COMMENT_OPEN
             node = LazyNode(ci.data, tok, Comment)
             _lazy_skip_until!(ci.iter, TokenKinds.COMMENT_CLOSE)
@@ -527,11 +538,11 @@ function Base.iterate(ci::LazyChildIterator, _ = nothing)
             _lazy_skip_until!(ci.iter, TokenKinds.DOCTYPE_CLOSE)
             return (node, nothing)
         elseif k === TokenKinds.CLOSE_TAG || k === TokenKinds.TAG_CLOSE
-            ci.done[] = true
+            ci.state[] = _CI_DONE
             return nothing
         end
     end
-    ci.done[] = true
+    ci.state[] = _CI_DONE
     return nothing
 end
 
