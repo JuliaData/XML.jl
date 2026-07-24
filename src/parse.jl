@@ -189,7 +189,7 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
             W !== :lenient && occursin('<', rawval) && error("not well-formed: '<' in attribute value (XML 1.0 §3.1)")
             W === :strict && _check_chars_strict(rawval)
             W === :strict && token.has_entities && _check_charrefs_strict(rawval)
-            val = _text_value(S, rawval, token.has_entities, convert_text)
+            val = _text_value(S, _normalize_attr_ws(rawval), token.has_entities, convert_text)
             name = _to(S, pending_attr_name)
             if decl_attrs !== nothing
                 any(p -> first(p) == name, decl_attrs) && error("Duplicate attribute: $name")

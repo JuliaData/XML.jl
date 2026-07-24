@@ -269,11 +269,12 @@ end
 #==============================================================================#
 @testset "Attributes" begin
     @testset "att1: attribute with newlines (whitespace normalization)" begin
-        # libxml2 test/att1
+        # libxml2 test/att1 — upstream's result/att1 expects the literal newline
+        # normalized to a space and the four-space run kept (XML 1.0 §3.3.3, CDATA rule)
         xml = "<doc attr=\"to normalize\nwith a    space\"/>"
         doc = parse(xml, Node)
         @test tag(doc[1]) == "doc"
-        @test haskey(doc[1], "attr")
+        @test doc[1]["attr"] == "to normalize with a    space"
     end
 
     @testset "att2: attribute with multiple spaces" begin
@@ -284,11 +285,12 @@ end
     end
 
     @testset "att3: attribute with character references" begin
-        # libxml2 test/att3
+        # libxml2 test/att3 — the referenced newline (&#10;) survives as a newline while
+        # the literal spaces stay spaces: the discriminating case of §3.3.3
         xml = """<select onclick="aaaa&#10;      bbbb&#160;">f&#160;oo</select>"""
         doc = parse(xml, Node)
         @test tag(doc[1]) == "select"
-        @test haskey(doc[1], "onclick")
+        @test doc[1]["onclick"] == "aaaa\n      bbbb\ua0"
     end
 
     @testset "att4: complex document with many attributes" begin

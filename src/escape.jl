@@ -55,6 +55,40 @@ function unescape(x::AbstractString)
     replace(s, _ENTITY_RE => _unescape_entity)
 end
 
+# XML 1.0 §3.3.3 attribute-value normalization, applied to the RAW value slice BEFORE
+# entity resolution: the literal pair CR LF becomes ONE space, then each remaining literal
+# #x9 / #xA / #xD becomes a space. Character references (`&#10;` …) are untouched here and
+# resolve afterwards — which is exactly why this pass must run before `unescape`. All the
+# targets are ASCII, so the byte loop is multi-byte-safe. Clean values return unchanged
+# (no allocation) — the dominant case.
+function _normalize_attr_ws(s::AbstractString)
+    cu = codeunits(s)
+    dirty = false
+    @inbounds for b in cu
+        if b == 0x09 || b == 0x0A || b == 0x0D
+            dirty = true
+            break
+        end
+    end
+    dirty || return s
+    io = IOBuffer(sizehint = ncodeunits(s))
+    n = length(cu)
+    j = 1
+    @inbounds while j <= n
+        b = cu[j]
+        if b == 0x0D
+            Base.write(io, 0x20)
+            j < n && cu[j + 1] == 0x0A && (j += 1)
+        elseif b == 0x0A || b == 0x09
+            Base.write(io, 0x20)
+        else
+            Base.write(io, b)
+        end
+        j += 1
+    end
+    String(take!(io))
+end
+
 function unescape(x::SubString{String})
     occursin('&', x) || return x
     replace(String(x), _ENTITY_RE => _unescape_entity)

@@ -50,7 +50,10 @@ _lazy_tokenizer(n::LazyNode) = tokenize(n.data, _lazy_pos(n))
 # and no byte scan — the dominant case for spreadsheet-style data. `_decode_attr` strips
 # the surrounding quotes first; the flag is read from the token, not the stripped view.
 @inline _decode(tok::Token, data) = tok.has_entities ? unescape(raw(tok, data)) : raw(tok, data)
-@inline _decode_attr(tok::Token, data) = tok.has_entities ? unescape(attr_value(tok, data)) : attr_value(tok, data)
+@inline function _decode_attr(tok::Token, data)
+    v = _normalize_attr_ws(attr_value(tok, data))
+    tok.has_entities ? unescape(v) : v
+end
 
 #-----------------------------------------------------------------------------# tag / value
 function tag(n::LazyNode)
