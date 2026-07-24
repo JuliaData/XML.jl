@@ -20,6 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the node's own text replaced — excised entirely by default. The packaged, multi-byte-safe
   form of the `sourcespan` splice (#92).
 
+### Fixed
+
+- **Attribute values are now normalized per XML 1.0 §3.3.3** (all four readers): literal
+  tab/newline/CR in an attribute value read as spaces — the CR LF pair as a single space —
+  while white space written as character references (`&#9;` `&#10;` `&#13;`) still reads
+  as the referenced character. Previously the raw characters came through, so a document
+  with attributes wrapped across lines read differently in XML.jl than in conforming
+  parsers such as libxml2. On write, attribute values now escape literal tab/newline/CR as
+  character references, so values round-trip exactly (#93).
+
 - **`parse(str, Cursor)`, `read(filename, Cursor)`, `read(io, Cursor)`** — `Cursor` gains the
   tree readers' entry points: same argument order, and the `read` forms apply the same
   byte-level BOM normalization (UTF-8 BOM strip, UTF-16 LE/BE transcoding; a BOM-less UTF-16
