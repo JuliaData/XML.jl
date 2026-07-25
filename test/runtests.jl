@@ -3255,6 +3255,9 @@ end
             @test only(Base.return_types(XML._normalize_attr_ws, (String,))) === String
             dirty = XML._normalize_attr_ws(SubString("a=\"p\tq\"", 4, 6))
             @test dirty == "p q" && dirty isa SubString{String}
+            # the AbstractString fallback — nothing internal reaches it — keeps the semantics
+            @test XML._normalize_attr_ws("p\tq") == "p q"
+            @test XML._normalize_attr_ws("clean") === "clean"
             measure(v) = @allocated XML._normalize_attr_ws(v)   # function barrier: measure
             measure(clean)                                      # the call, not the caller's
             if Base.JLOptions().code_coverage == 0       # coverage counters skew @allocated
