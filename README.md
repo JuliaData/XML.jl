@@ -247,7 +247,7 @@ doc = read("file.xml", LazyNode)
 
 `LazyNode` supports the same read-only interface as `Node`: `nodetype`, `tag`, `attributes`, `value`, `children`, `is_simple`, `simple_value`, plus integer and string indexing.
 
-`LazyNode` is for *partial* reads only: opening is a no-op wrapper (~0.5 µs whatever the file size) and you pay per node *touched* — a touch spans the node's subtree, and nothing is cached, so repeated visits pay the full price again. Unbeatable for leaf-ward hops and kilobyte-scale documents; for whole-tree walks (276 ms vs ~55/~106 ms build+walk on the 14 MB corpus below), repeated queries, or plucking one child out of a huge container, build `FlatNode` or `Node` instead — see [Performance by access pattern](#performance-by-access-pattern).
+`LazyNode` is for *partial* reads only: opening is a no-op wrapper (~0.5 µs whatever the file size), a traversal pays only for the bytes it steps over — descending to a target is O(bytes before it), so reaching this 14 MB file's root element costs ~4 µs — and nothing is cached, so repeated visits pay again. Unbeatable for descents and kilobyte-scale documents; for whole-tree walks (276 ms vs ~55/~106 ms build+walk on the 14 MB corpus below) and repeated queries, build `FlatNode` or `Node` instead — see [Performance by access pattern](#performance-by-access-pattern).
 
 For streaming and high-throughput workloads, several extra accessors avoid materializing intermediate collections:
 

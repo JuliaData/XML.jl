@@ -20,6 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the node's own text replaced — excised entirely by default. The packaged, multi-byte-safe
   form of the `sourcespan` splice (#92).
 
+### Changed
+
+- **`LazyNode`'s child iterator defers each yielded element's subtree skip** until the
+  next sibling is requested: a traversal that stops early only tokenizes the bytes it
+  actually stepped over, making descents O(bytes before the target) — touching a 14 MB
+  document's root element drops from ~35 ms to ~4 µs, a nine-node document-order descent
+  from ~50 ms to ~5 µs. Full traversals do the same total work as before (#91).
+
 ### Fixed
 
 - **Attribute values are now normalized per XML 1.0 §3.3.3** (all four readers): literal

@@ -3831,6 +3831,35 @@ end
             @test results == ["<si><t>hello</t></si>", "<si><t>world</t></si>"]
         end
 
+        @testset "sibling positioning semantics" begin
+            # Guards for the iterator's positioning contract: yielded handles are
+            # independent of the parent iterator's stream, resuming after a yielded
+            # element finds its sibling, and abandoned iterators leave no trace.
+            xml = "<r><a><deep><deeper>x</deeper></deep></a>middle<b i=\"1\"/><!-- c --><c/></r>"
+            doc = parse(xml, LazyNode)
+            root = doc[1]
+
+            # full lazy sequence matches the eager collector
+            @test map(nodetype, collect(eachchildnode(root))) == map(nodetype, children(root))
+
+            # interleaved consumption: descend INSIDE a yielded child, then resume the parent
+            it = eachchildnode(root)
+            (a, st) = iterate(it)
+            @test tag(a) == "a"
+            @test simple_value(only(eachelement(only(eachelement(a))))) == "x"
+            (t, st) = iterate(it, st)
+            @test nodetype(t) == Text && value(t) == "middle"
+            (b, st) = iterate(it, st)
+            @test tag(b) == "b" && Dict(attributes(b))["i"] == "1"
+
+            # abandoning an iterator mid-way and starting fresh sees everything again
+            first(eachchildnode(root))
+            @test map(nodetype, collect(eachchildnode(root))) == map(nodetype, children(root))
+
+            # first element via the lazy path equals the eager path
+            @test tag(first(eachelement(root))) == tag(elements(root)[1])
+        end
+
         @testset "non-element/document returns empty" begin
             xml = "<!-- comment --><root/>"
             doc = parse(xml, LazyNode)
