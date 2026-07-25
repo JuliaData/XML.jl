@@ -3245,6 +3245,25 @@ end
             back = only(elements(parse(out, Node)))
             @test back["note"] == "L1\nL2\tT\rR"         # the value round-trips exactly
         end
+
+        @testset "clean values: unchanged, type-stable, allocation-free" begin
+            # #98 — a union-typed return would heap-box the clean-path SubString at every
+            # call site (one 32-byte box per attribute, in every reader's hot path).
+            clean = SubString("category=\"cat17\"", 11, 15)
+            @test XML._normalize_attr_ws(clean) === clean
+            @test only(Base.return_types(XML._normalize_attr_ws, (SubString{String},))) === SubString{String}
+            @test only(Base.return_types(XML._normalize_attr_ws, (String,))) === String
+            dirty = XML._normalize_attr_ws(SubString("a=\"p\tq\"", 4, 6))
+            @test dirty == "p q" && dirty isa SubString{String}
+            # the AbstractString fallback — nothing internal reaches it — keeps the semantics
+            @test XML._normalize_attr_ws("p\tq") == "p q"
+            @test XML._normalize_attr_ws("clean") === "clean"
+            measure(v) = @allocated XML._normalize_attr_ws(v)   # function barrier: measure
+            measure(clean)                                      # the call, not the caller's
+            if Base.JLOptions().code_coverage == 0       # coverage counters skew @allocated
+                @test measure(clean) == 0
+            end
+        end
     end
 
     @testset "Declaration attributes" begin

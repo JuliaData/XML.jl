@@ -60,17 +60,22 @@ end
 # #x9 / #xA / #xD becomes a space. Character references (`&#10;` …) are untouched here and
 # resolve afterwards — which is exactly why this pass must run before `unescape`. All the
 # targets are ASCII, so the byte loop is multi-byte-safe. Clean values return unchanged
-# (no allocation) — the dominant case.
-function _normalize_attr_ws(s::AbstractString)
-    cu = codeunits(s)
-    dirty = false
-    @inbounds for b in cu
-        if b == 0x09 || b == 0x0A || b == 0x0D
-            dirty = true
-            break
-        end
+# — the dominant case — and each method returns its input type concretely: a union-typed
+# return would heap-box the clean-path SubString at every call site, one 32-byte box per
+# attribute in every reader's hot path (#98).
+_normalize_attr_ws(s::AbstractString) = _attr_ws_dirty(s) ? _rewrite_attr_ws(s) : s
+_normalize_attr_ws(s::SubString{String}) =
+    _attr_ws_dirty(s) ? SubString(_rewrite_attr_ws(s)) : s
+
+function _attr_ws_dirty(s::AbstractString)
+    @inbounds for b in codeunits(s)
+        (b == 0x09 || b == 0x0A || b == 0x0D) && return true
     end
-    dirty || return s
+    false
+end
+
+function _rewrite_attr_ws(s::AbstractString)
+    cu = codeunits(s)
     io = IOBuffer(sizehint = ncodeunits(s))
     n = length(cu)
     j = 1
