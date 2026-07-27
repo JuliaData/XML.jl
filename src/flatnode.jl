@@ -427,6 +427,55 @@ function Base.getindex(n::FlatNode, i::Integer)
     throw(BoundsError(n, i))
 end
 
+Base.getindex(n::FlatNode, ::Colon) = children(n)
+Base.lastindex(n::FlatNode) = length(n)
+Base.only(n::FlatNode) = only(children(n))
+
+"""
+    get(n::FlatNode, key::AbstractString, default)
+
+Return the value of attribute `key` on `n`, or `default` if absent. Scans the record's
+attribute range and decodes only the matched value — no vector materialized. Use
+[`attributes`](@ref) for all pairs at once.
+"""
+function Base.get(n::FlatNode, key::AbstractString, default)
+    r = _rec(n)
+    ai = r.attr_first
+    for _ in 1:r.attr_count
+        a = @inbounds n.store.attrs[ai]
+        if _fsub(n.store, a.name_offset, a.name_len) == key
+            rawv = _normalize_attr_ws(_fsub(n.store, a.value_offset, abs(a.value_len)))
+            return _as_substring(a.value_len < 0 ? unescape(rawv) : rawv)
+        end
+        ai += Int32(1)
+    end
+    default
+end
+
+function Base.getindex(n::FlatNode, key::AbstractString)
+    val = get(n, key, _MISSING_ATTR)
+    val === _MISSING_ATTR && throw(KeyError(key))
+    val
+end
+
+function Base.haskey(n::FlatNode, key::AbstractString)
+    get(n, key, _MISSING_ATTR) !== _MISSING_ATTR
+end
+
+function Base.keys(n::FlatNode)
+    r = _rec(n)
+    r.attr_count == 0 && return ()
+    out = SubString{String}[]
+    sizehint!(out, r.attr_count)
+    ai = r.attr_first
+    for _ in 1:r.attr_count
+        a = @inbounds n.store.attrs[ai]
+        push!(out, _fsub(n.store, a.name_offset, a.name_len))
+        ai += Int32(1)
+    end
+    out
+end
+
 is_simple(n::FlatNode) = (r = _rec(n);
     r.kind === Element && r.attr_count == 0 && r.first_child != 0 &&
     (c = @inbounds n.store.recs[r.first_child]; c.next_sibling == 0 && (c.kind === Text || c.kind === CData)))

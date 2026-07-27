@@ -72,6 +72,33 @@ end
     @test occursin("Element", repr(root))                           # show smoke
 end
 
+@testset "by-key attribute access + child-axis parity" begin
+    # #100 — the key's type selects the axis, uniformly across the tree readers:
+    # an Int indexes the child sequence, `:` takes it whole, a String looks up the
+    # attribute map; get is the default-on-a-miss variant of the latter.
+    f = parse(RICH_XML, FlatNode)
+    root = only(eachelement(f))
+    els  = collect(eachelement(root))
+
+    # attribute axis: the get/getindex/haskey/keys quartet, decoded at access
+    @test root["a"] == "1"
+    @test els[2]["attr"] == "v<w"                       # entity-decoded on the way out
+    @test_throws KeyError root["absent"]
+    @test get(root, "a", nothing) == "1"
+    @test get(root, "absent", "dflt") == "dflt"
+    @test get(els[3], "any", nothing) === nothing       # <empty/>: no attributes
+    @test haskey(root, "a") && !haskey(root, "absent")
+    @test collect(keys(root)) == ["a", "b"]
+    @test keys(els[3]) == ()
+    lone = only(eachelement(parse("<a n=\"p\tq\"/>", FlatNode)))
+    @test lone["n"] == "p q"                            # §3.3.3 normalization applies here too
+
+    # child axis: Colon / end / only, parity with Node and LazyNode
+    @test root[:] == children(root)
+    @test root[end] == children(root)[end]
+    @test value(only(els[1])) == "plain"
+end
+
 @testset "structural ==/hash, positional issamenode" begin
     f = parse(RICH_XML, FlatNode)
     root = only(eachelement(f))

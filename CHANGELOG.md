@@ -5,6 +5,17 @@ All notable changes to XML.jl will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **By-key attribute access, completed across readers** — one rule: the key's type selects
+  the axis (an `Int` indexes the child sequence, `:` takes it whole, a `String` looks up the
+  attribute map, `get` being the default-on-a-miss variant). `FlatNode` gains
+  `n["key"]`/`get`/`haskey`/`keys` (attribute-range scan, only the matched value decoded)
+  plus the `n[:]`/`n[end]`/`only` child-axis forms; `Cursor` gains `getindex`/`haskey`/`keys`
+  beside its existing `get`, on the current node (#100).
+
 ## [0.4.3] - 2026-07-26
 
 ### Added
@@ -310,6 +321,7 @@ First release since XML.jl moved to [JuliaData](https://github.com/JuliaData/XML
 
 - Initial release.
 
+[Unreleased]: https://github.com/JuliaData/XML.jl/compare/v0.4.3...HEAD
 [0.4.3]: https://github.com/JuliaData/XML.jl/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/JuliaData/XML.jl/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/JuliaData/XML.jl/compare/v0.4.0...v0.4.1

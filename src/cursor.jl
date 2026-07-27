@@ -216,6 +216,28 @@ function Base.get(c::Cursor, key::AbstractString, default)
     default
 end
 
+function Base.getindex(c::Cursor, key::AbstractString)
+    val = get(c, key, _MISSING_ATTR)
+    val === _MISSING_ATTR && throw(KeyError(key))
+    val
+end
+
+function Base.haskey(c::Cursor, key::AbstractString)
+    get(c, key, _MISSING_ATTR) !== _MISSING_ATTR
+end
+
+function Base.keys(c::Cursor)
+    c.nodetype in (Element, Declaration) || return ()
+    it = _rescan(c); iterate(it)
+    result = SubString{String}[]
+    for tok in it
+        tok.kind === _CURSOR_XT.TokenKinds.ATTR_NAME || break
+        push!(result, raw(tok, _data(c)))
+        iterate(it)                             # skip value
+    end
+    result
+end
+
 #-----------------------------------------------------------------------------# is_simple_value
 # Cursor mirror of `is_simple_value(::LazyNode)`: combined predicate+accessor that
 # returns the lone Text/CData value of the current element (or `nothing` if it has
