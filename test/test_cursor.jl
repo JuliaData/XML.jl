@@ -53,6 +53,17 @@ using XML: Cursor, next!, for_each_child, @for_each_child, skip_element!, eof, n
         @test attrs["c"] == "<x>"
     end
 
+    @testset "by-key getindex/haskey/keys" begin
+        # #100 — the KeyError twin of `get`, plus haskey/keys, on the current node
+        c = parse(Cursor, """<root a="1" c="&lt;x&gt;"/>""")
+        next!(c)
+        @test c["a"] == "1"
+        @test c["c"] == "<x>"                            # entity-decoded
+        @test_throws KeyError c["missing"]
+        @test haskey(c, "a") && !haskey(c, "missing")
+        @test collect(keys(c)) == ["a", "c"]
+    end
+
     @testset "value of CData / Comment / PI / DTD / Text-with-entities" begin
         c = parse(Cursor, "<r><![CDATA[c<d>ata]]><!--cmt--><?pi body?><t>a&amp;b</t></r>")
         vals = Dict{Any,Any}()
