@@ -30,7 +30,13 @@ const SSNode = Node{SubString{String}}
 
 ms(b)  = round(median(b).time / 1e6, digits = 2)
 mib(b) = round(b.memory / 2^20, digits = 1)
-row(label, b) = println(rpad("  " * label, 26), lpad(ms(b), 8), " ms   ", lpad(mib(b), 7), " MiB")
+# Each line decomposes its median: total (the user-lived figure, GC draws included) and the
+# GC share of that median sample — the total minus it is the stable, reproducible work time.
+function row(label, b)
+    gc = median(b).gctime / 1e6
+    tail = gc < 0.05 ? "" : string(" (GC ", round(gc, digits = 1), ")")
+    println(rpad("  " * label, 26), lpad(ms(b), 8), " ms", rpad(tail, 12), lpad(mib(b), 7), " MiB")
+end
 
 #--------------------------------------------------------------# (1) STREAM (no tree)
 # Advance through every node touching tag + value — the streaming workload, zero tree built.

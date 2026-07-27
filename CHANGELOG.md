@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **The performance tables decompose garbage collection**: every timed row in
+  PERFORMANCE-v0.4.md now reads `total (GC x)` under a `time (incl. GC)` header — the total
+  is what a user lives, the GC share is the per-session draw, and their difference is the
+  reproducible work time. The benchmark harnesses (`profile.jl`, `flatnode_bench.jl`) print
+  the decomposition; `flatnode_bench.jl` reports the median run's own pair.
+
 ### Added
 
 - **By-key attribute access, completed across readers** — one rule: the key's type selects

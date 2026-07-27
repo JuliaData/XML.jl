@@ -11,7 +11,15 @@ const xmark = joinpath(@__DIR__, "data", "xmark.xml")
 const xml = read(xmark, String)
 println("corpus: ", basename(xmark), " (", round(ncodeunits(xml) / 2^20, digits = 1), " MiB)")
 
-medN(f, n = 7) = median((GC.gc(); @elapsed f()) for _ in 1:n)
+# The median RUN's (elapsed, gctime) pair — runs sorted by elapsed, middle one picked whole,
+# so the GC figure belongs to the same run as the time it decomposes. GC.gc() first: each run
+# starts from a clean heap, so gctime is the run's own allocation cost, not inherited debt.
+function medN(f, n = 7)
+    runs = [begin GC.gc(); t = @timed f(); (t.time, t.gctime) end for _ in 1:n]
+    sort!(runs; by = first)
+    runs[cld(n, 2)]
+end
+_gctail(gc) = gc * 1000 < 0.05 ? "" : string(" (GC ", round(gc * 1000, digits = 1), ")")
 allocs(f) = (GC.gc(); Base.gc_num().allocd; a0 = Base.gc_bytes(); f(); Base.gc_bytes() - a0)
 
 # ── build ──
@@ -19,7 +27,8 @@ fbuild() = parse(xml, FlatNode)
 nbuild() = parse(xml, Node)
 ezbuild() = EzXML.parsexml(xml)
 for (nm, f) in ["FlatNode" => fbuild, "Node" => nbuild, "EzXML" => ezbuild]
-    println("build   ", rpad(nm, 9), lpad(round(medN(f) * 1000, digits = 1), 8), " ms")
+    el, gc = medN(f)
+    println("build   ", rpad(nm, 9), lpad(round(el * 1000, digits = 1), 8), " ms", _gctail(gc))
 end
 
 # ── traverse (count nodes via each reader's handles) ──
@@ -47,7 +56,8 @@ function curwalk()
 end
 println("nodes: flat=", fwalk(FlatNode(F.store, Int32(1))), " node=", nwalk(N), " lazy=", lwalk(L))
 for (nm, f) in ["FlatNode" => () -> fwalk(FlatNode(F.store, Int32(1))), "Node" => () -> nwalk(N), "Cursor" => curwalk, "LazyNode" => () -> lwalk(L)]
-    println("walk    ", rpad(nm, 9), lpad(round(medN(f) * 1000, digits = 2), 8), " ms")
+    el, gc = medN(f)
+    println("walk    ", rpad(nm, 9), lpad(round(el * 1000, digits = 2), 8), " ms", _gctail(gc))
 end
 
 # ── extract (tag/value byte sums through the public accessors) ──
@@ -65,7 +75,8 @@ function nextract(n, acc = Ref(0))
 end
 println("extract sums: flat=", fextract(FlatNode(F.store, Int32(1))), " node=", nextract(N))
 for (nm, f) in ["FlatNode" => () -> fextract(FlatNode(F.store, Int32(1))), "Node" => () -> nextract(N)]
-    println("extract ", rpad(nm, 9), lpad(round(medN(f) * 1000, digits = 2), 8), " ms")
+    el, gc = medN(f)
+    println("extract ", rpad(nm, 9), lpad(round(el * 1000, digits = 2), 8), " ms", _gctail(gc))
 end
 
 # ── retained + build allocations ──
