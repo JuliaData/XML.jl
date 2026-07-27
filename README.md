@@ -75,6 +75,12 @@ is_simple(node)     -> Bool (e.g. <tag>text</tag>)
 simple_value(node)  -> e.g. "text" from <tag>text</tag>
 ```
 
+Indexing follows one rule across the tree readers (`Node`, `LazyNode`, `FlatNode`): the
+key's type selects the axis. An `Int` indexes the child sequence (`node[2]`, `node[end]`),
+`:` takes it whole (`node[:]`), and a `String` looks up the attribute map (`node["id"]`,
+`KeyError` on a miss) — with `get(node, "id", default)` as the default-on-a-miss variant,
+and `haskey`/`keys` alongside. `Cursor` supports the attribute forms on its current node.
+
 <br>
 
 ## `NodeType`
