@@ -363,6 +363,8 @@ Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl). Data: `books.xml
 | Collect tags, medium | 5.63 ms | 10.4 ms | 12.9 ms | — |
 
 EzXML and LightXML wrap libxml2 (C): faster on raw parse, slower on in-Julia traversal.
+Times include garbage collection; [PERFORMANCE](PERFORMANCE-v0.4.md) breaks each of its rows
+into the stable GC-free work and the per-session GC share.
 
 For the per-access-pattern decomposition (streaming / partial reads / full DOM / stage breakdown) and the theory behind these numbers, see [**PERFORMANCE-v0.4.md**](PERFORMANCE-v0.4.md).
 
