@@ -40,7 +40,7 @@ end
 
 """
     unescape(x::AbstractString) -> String
-    unescape(x::SubString{String}) -> Union{SubString{String}, String}
+    unescape(x::SubString{String}) -> SubString{String}
 
 Unescape XML entities in `x`: the five predefined entities (`&amp;` `&lt;` `&gt;` `&apos;`
 `&quot;`) and numeric character references (`&#123;`, `&#xAB;`). Each reference is processed
@@ -94,8 +94,12 @@ function _rewrite_attr_ws(s::AbstractString)
     String(take!(io))
 end
 
+# The rewrite result is wrapped back into `SubString` so both paths return the same
+# concrete type: every reader's decode funnel calls this on its hot path, and a
+# `Union{SubString{String}, String}` return would heap-box the dominant clean-path
+# SubString at every non-inlined call site — one 32-byte box per read (#98, #105).
 function unescape(x::SubString{String})
     occursin('&', x) || return x
-    replace(String(x), _ENTITY_RE => _unescape_entity)
+    SubString(replace(String(x), _ENTITY_RE => _unescape_entity))
 end
 

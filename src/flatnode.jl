@@ -307,8 +307,7 @@ function attributes(n::FlatNode)
         a = @inbounds n.store.attrs[ai]
         name = _fsub(n.store, a.name_offset, a.name_len)
         rawv = _normalize_attr_ws(_fsub(n.store, a.value_offset, abs(a.value_len)))
-        val = _as_substring(a.value_len < 0 ? unescape(rawv) : rawv)
-        push!(out, name => val)
+        push!(out, name => (a.value_len < 0 ? unescape(rawv) : rawv))
         ai += Int32(1)
     end
     out
@@ -438,29 +437,27 @@ Return the value of attribute `key` on `n`, or `default` if absent. Scans the re
 attribute range and decodes only the matched value — no vector materialized. Use
 [`attributes`](@ref) for all pairs at once.
 """
-function Base.get(n::FlatNode, key::AbstractString, default)
+@inline function Base.get(n::FlatNode, key::AbstractString, default)
     r = _rec(n)
     ai = r.attr_first
     for _ in 1:r.attr_count
         a = @inbounds n.store.attrs[ai]
         if _fsub(n.store, a.name_offset, a.name_len) == key
             rawv = _normalize_attr_ws(_fsub(n.store, a.value_offset, abs(a.value_len)))
-            return _as_substring(a.value_len < 0 ? unescape(rawv) : rawv)
+            return a.value_len < 0 ? unescape(rawv) : rawv
         end
         ai += Int32(1)
     end
     default
 end
 
-function Base.getindex(n::FlatNode, key::AbstractString)
-    val = get(n, key, _MISSING_ATTR)
-    val === _MISSING_ATTR && throw(KeyError(key))
+@inline function Base.getindex(n::FlatNode, key::AbstractString)
+    val = get(n, key, nothing)
+    val === nothing && throw(KeyError(key))
     val
 end
 
-function Base.haskey(n::FlatNode, key::AbstractString)
-    get(n, key, _MISSING_ATTR) !== _MISSING_ATTR
-end
+@inline Base.haskey(n::FlatNode, key::AbstractString) = get(n, key, nothing) !== nothing
 
 function Base.keys(n::FlatNode)
     r = _rec(n)
@@ -480,7 +477,16 @@ is_simple(n::FlatNode) = (r = _rec(n);
     r.kind === Element && r.attr_count == 0 && r.first_child != 0 &&
     (c = @inbounds n.store.recs[r.first_child]; c.next_sibling == 0 && (c.kind === Text || c.kind === CData)))
 
-is_simple_value(n::FlatNode) = is_simple(n) ? value(FlatNode(n.store, _rec(n).first_child)) : nothing
+# Hand-flattened `value(FlatNode(n.store, _rec(n).first_child))`: the extra call depth
+# pushed the SubString constructor past the inlining budget, and a constructor left as
+# `invoke` heap-materializes the returned view — 32 B per call (#105).
+@inline function is_simple_value(n::FlatNode)
+    is_simple(n) || return nothing
+    c = @inbounds n.store.recs[_rec(n).first_child]
+    c.value_offset < 0 && return nothing
+    raw = _fsub(n.store, c.value_offset, abs(c.value_len))
+    c.value_len < 0 ? unescape(raw) : raw
+end
 
 function simple_value(n::FlatNode)
     is_simple(n) || error("`simple_value` requires a simple node: an Element with no attributes and exactly one Text or CData child. See `is_simple`.")

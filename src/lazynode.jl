@@ -66,7 +66,10 @@ function tag(n::LazyNode)
     nothing
 end
 
-function value(n::LazyNode)
+# @inline: the `Union{Nothing, SubString{String}}` return only stays box-free when the
+# caller can union-split it — across a non-inlined boundary it costs 32 B per call (#105).
+# Same reason on the other union-returning accessors below and in cursor.jl/flatnode.jl.
+@inline function value(n::LazyNode)
     nt = n.nodetype
     if nt === Text
         return _decode(n.token, n.data)
@@ -95,12 +98,6 @@ function value(n::LazyNode)
 end
 
 #-----------------------------------------------------------------------------# attributes
-# Promote a `String` returned from `unescape` to a SubString so the homogeneous
-# `Attributes{SubString{String}}` parameterization works. The String was already
-# allocated for entity decoding; the SubString wrapper is just a view on top.
-@inline _as_substring(s::SubString{String}) = s
-@inline _as_substring(s::String) = SubString(s, 1, lastindex(s))
-
 function attributes(n::LazyNode)
     n.nodetype in (Element, Declaration) || return nothing
     iter = _lazy_tokenizer(n)
@@ -111,7 +108,7 @@ function attributes(n::LazyNode)
         name = raw(tok, n.data)
         result = iterate(iter)
         result === nothing && break
-        push!(attrs, name => _as_substring(_decode_attr(result[1], n.data)))
+        push!(attrs, name => _decode_attr(result[1], n.data))
     end
     isempty(attrs) ? nothing : Attributes(attrs)
 end
@@ -124,7 +121,7 @@ once — no `Attributes` allocation — so this is the recommended way to read a
 attribute from a `LazyNode`. Use [`eachattribute`](@ref) to stream all attribute pairs
 without allocating, or [`attributes`](@ref) for the materialized dict.
 """
-function Base.get(n::LazyNode, key::AbstractString, default)
+@inline function Base.get(n::LazyNode, key::AbstractString, default)
     n.nodetype in (Element, Declaration) || return default
     iter = _lazy_tokenizer(n)
     iterate(iter)  # skip OPEN_TAG or XML_DECL_OPEN
@@ -142,48 +139,46 @@ function Base.get(n::LazyNode, key::AbstractString, default)
 end
 
 #-----------------------------------------------------------------------------# eachattribute
-mutable struct LazyAttrIterator{I}
+# Immutable on purpose: the wrapped tokenizer carries all iteration state, so the wrapper
+# itself never mutates — which lets the whole iterator (tokenizer included) stay
+# stack-allocated when a `for` loop inlines it (#105). The standard iteration contract
+# applies: `iterate` must not be called again after it has returned `nothing`.
+struct LazyAttrIterator{I}
     iter::I
-    done::Bool
+    active::Bool
 end
 
 Base.IteratorSize(::Type{<:LazyAttrIterator}) = Base.SizeUnknown()
-Base.eltype(::Type{<:LazyAttrIterator}) = Pair{SubString{String}, Union{SubString{String}, String}}
+Base.eltype(::Type{<:LazyAttrIterator}) = Pair{SubString{String}, SubString{String}}
 
 """
     eachattribute(n::LazyNode)
 
-Lazy iterator yielding `name => value` pairs for the attributes of `n` (an `Element` or
-`Declaration`). Does not allocate an [`Attributes`](@ref) dict or intermediate vector;
-suitable for hot paths that only need to scan attributes.
+Lazy iterator yielding decoded `name => value` pairs for the attributes of `n` (an
+`Element` or `Declaration`). Allocation-free: no [`Attributes`](@ref) dict, no
+intermediate vector, and no per-pair boxing — suitable for hot paths that scan every
+attribute.
 
 For a single attribute by name, prefer `get(n, key, default)` — it short-circuits as soon
 as the match is found.
 """
-function eachattribute(n::LazyNode)
+@inline function eachattribute(n::LazyNode)
     iter = _lazy_tokenizer(n)
     is_attrs = n.nodetype === Element || n.nodetype === Declaration
     is_attrs && iterate(iter)  # skip OPEN_TAG / XML_DECL_OPEN
-    LazyAttrIterator{typeof(iter)}(iter, !is_attrs)
+    LazyAttrIterator{typeof(iter)}(iter, is_attrs)
 end
 
-function Base.iterate(it::LazyAttrIterator, _ = nothing)
-    it.done && return nothing
+@inline function Base.iterate(it::LazyAttrIterator, _ = nothing)
+    it.active || return nothing
     r = iterate(it.iter)
-    isnothing(r) && (it.done = true; return nothing)
+    isnothing(r) && return nothing
     tok = r[1]
-    if tok.kind !== TokenKinds.ATTR_NAME
-        it.done = true
-        return nothing
-    end
+    tok.kind === TokenKinds.ATTR_NAME || return nothing
     name = raw(tok, _src(it.iter))
     r = iterate(it.iter)
-    if isnothing(r)
-        it.done = true
-        return nothing
-    end
-    val = _decode_attr(r[1], _src(it.iter))
-    ((name => val), nothing)
+    isnothing(r) && return nothing
+    ((name => _decode_attr(r[1], _src(it.iter))), nothing)
 end
 
 #-----------------------------------------------------------------------------# foreach_attr
@@ -191,14 +186,14 @@ end
     foreach_attr(f, n::LazyNode)
 
 Call `f(name_token, value_token)` for each attribute of `n` (an `Element` or
-`Declaration`), where both arguments are `Token` values. Avoids the
-`Union{Nothing, T}` iteration protocol and its associated boxing, making this
-suitable for zero-allocation hot paths.
+`Declaration`), where both arguments are raw `Token` values.
 
-Recover attribute text with `XML.XMLTokenizer.raw(tok, n.data)` and decode
-attribute values with `XML.XMLTokenizer.attr_value(tok, n.data)`.
-
-For decoded `name => value` pairs, use [`eachattribute`](@ref) instead.
+To read attributes as decoded `name => value` pairs, use [`eachattribute`](@ref) — it is
+equally allocation-free. The token layer only makes sense for consumers that need byte
+offsets or the verbatim source: `XML.XMLTokenizer.attr_value(tok, n.data)` strips the
+surrounding quotes but performs **no** character-reference resolution and **no** XML 1.0
+§3.3.3 white-space normalization, so its output differs from the decoded accessors
+whenever an attribute carries references or literal tab/newline/CR.
 """
 function foreach_attr(f, n::LazyNode{String})
     n.nodetype in (Element, Declaration) || return
@@ -215,15 +210,13 @@ function foreach_attr(f, n::LazyNode{String})
     end
 end
 
-function Base.getindex(n::LazyNode, key::AbstractString)
-    val = get(n, key, _MISSING_ATTR)
-    val === _MISSING_ATTR && throw(KeyError(key))
+@inline function Base.getindex(n::LazyNode, key::AbstractString)
+    val = get(n, key, nothing)
+    val === nothing && throw(KeyError(key))
     val
 end
 
-function Base.haskey(n::LazyNode, key::AbstractString)
-    get(n, key, _MISSING_ATTR) !== _MISSING_ATTR
-end
+@inline Base.haskey(n::LazyNode, key::AbstractString) = get(n, key, nothing) !== nothing
 
 function Base.keys(n::LazyNode)
     n.nodetype in (Element, Declaration) || return ()
@@ -555,19 +548,18 @@ function is_simple(n::LazyNode)
     length(ch) == 1 && ch[1].nodetype in (Text, CData)
 end
 
-function simple_value(n::LazyNode)
-    n.nodetype === Element || error("`simple_value` is only defined for simple nodes.")
-    attrs = attributes(n)
-    (!isnothing(attrs) && !isempty(attrs)) && error("`simple_value` is only defined for simple nodes.")
-    ch = children(n)
-    length(ch) == 1 && ch[1].nodetype in (Text, CData) || error("`simple_value` is only defined for simple nodes.")
-    value(ch[1])
+# Delegates to the single-pass token walk of `is_simple_value` — materializing
+# `attributes` + `children` just to validate simplicity costs ~10× the walk (#105).
+@inline function simple_value(n::LazyNode)
+    v = is_simple_value(n)
+    v === nothing && error("`simple_value` is only defined for simple nodes.")
+    v
 end
 
 # Single-pass combined predicate+accessor: returns the simple text/CData value, or
 # `nothing` if `n` is not a simple element. Avoids the double tokenization of
 # `is_simple(n) ? simple_value(n) : ...`.
-function is_simple_value(n::LazyNode)
+@inline function is_simple_value(n::LazyNode)
     n.nodetype === Element || return nothing
     iter = _lazy_tokenizer(n)
     iterate(iter)  # skip OPEN_TAG

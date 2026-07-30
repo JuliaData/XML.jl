@@ -191,10 +191,11 @@ is_simple(o::Node) = o.nodetype === Element &&
     o.children[1].nodetype in (Text, CData)
 
 """
-    simple_value(node) -> String
+    simple_value(node) -> Union{String, SubString{String}}
 
-Return the textual content of a simple element (see [`is_simple`](@ref)). Errors if
-`node` is not simple.
+Return the textual content of a simple element (see [`is_simple`](@ref)): a `String` on
+`Node`, a zero-copy `SubString{String}` on the other readers. Errors if `node` is not
+simple.
 """
 simple_value(o::Node) = is_simple(o) ? o.children[1].value :
     error("`simple_value` is only defined for simple nodes.")
@@ -430,17 +431,16 @@ function Base.get(o::Node, key::AbstractString, default)
     default
 end
 
-const _MISSING_ATTR = gensym(:missing_attr)
-
-function Base.getindex(o::Node, key::AbstractString)
-    val = get(o, key, _MISSING_ATTR)
-    val === _MISSING_ATTR && throw(KeyError(key))
+# Missing keys are signalled by `nothing` (attribute values are always strings, never
+# `nothing`), not by a `Symbol` sentinel: a non-singleton default forces a union the
+# compiler cannot split away, heap-boxing the returned value at every call (#105).
+@inline function Base.getindex(o::Node, key::AbstractString)
+    val = get(o, key, nothing)
+    val === nothing && throw(KeyError(key))
     val
 end
 
-function Base.haskey(o::Node, key::AbstractString)
-    get(o, key, _MISSING_ATTR) !== _MISSING_ATTR
-end
+@inline Base.haskey(o::Node, key::AbstractString) = get(o, key, nothing) !== nothing
 
 Base.keys(o::Node) = isnothing(o.attributes) ? () : first.(o.attributes)
 
