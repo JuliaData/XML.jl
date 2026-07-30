@@ -148,13 +148,12 @@ function tag(c::Cursor)
     nt === ProcessingInstruction  ? pi_target(c.token, _data(c)) : nothing
 end
 
-# token-layer entity decode (inlined `_decode`; depends only on `unescape`).
-# Returns Union{SubString,String} like `value(::LazyNode)` — the polymorphic
-# return is inherent to the accessor; the residual boxing it causes is minor
-# next to the per-token allocation that Phase 2 (bitstype Token) removes.
+# token-layer entity decode (inlined `_decode`; depends only on `unescape`, whose
+# `SubString` method returns concretely — both branches here are `SubString{String}`).
 @inline _cursor_decode(tok, data) = tok.has_entities ? unescape(raw(tok, data)) : raw(tok, data)
 
-function value(c::Cursor)
+# @inline: keeps the union return caller-splittable — see the note on `value(::LazyNode)`.
+@inline function value(c::Cursor)
     nt = c.nodetype
     if nt === Text
         return _cursor_decode(c.token, _data(c))
@@ -182,8 +181,6 @@ end
     v = _normalize_attr_ws(attr_value(tok, data))
     tok.has_entities ? unescape(v) : v
 end
-@inline _cursor_as_substring(s::SubString{String}) = s
-@inline _cursor_as_substring(s::String) = SubString(s, 1, lastindex(s))
 
 function attributes(c::Cursor)
     c.nodetype in (Element, Declaration) || return nothing
@@ -194,13 +191,13 @@ function attributes(c::Cursor)
         name = raw(tok, _data(c))
         r = iterate(it)
         r === nothing && break
-        push!(attrs, name => _cursor_as_substring(_cursor_decode_attr(r[1], _data(c))))
+        push!(attrs, name => _cursor_decode_attr(r[1], _data(c)))
     end
     isempty(attrs) ? nothing : Attributes(attrs)
 end
 
 # Single-attribute read with no `Attributes` allocation.
-function Base.get(c::Cursor, key::AbstractString, default)
+@inline function Base.get(c::Cursor, key::AbstractString, default)
     c.nodetype in (Element, Declaration) || return default
     it = _rescan(c); iterate(it)
     for tok in it
@@ -216,15 +213,13 @@ function Base.get(c::Cursor, key::AbstractString, default)
     default
 end
 
-function Base.getindex(c::Cursor, key::AbstractString)
-    val = get(c, key, _MISSING_ATTR)
-    val === _MISSING_ATTR && throw(KeyError(key))
+@inline function Base.getindex(c::Cursor, key::AbstractString)
+    val = get(c, key, nothing)
+    val === nothing && throw(KeyError(key))
     val
 end
 
-function Base.haskey(c::Cursor, key::AbstractString)
-    get(c, key, _MISSING_ATTR) !== _MISSING_ATTR
-end
+@inline Base.haskey(c::Cursor, key::AbstractString) = get(c, key, nothing) !== nothing
 
 function Base.keys(c::Cursor)
     c.nodetype in (Element, Declaration) || return ()
@@ -244,7 +239,7 @@ end
 # attributes / isn't a single-text element). Non-destructive — reads via `_rescan`,
 # so the cursor position is unchanged (caller still advances with `for_each_child` /
 # `skip_element!`). Lets hot paths read e.g. an XLSX `<v>` value with no LazyNode snapshot.
-function is_simple_value(c::Cursor)
+@inline function is_simple_value(c::Cursor)
     c.nodetype === Element || return nothing
     it = _rescan(c)
     iterate(it)                                 # skip OPEN_TAG

@@ -24,6 +24,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   plus the `n[:]`/`n[end]`/`only` child-axis forms; `Cursor` gains `getindex`/`haskey`/`keys`
   beside its existing `get`, on the current node (#100).
 
+### Fixed
+
+- **The decoded read surface is now allocation-free** on the three zero-copy readers
+  (`LazyNode`, `FlatNode`, `Cursor`): `n["key"]`/`get`/`haskey`, `value`,
+  `simple_value`/`is_simple_value` and `eachattribute` no longer heap-box their result on
+  entity-free content — previously 32–320 B on every call, the same type-instability
+  phenomenon the v0.4.3 normalization fix removed (#98): `unescape`'s union return, the
+  `getindex` sentinel default, and small unions crossing non-inlined call boundaries.
+  `simple_value(::LazyNode)` now runs the same single-pass token walk as
+  `is_simple_value` instead of materializing `attributes` and `children`. Allocation
+  guards in the test suite pin every accessor at zero (#105).
+- **`foreach_attr`'s docstring no longer recommends the internal tokenizer layer**
+  (`XML.XMLTokenizer.raw`/`attr_value`) — a workaround from before the decoded surface
+  was allocation-free, and a semantic trap: `attr_value` only strips the quotes,
+  performing no character-reference resolution and no XML 1.0 §3.3.3 white-space
+  normalization. The docstring now points to `eachattribute` (decoded, equally
+  allocation-free) and spells out the raw-layer caveat (#104).
+
 ## [0.4.3] - 2026-07-26
 
 ### Added

@@ -430,17 +430,16 @@ function Base.get(o::Node, key::AbstractString, default)
     default
 end
 
-const _MISSING_ATTR = gensym(:missing_attr)
-
-function Base.getindex(o::Node, key::AbstractString)
-    val = get(o, key, _MISSING_ATTR)
-    val === _MISSING_ATTR && throw(KeyError(key))
+# Missing keys are signalled by `nothing` (attribute values are always strings, never
+# `nothing`), not by a `Symbol` sentinel: a non-singleton default forces a union the
+# compiler cannot split away, heap-boxing the returned value at every call (#105).
+@inline function Base.getindex(o::Node, key::AbstractString)
+    val = get(o, key, nothing)
+    val === nothing && throw(KeyError(key))
     val
 end
 
-function Base.haskey(o::Node, key::AbstractString)
-    get(o, key, _MISSING_ATTR) !== _MISSING_ATTR
-end
+@inline Base.haskey(o::Node, key::AbstractString) = get(o, key, nothing) !== nothing
 
 Base.keys(o::Node) = isnothing(o.attributes) ? () : first.(o.attributes)
 
