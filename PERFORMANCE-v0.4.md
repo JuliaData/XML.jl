@@ -123,6 +123,16 @@ Stream / low-memory / read-only full-DOM / repeated traversal → **XML.jl**; a 
 > [!NOTE]
 > **`:strict`** adds a character-range scan over text (a second O(content) pass); the overhead scales with the document's *text share* — ~1.1× on the markup-heavy XMark corpus, up to ~20× on a pure-text document; `:lenient` / `:structural` are unaffected.
 
+> [!TIP]
+> **GC tuning for tree-holding applications.** A single-threaded Julia process defaults to
+> *one* GC thread; `--gcthreads=4` (the performance-core count here) parallelizes the mark
+> phase, cutting a full collection with this corpus's 882 K-node `Node` tree live from
+> ~56 ms to ~21 ms — and the build's GC share shrinks accordingly (measured 2026-07-31,
+> same machine and Julia as above, AC ≡ battery). Mark threads sleep outside collections
+> and run only while compute is paused anyway, so the setting takes nothing from
+> computation. It trims GC pauses, not the materialization floor: the build's GC-free work
+> is unchanged.
+
 [^profile]: Tables 1–3: measured 2026-07-30 (the `v0.3.9` row: 2026-06-28), Apple M5 (single-threaded), Julia 1.12.6; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3). Each time is the median sample's total, its *(GC x)* tail that same sample's garbage-collection share — omitted when below 0.05 ms; the total minus it is the GC-free work, the reproducible part of the number. Source: [`benchmarks/profile.jl`](benchmarks/profile.jl).
 
 [^flatbench]: Table 4: measured 2026-07-30, same machine and Julia; source [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl) — each cell is the median run of 7, every run starting from a freshly collected heap, so its *(GC x)* tail is that run's own allocation cost, not inherited debt.

@@ -5,6 +5,15 @@ All notable changes to XML.jl will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **GC-tuning note in PERFORMANCE-v0.4.md**: a single-threaded Julia process defaults to one
+  GC thread; `--gcthreads=4` cuts a full collection with a large live `Node` tree ~2.7× on
+  the benchmark corpus, at no cost to computation (mark threads only run while compute is
+  paused). Measured guidance for applications that hold big trees.
+
 ## [0.4.4] - 2026-07-31
 
 ### Added
