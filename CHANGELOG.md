@@ -5,15 +5,7 @@ All notable changes to XML.jl will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Changed
-
-- **The performance tables decompose garbage collection**: every timed row in
-  PERFORMANCE-v0.4.md now reads `total (GC x)` under a `time (incl. GC)` header — the total
-  is what a user lives, the GC share is the per-session draw, and their difference is the
-  reproducible work time. The benchmark harnesses (`profile.jl`, `flatnode_bench.jl`) print
-  the decomposition; `flatnode_bench.jl` reports the median run's own pair.
+## [0.4.4] - 2026-07-31
 
 ### Added
 
@@ -23,6 +15,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `n["key"]`/`get`/`haskey`/`keys` (attribute-range scan, only the matched value decoded)
   plus the `n[:]`/`n[end]`/`only` child-axis forms; `Cursor` gains `getindex`/`haskey`/`keys`
   beside its existing `get`, on the current node (#100).
+
+### Changed
+
+- **The performance tables decompose garbage collection**: every timed row in
+  PERFORMANCE-v0.4.md now reads `total (GC x)` under a `time (incl. GC)` header — the total
+  is what a user lives, the GC share is the per-session draw, and their difference is the
+  reproducible work time. The benchmark harnesses (`profile.jl`, `flatnode_bench.jl`) print
+  the decomposition; `flatnode_bench.jl` reports the median run's own pair.
 
 ### Fixed
 
@@ -349,7 +349,8 @@ First release since XML.jl moved to [JuliaData](https://github.com/JuliaData/XML
 
 - Initial release.
 
-[Unreleased]: https://github.com/JuliaData/XML.jl/compare/v0.4.3...HEAD
+[Unreleased]: https://github.com/JuliaData/XML.jl/compare/v0.4.4...HEAD
+[0.4.4]: https://github.com/JuliaData/XML.jl/compare/v0.4.3...v0.4.4
 [0.4.3]: https://github.com/JuliaData/XML.jl/compare/v0.4.2...v0.4.3
 [0.4.2]: https://github.com/JuliaData/XML.jl/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/JuliaData/XML.jl/compare/v0.4.0...v0.4.1
