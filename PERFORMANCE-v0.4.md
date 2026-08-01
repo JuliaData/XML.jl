@@ -34,6 +34,21 @@ The well-formedness level is a type parameter (`Val{W}`), so `:strict`/`:structu
 
 Performance isn't one number — it splits by *what you do with the document*. 14 MB [XMark](https://projects.cwi.nl/xmark/) file (XML.jl and EzXML walk the same ~882 K nodes); **lower is better.**
 
+> [!NOTE]
+> **How to read the timings — three heap regimes.** A number's *(GC x)* share is only
+> comparable within its own regime:
+>
+> - **Continuous session** (Tables 1–3): BenchmarkTools samples run back-to-back, each
+>   inheriting the heap the previous one left — the *(GC x)* tail is what a working
+>   session actually pays.
+> - **Fresh heap per run** (Table 4): every run starts from a freshly collected heap, so
+>   its *(GC x)* tail is that run's own allocation cost, not inherited debt.
+> - **Live-set** (the GC-tuning note below): what each collection costs while a built tree
+>   is *held* in memory — the cost a skipped collection avoids re-paying.
+>
+> Across all three, the GC share is the volatile part; the GC-free remainder reproduces
+> within a few percent and is the number to compare across sessions or versions.
+
 ### Stream — events, no tree
 
 `Cursor` pulls in pure Julia — a full pass, decoded reads included, leaves the allocator
