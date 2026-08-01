@@ -20,9 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   accumulate on two parse-wide scratch stacks and each closing tag slices out one
   exact-size vector — or `nothing`, allocation-free, when the element has none. On the
   14 MB benchmark corpus this removes ~380 K allocations and ~22 MiB of garbage per build;
-  the time saved scales with ambient GC pressure — a standalone parse gains ~2-3 ms, rising
-  to ~14 ms per parse when the heap holds a large live set, since every skipped collection
-  stops re-marking whatever else the application keeps in memory. The finished
+  the time saved depends on what else the heap holds — a standalone parse gains ~2-3 ms,
+  rising to ~14 ms per parse when earlier documents are kept in memory, since every skipped
+  collection stops re-marking whatever else the application holds. The finished
   tree no longer retains `push!`-growth overcapacity in its children vectors: the retained
   tree shrinks from 80.0 to 71.6 MiB and full walks of it run ~1.4× faster (#107).
 

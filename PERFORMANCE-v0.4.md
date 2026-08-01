@@ -35,16 +35,17 @@ The well-formedness level is a type parameter (`Val{W}`), so `:strict`/`:structu
 Performance isn't one number — it splits by *what you do with the document*. 14 MB [XMark](https://projects.cwi.nl/xmark/) file (XML.jl and EzXML walk the same ~882 K nodes); **lower is better.**
 
 > [!NOTE]
-> **How to read the timings — three heap regimes.** A number's *(GC x)* share is only
-> comparable within its own regime:
+> **How to read the timings — what memory holds when a number is taken.** In every
+> protocol the code is compiled and warm; what differs is the memory state a run starts
+> from, and therefore how much garbage-collection work it triggers. The *(GC x)* share of
+> a number is only comparable between numbers taken from the same starting state:
 >
-> - **Continuous session** (Tables 1–3): BenchmarkTools samples run back-to-back, each
->   inheriting the heap the previous one left — the *(GC x)* tail is what a working
->   session actually pays.
-> - **Fresh heap per run** (Table 4): every run starts from a freshly collected heap, so
->   its *(GC x)* tail is that run's own allocation cost, not inherited debt.
-> - **Live-set** (the GC-tuning note below): what each collection costs while a built tree
->   is *held* in memory — the cost a skipped collection avoids re-paying.
+> - **Back-to-back samples** (Tables 1–3): each sample inherits the garbage the previous
+>   one left behind — the *(GC x)* tail is what a working session actually pays.
+> - **Freshly collected heap** (Table 4): every run starts right after a full collection —
+>   the *(GC x)* tail is that run's own allocation cost, with no inherited debt.
+> - **With a built tree held in memory** (the GC-tuning note below): what each collection
+>   costs while a tree stays live — the cost a skipped collection avoids re-paying.
 >
 > Across all three, the GC share is the volatile part; the GC-free remainder reproduces
 > within a few percent and is the number to compare across sessions or versions.
