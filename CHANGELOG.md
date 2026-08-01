@@ -21,7 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exact-size vector — or `nothing`, allocation-free, when the element has none. On the
   14 MB benchmark corpus this removes ~380 K allocations and ~22 MiB of garbage per build
   (−14 % total build time, −5.7 ms GC-free work), and the finished tree no longer retains
-  `push!`-growth overcapacity in its children vectors (#107).
+  `push!`-growth overcapacity in its children vectors — the retained tree shrinks from
+  80.0 to 71.6 MiB and full walks of it run ~1.4× faster (#107).
 
 ## [0.4.4] - 2026-07-31
 
