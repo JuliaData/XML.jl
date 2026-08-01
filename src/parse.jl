@@ -58,8 +58,16 @@ end
 _to(::Type{String}, s::AbstractString) = String(s)
 _to(::Type{SubString{String}}, s::SubString{String}) = s
 
-# Collapse an empty Vector to `nothing` so Node fields store "absent" canonically.
-_nothingify(v::Vector) = isempty(v) ? nothing : v
+# Slice the run `scratch[mark+1:end]` out as one exact-size Vector — or `nothing` when the
+# run is empty, so Node fields store "absent" canonically and the empty case allocates
+# nothing at all — then truncate the scratch back to the mark (#107).
+function _take_slice!(scratch::Vector{T}, mark::Int) where {T}
+    n = length(scratch)
+    n == mark && return nothing
+    out = scratch[(mark + 1):n]
+    resize!(scratch, mark)
+    out
+end
 
 # Decode the raw bytes of a TEXT/ATTR_VALUE token into the parser's storage type. When the
 # tokenizer guarantees no `&` was seen (`has_entities=false`), we skip the entity-decode
@@ -139,9 +147,14 @@ end
 # away on :lenient.
 function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, W}
     tags = S[]
-    attrs_stack = Vector{Pair{S,S}}[]
-    children_stack = Vector{Vector{Node{S}}}()
-    push!(children_stack, Node{S}[])
+    # The value-stack discipline of stack parsers (#107): constituents accumulate on two
+    # parse-wide scratch vectors, integer marks delimit the currently-open element's run,
+    # and each close slices its exact-size run back out — no per-element vector, no
+    # push!-growth churn, and an empty run materializes as `nothing` without allocating.
+    scratch_attrs = Pair{S,S}[]
+    scratch_children = Node{S}[]
+    attr_marks = Int[]
+    child_marks = Int[]
 
     pending_attr_name = SubString(xml, 1, 0)
     decl_attrs = nothing
@@ -156,30 +169,30 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
             W === :strict && _check_chars_strict(rawtext)
             W === :strict && token.has_entities && _check_charrefs_strict(rawtext)
             v = _text_value(S, rawtext, token.has_entities, convert_text)
-            push!(last(children_stack), Node{S}(Text, nothing, nothing, v, nothing))
+            push!(scratch_children, Node{S}(Text, nothing, nothing, v, nothing))
 
         elseif k === TokenKinds.OPEN_TAG
             nm = tag_name(token, xml)
             W !== :lenient && (isempty(nm) || !_is_name_start(first(nm))) &&
                 error("not well-formed: invalid element name \"$nm\"")
             push!(tags, _to(S, nm))
-            push!(attrs_stack, Pair{S,S}[])
-            push!(children_stack, Node{S}[])
+            push!(attr_marks, length(scratch_attrs))
+            push!(child_marks, length(scratch_children))
 
         elseif k === TokenKinds.SELF_CLOSE
             t = pop!(tags)
-            a = pop!(attrs_stack)
-            pop!(children_stack)
-            push!(last(children_stack), Node{S}(Element, t, _nothingify(a), nothing, nothing))
+            a = _take_slice!(scratch_attrs, pop!(attr_marks))
+            pop!(child_marks)   # a self-closing element cannot have accumulated children
+            push!(scratch_children, Node{S}(Element, t, a, nothing, nothing))
 
         elseif k === TokenKinds.CLOSE_TAG
             close_name = tag_name(token, xml)
             isempty(tags) && error("Closing tag </$close_name> with no matching open tag.")
             t = pop!(tags)
             t == close_name || error("Mismatched tags: expected </$t>, got </$close_name>.")
-            a = pop!(attrs_stack)
-            c = pop!(children_stack)
-            push!(last(children_stack), Node{S}(Element, t, _nothingify(a), nothing, isempty(c) ? nothing : c))
+            a = _take_slice!(scratch_attrs, pop!(attr_marks))
+            c = _take_slice!(scratch_children, pop!(child_marks))
+            push!(scratch_children, Node{S}(Element, t, a, nothing, c))
 
         elseif k === TokenKinds.ATTR_NAME
             pending_attr_name = raw(token, xml)
@@ -194,19 +207,21 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
             if decl_attrs !== nothing
                 any(p -> first(p) == name, decl_attrs) && error("Duplicate attribute: $name")
                 push!(decl_attrs, name => val)
-            elseif !isempty(attrs_stack)
-                any(p -> first(p) == name, last(attrs_stack)) && error("Duplicate attribute: $name")
-                push!(last(attrs_stack), name => val)
+            elseif !isempty(attr_marks)
+                for i in (attr_marks[end] + 1):length(scratch_attrs)
+                    first(scratch_attrs[i]) == name && error("Duplicate attribute: $name")
+                end
+                push!(scratch_attrs, name => val)
             end
 
         elseif k === TokenKinds.XML_DECL_OPEN
             decl_attrs = Pair{S,S}[]
 
         elseif k === TokenKinds.XML_DECL_CLOSE
-            W !== :lenient && length(children_stack) > 1 &&
+            W !== :lenient && !isempty(child_marks) &&
                 error("not well-formed: XML declaration inside element content")
             a = isempty(decl_attrs) ? nothing : decl_attrs
-            push!(last(children_stack), Node{S}(Declaration, nothing, a, nothing, nothing))
+            push!(scratch_children, Node{S}(Declaration, nothing, a, nothing, nothing))
             decl_attrs = nothing
 
         elseif k === TokenKinds.COMMENT_CONTENT
@@ -214,17 +229,17 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
             W === :strict && _check_chars_strict(cmt)
             W === :strict && occursin("--", cmt) && error("not well-formed: \"--\" within a comment")
             W === :strict && endswith(cmt, '-') && error("not well-formed: \"-\" immediately before \"-->\" in a comment (XML 1.0 §2.5)")
-            push!(last(children_stack), Node{S}(Comment, nothing, nothing, _to(S, cmt), nothing))
+            push!(scratch_children, Node{S}(Comment, nothing, nothing, _to(S, cmt), nothing))
 
         elseif k === TokenKinds.CDATA_CONTENT
             cdata = raw(token, xml)
             W === :strict && _check_chars_strict(cdata)
-            push!(last(children_stack), Node{S}(CData, nothing, nothing, _to(S, cdata), nothing))
+            push!(scratch_children, Node{S}(CData, nothing, nothing, _to(S, cdata), nothing))
 
         elseif k === TokenKinds.DOCTYPE_CONTENT
-            W !== :lenient && length(children_stack) > 1 &&
+            W !== :lenient && !isempty(child_marks) &&
                 error("not well-formed: DOCTYPE declaration inside element content")
-            push!(last(children_stack), Node{S}(DTD, nothing, nothing, _to(S, lstrip(raw(token, xml))), nothing))
+            push!(scratch_children, Node{S}(DTD, nothing, nothing, _to(S, lstrip(raw(token, xml))), nothing))
 
         elseif k === TokenKinds.PI_OPEN
             pending_pi_tag = pi_target(token, xml)
@@ -238,13 +253,15 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
             pending_pi_value = isempty(content) ? nothing : _to(S, content)
 
         elseif k === TokenKinds.PI_CLOSE
-            push!(last(children_stack), Node{S}(ProcessingInstruction, _to(S, pending_pi_tag), nothing, pending_pi_value, nothing))
+            push!(scratch_children, Node{S}(ProcessingInstruction, _to(S, pending_pi_tag), nothing, pending_pi_value, nothing))
         end
     end
 
     !isempty(tags) && error("Unclosed tags: $(join(tags, ", "))")
-    doc_children = only(children_stack)
-    W !== :lenient && _check_document_wellformed(doc_children)
-    Node{S}(Document, nothing, nothing, nothing, isempty(doc_children) ? nothing : doc_children)
+    # Slice the document level out too: the scratch keeps its historical peak capacity,
+    # which must not be retained by the returned tree.
+    doc_children = _take_slice!(scratch_children, 0)
+    W !== :lenient && doc_children !== nothing && _check_document_wellformed(doc_children)
+    Node{S}(Document, nothing, nothing, nothing, doc_children)
 end
 
