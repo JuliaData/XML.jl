@@ -14,6 +14,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the benchmark corpus, at no cost to computation (mark threads only run while compute is
   paused). Measured guidance for applications that hold big trees.
 
+### Changed
+
+- **The `Node` build no longer allocates per-element vectors**: children and attributes
+  accumulate on two parse-wide scratch stacks and each closing tag slices out one
+  exact-size vector — or `nothing`, allocation-free, when the element has none. On the
+  14 MB benchmark corpus this removes ~380 K allocations (−13 %) and ~22 MiB of garbage per
+  build, for a median build time of −7.5 % (BenchmarkTools) — and the time win grows with
+  how much garbage the collector has to manage. The finished
+  tree no longer retains `push!`-growth overcapacity in its children vectors: the retained
+  tree shrinks from 80.0 to 71.6 MiB and full walks of it run ~1.4× faster (#107).
+
+- **One measurement protocol across the performance docs**: every timing in
+  PERFORMANCE-v0.4.md and the README access-pattern table is now a BenchmarkTools
+  `@benchmark` median — the per-reader table and the GC-tuning note were previously
+  measured by a custom median-of-N script on a freshly collected heap, so their numbers
+  were not comparable with the BenchmarkTools tables beside them.
+  `benchmarks/flatnode_bench.jl` is rewritten accordingly (its `--gc-only` mode
+  reproduces the GC-tuning pair) and the affected cells re-measured (#107).
+
 ## [0.4.4] - 2026-07-31
 
 ### Added
