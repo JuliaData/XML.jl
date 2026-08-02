@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **One measurement protocol across the performance docs**: every timing in
   PERFORMANCE-v0.4.md and the README access-pattern table is now a BenchmarkTools
   `@benchmark` median — the per-reader table and the GC-tuning note were previously
-  measured by a custom median-of-N harness on a freshly collected heap, so their numbers
+  measured by a custom median-of-N script on a freshly collected heap, so their numbers
   were not comparable with the BenchmarkTools tables beside them.
   `benchmarks/flatnode_bench.jl` is rewritten accordingly (its `--gc-only` mode
   reproduces the GC-tuning pair) and the affected cells re-measured (#107).
