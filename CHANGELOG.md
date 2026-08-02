@@ -33,6 +33,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `benchmarks/flatnode_bench.jl` is rewritten accordingly (its `--gc-only` mode
   reproduces the GC-tuning pair) and the affected cells re-measured (#107).
 
+- **Span-native tokens: the tokenizer no longer round-trips byte spans through checked
+  `SubString` construction.** Emit sites build tokens directly from the integer scan
+  positions already in hand, and token views (`raw`, the tag/attribute/PI accessors) are
+  rebuilt by direct field construction — no `prevind`/`nextind` walks. Sound because every
+  span edge the scanner produces is an ASCII byte or EOF, hence a UTF-8 character boundary
+  by construction; full validation stays active under `--check-bounds=yes` (as in
+  `Pkg.test`). On the 14 MB benchmark corpus this cuts the pure lex ~32 % (37.4 → 25.6 ms)
+  and, through the shared tokenizer, every reader: `Node` build −17 %, `FlatNode` build
+  −35 % (it now out-builds libxml2), `Cursor` full stream −34 %, `LazyNode` full walk
+  −36 % — allocations unchanged: the removed round-trips were index arithmetic, not heap
+  traffic (#109).
+
 ## [0.4.4] - 2026-07-31
 
 ### Added

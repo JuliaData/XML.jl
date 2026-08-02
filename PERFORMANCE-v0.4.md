@@ -4,7 +4,7 @@ The headline cross-library figures live in the [README](README.md#benchmarks). T
 
 ## The theory behind "optimal"
 
-XML parsing splits into two language-theory levels, and v0.4 hits the **asymptotic lower bound** of each — the sense in which the lexer and parser are "optimal". The gap to a C library like [libxml2](https://en.wikipedia.org/wiki/Libxml2) is constant-factor (C tuning, a leaner non-Julia-heap tree), not asymptotic — and only on full-DOM building; at streaming, XML.jl is *faster* (below).
+XML parsing splits into two language-theory levels, and v0.4 hits the **asymptotic lower bound** of each — the sense in which the lexer and parser are "optimal". The gap to a C library like [libxml2](https://en.wikipedia.org/wiki/Libxml2) is constant-factor (C tuning, a leaner non-Julia-heap tree), not asymptotic — and only on the pointer-tree `Node` build; `FlatNode` now out-builds libxml2 (Table 4), and at streaming XML.jl is ~2× *faster* (Table 1).
 
 ### Level 1 — lexing is finite-state
 
@@ -28,7 +28,7 @@ One theoretical fine print: a textbook VPA has a *finite* stack alphabet, while 
 
 ### Julia-level constant factors
 
-The well-formedness level is a type parameter (`Val{W}`), so `:strict`/`:structural` checks are [dead-code-eliminated](https://en.wikipedia.org/wiki/Dead-code_elimination) when inactive (confirmed in the LLVM); `Node{S}` is parametric, so `parse(s, Node{SubString{String}})` — a supported method, exercised by the test suite and by the benchmarks behind the zero-copy row below — keeps **zero-copy views** while `parse(s, Node)` owns `String`s; a `has_entities` flag skips entity decoding when a token holds no `&`.
+The well-formedness level is a type parameter (`Val{W}`), so `:strict`/`:structural` checks are [dead-code-eliminated](https://en.wikipedia.org/wiki/Dead-code_elimination) when inactive (confirmed in the LLVM); `Node{S}` is parametric, so `parse(s, Node{SubString{String}})` — a supported method, exercised by the test suite and by the benchmarks behind the zero-copy row below — keeps **zero-copy views** while `parse(s, Node)` owns `String`s; a `has_entities` flag skips entity decoding when a token holds no `&`; and tokens are native byte spans — every span edge the scanner produces lands on an ASCII byte, provably a UTF-8 character boundary, so token views are rebuilt by direct field construction with no index walking.
 
 ## By access pattern
 
@@ -51,8 +51,8 @@ untouched; EzXML's `StreamReader` is libxml2's reader, paying FFI per event:
 
 | Stream | time (incl. GC) | memory |
 |---|--:|--:|
-| **XML.jl `Cursor`** | **46 ms** | **0.0 MiB** |
-| EzXML `StreamReader` | 68 ms (GC 0.8) | 36 MiB |
+| **XML.jl `Cursor`** | **31 ms** | **0.0 MiB** |
+| EzXML `StreamReader` | 66 ms (GC 0.9) | 36 MiB |
 
 _Table 1 — streaming: events only, no tree built._[^profile]
 
@@ -81,10 +81,10 @@ libxml2 wins the build; XML.jl materialises an 882 K-node Julia tree, EzXML a le
 
 | Full DOM extract | time (incl. GC) | memory |
 |---|--:|--:|
-| EzXML (libxml2) | **60 ms** | **54 MiB** |
-| LightXML (elements only) | 62 ms (GC 1.3) | 57 MiB |
-| XML.jl (`SubString`, zero-copy) | 93 ms (GC 20) | 95 MiB |
-| XML.jl (`String`) | 103 ms (GC 24) | 100 MiB |
+| EzXML (libxml2) | **61 ms** | **54 MiB** |
+| LightXML (elements only) | 63 ms (GC 1.4) | 57 MiB |
+| XML.jl (`SubString`, zero-copy) | 73 ms (GC 17) | 95 MiB |
+| XML.jl (`String`) | 82 ms (GC 20) | 100 MiB |
 | XML.jl **v0.3.9** (previous release) | 530 ms | 1422 MiB |
 
 _Table 2 — full-DOM extraction (parse + pull every tag/text), cross-library._[^profile]
@@ -94,9 +94,9 @@ _Table 2 — full-DOM extraction (parse + pull every tag/text), cross-library._[
 | Stage | time (incl. GC) | allocated |
 |---|--:|--:|
 | read file (I/O) | 0.6 ms | — |
-| **lex — the DFA** | **37.2 ms** | **0 B** |
-| parse → DOM (lex + build the tree, the VPA) | 99.2 ms (GC 23) | 100 MiB |
-| traverse a built tree | 4.0 ms | 0 B |
+| **lex — the DFA** | **25.6 ms** | **0 B** |
+| parse → DOM (lex + build the tree, the VPA) | 74.7 ms (GC 18) | 100 MiB |
+| traverse a built tree | 4.1 ms | 0 B |
 
 _Table 3 — the XML.jl pipeline, decomposed (`String` variant)._[^profile]
 
@@ -118,17 +118,17 @@ Measured on the same XMark document:
 
 | Full DOM, per reader | build (incl. GC) | walk every node | extract all values | DOM size in memory |
 |---|--:|--:|--:|--:|
-| **`FlatNode`** | **53.2 ms (GC 0.4)** | **2.97 ms** | 6.6 ms | **54.9 MiB** |
-| `Node` | 99.8 ms (GC 24) | 3.27 ms | **3.6 ms** | 71.6 MiB |
-| EzXML (libxml2) | 47.5 ms | — | — | — |
+| **`FlatNode`** | **34.9 ms (GC 0.1)** | **2.96 ms** | 6.6 ms | **54.9 MiB** |
+| `Node` | 81.1 ms (GC 23) | 3.49 ms | **3.6 ms** | 71.6 MiB |
+| EzXML (libxml2) | 45.8 ms | — | — | — |
 
 _Table 4 — per-reader full-DOM comparison; *build* is the whole `parse` call, and *DOM size* is the **retained** live tree (`Base.summarysize`), not allocations._[^flatbench]
 
-Build allocations: 42.2 MiB (`FlatNode`) vs 99.8 MiB (`Node` — down from 122.3 MiB before the scratch-stack build), and the libxml2 *build* gap is ~1.1× to `FlatNode`, ~2.1× to `Node`. The GC cells say why: `FlatNode`'s build allocates a handful of arrays instead of 882 K objects, so its median GC share is ~0.4 ms where `Node`'s is ~24 ms. Access on the finished stores is closer than the build: whole-tree walks are near-parity (2.97 vs 3.27 ms — exact-size children vectors sharpened `Node`'s cache locality), `parent`/`depth` stay O(1) index hops on `FlatNode` where `Node` must search down from the root, and pure value extraction on an already-built tree is the pattern where `Node`'s direct field reads win outright (3.6 vs 6.6 ms, ~1.8× — a computed `SubString` view per value is the flat store's toll).
+Build allocations: 42.2 MiB (`FlatNode`) vs 99.8 MiB (`Node` — down from 122.3 MiB before the scratch-stack build), and the *build* ranking now puts `FlatNode` ahead of libxml2 itself (~1.3× faster; `Node` remains ~1.8× behind the C library). The GC cells say why `FlatNode` builds so cheaply: its build allocates a handful of arrays instead of 882 K objects, so its median GC share is ~0.1 ms where `Node`'s is ~23 ms. Access on the finished stores: whole-tree walks are close (2.96 vs 3.49 ms — exact-size children vectors keep `Node`'s locality sharp), `parent`/`depth` stay O(1) index hops on `FlatNode` where `Node` must search down from the root, and pure value extraction on an already-built tree is the pattern where `Node`'s direct field reads win outright (3.6 vs 6.6 ms, ~1.8× — a computed `SubString` view per value is the flat store's toll).
 
 ### Choosing
 
-Stream / low-memory / read-only full-DOM / repeated traversal → **XML.jl**; a one-shot build-and-extract is the one job where a libxml2 binder still builds faster — ~1.1× vs `FlatNode`, ~2.1× vs `Node` — either way, pure Julia, no C dependency. Against its own past, v0.4 is **~5× faster and ~12× leaner than 0.3.9** (which used ~1.4 GiB for this file) — see [`benchmarks/profile.jl`](benchmarks/profile.jl), [`benchmarks/profile_vs_039.jl`](benchmarks/profile_vs_039.jl), [`benchmarks/compare.jl`](benchmarks/compare.jl).
+Stream / low-memory / read-only full-DOM / repeated traversal → **XML.jl**; `FlatNode` now out-builds the libxml2 binder (~1.3×: 34.9 vs 45.8 ms), and the C library's remaining win is the one-shot *`Node`* build-and-extract (~1.2–1.4× end-to-end, Table 2) — either way, pure Julia, no C dependency. Against its own past, v0.4 is **~5× faster and ~12× leaner than 0.3.9** (which used ~1.4 GiB for this file) — see [`benchmarks/profile.jl`](benchmarks/profile.jl), [`benchmarks/profile_vs_039.jl`](benchmarks/profile_vs_039.jl), [`benchmarks/compare.jl`](benchmarks/compare.jl).
 
 > [!NOTE]
 > **`:strict`** adds a character-range scan over text (a second O(content) pass); the overhead scales with the document's *text share* — ~1.1× on the markup-heavy XMark corpus, up to ~20× on a pure-text document; `:lenient` / `:structural` are unaffected.
@@ -144,6 +144,6 @@ Stream / low-memory / read-only full-DOM / repeated traversal → **XML.jl**; a 
 > computation. It trims GC pauses, not the materialization floor: the build's GC-free work
 > is unchanged.
 
-[^profile]: Tables 1–3: measured 2026-08-01 (the `v0.3.9` row: 2026-06-28), Apple M5 (single-threaded), Julia 1.12.6; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3); BenchmarkTools at a 5 s budget per cell. Source: [`benchmarks/profile.jl`](benchmarks/profile.jl).
+[^profile]: Tables 1–3: measured 2026-08-03 (the `v0.3.9` row: 2026-06-28), Apple M5 (single-threaded), Julia 1.12.6; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3); BenchmarkTools at a 5 s budget per cell. Source: [`benchmarks/profile.jl`](benchmarks/profile.jl).
 
-[^flatbench]: Table 4 (and the README access-pattern table): measured 2026-08-02, same machine, Julia and BenchmarkTools settings; source [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl).
+[^flatbench]: Table 4 (and the README access-pattern table): measured 2026-08-03, same machine, Julia and BenchmarkTools settings; source [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl).
