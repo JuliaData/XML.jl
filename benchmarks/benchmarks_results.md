@@ -2,84 +2,84 @@
 
 ```
 Parse (small)
-	XML.jl             0.0216 ms
-	XML.jl (SS)        0.0196 ms
-	EzXML              0.0136 ms  (XML.jl 58.9% slower)
-	LightXML           0.0112 ms  (XML.jl 91.8% slower)
-	XMLDict             0.112 ms  (XML.jl 80.7% faster)
+	XML.jl             0.0212 ms
+	XML.jl (SS)        0.0195 ms
+	EzXML              0.0132 ms  (XML.jl 60.6% slower)
+	LightXML           0.0122 ms  (XML.jl 73.1% slower)
+	XMLDict              0.11 ms  (XML.jl 80.7% faster)
 
 Parse (medium)
-	XML.jl              115.0 ms
-	XML.jl (SS)         107.0 ms
-	EzXML                47.2 ms  (XML.jl 143.3% slower)
-	LightXML             47.5 ms  (XML.jl 141.8% slower)
-	XMLDict             352.0 ms  (XML.jl 67.3% faster)
+	XML.jl               95.5 ms
+	XML.jl (SS)          90.9 ms
+	EzXML                47.3 ms  (XML.jl 102.1% slower)
+	LightXML             37.5 ms  (XML.jl 154.7% slower)
+	XMLDict             347.0 ms  (XML.jl 72.5% faster)
 
 Write (small)
-	XML.jl            0.00572 ms
-	EzXML             0.00574 ms  (~same)
-	LightXML           0.0573 ms  (XML.jl 90.0% faster)
+	XML.jl            0.00569 ms
+	EzXML             0.00572 ms  (~same)
+	LightXML           0.0583 ms  (XML.jl 90.2% faster)
 
 Write (medium)
-	XML.jl               28.3 ms
-	EzXML                21.1 ms  (XML.jl 34.3% slower)
-	LightXML             30.3 ms  (XML.jl 6.5% faster)
+	XML.jl               25.7 ms
+	EzXML                20.7 ms  (XML.jl 24.5% slower)
+	LightXML             29.1 ms  (XML.jl 11.7% faster)
 
 Read file
-	XML.jl              110.0 ms
-	EzXML                60.0 ms  (XML.jl 83.6% slower)
-	LightXML             70.2 ms  (XML.jl 56.9% slower)
+	XML.jl               83.9 ms
+	EzXML                60.3 ms  (XML.jl 39.2% slower)
+	LightXML             39.5 ms  (XML.jl 112.3% slower)
 
 Collect tags (small)
-	XML.jl           0.000371 ms
-	EzXML             0.00109 ms  (XML.jl 65.8% faster)
-	LightXML           0.0018 ms  (XML.jl 79.4% faster)
+	XML.jl           0.000372 ms
+	EzXML             0.00112 ms  (XML.jl 66.8% faster)
+	LightXML          0.00183 ms  (XML.jl 79.7% faster)
 
 Collect tags (medium)
-	XML.jl               5.63 ms
-	EzXML                10.6 ms  (XML.jl 46.7% faster)
-	LightXML             12.7 ms  (XML.jl 55.5% faster)
+	XML.jl               4.79 ms
+	EzXML                10.4 ms  (XML.jl 54.1% faster)
+	LightXML             13.2 ms  (XML.jl 63.8% faster)
 
 Parse SST (LazyNode)
 	XML.jl            4.96e-6 ms
-	Node (for ref)       17.1 ms  (XML.jl 100.0% faster)
+	Node (for ref)       17.5 ms  (XML.jl 100.0% faster)
 
 Parse worksheet (LazyNode)
 	XML.jl            4.96e-6 ms
 	Node (for ref)       28.5 ms  (XML.jl 100.0% faster)
 
 SST: write each <si>
-	LazyNode + write (zero-copy)     33.6 ms
-	LazyNode + write (normalize)     71.7 ms
-	Node (for ref)       5.58 ms
+	LazyNode + write (zero-copy)     33.8 ms
+	LazyNode + write (normalize)     73.3 ms
+	Node (for ref)       5.56 ms
 
 SST: unformatted text
-	LazyNode + is_simple_value     39.3 ms
-	Node (for ref)       2.39 ms
+	LazyNode + is_simple_value     40.0 ms
+	Node (for ref)       2.38 ms
 
 Worksheet: collect rows
-	children() (fresh Vector each call)     36.6 ms
-	children!(buf, n) (reused buffer)     36.4 ms
+	children() (fresh Vector each call)     36.1 ms
+	children!(buf, n) (reused buffer)     36.5 ms
 
 Worksheet: attribute scan
-	eachattribute        36.3 ms
-	attributes() (materialize dict)     36.5 ms
+	eachattribute        36.0 ms
+	attributes() (materialize dict)     36.1 ms
 
 Worksheet: single attr fetch
-	get(c, "r", "")      36.7 ms
-	attributes(c)["r"]     36.2 ms
+	get(c, "r", "")      37.0 ms
+	attributes(c)["r"]     36.3 ms
 
 Worksheet: <v> value
-	is_simple_value      36.6 ms
-	is_simple + simple_value     36.5 ms
+	is_simple_value      36.1 ms
+	is_simple + simple_value     36.3 ms
 
 XLSX sst_load! (end-to-end)
-	LazyNode             53.3 ms
-	LazyNode (entity-heavy)     47.4 ms
+	LazyNode             53.0 ms
+	LazyNode (entity-heavy)     49.4 ms
 
 XLSX cell read (end-to-end)
-	numeric ws           36.6 ms
-	string ws            33.6 ms
+	numeric ws           36.1 ms
+	string ws            33.7 ms
 
 ```
 

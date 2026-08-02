@@ -50,7 +50,10 @@ const SSNode = Node{SubString{String}}
 @add_benchmark "Parse (medium)" "XML.jl" parse($medium_xml, Node)
 @add_benchmark "Parse (medium)" "XML.jl (SS)" parse($medium_xml, SSNode)
 @add_benchmark "Parse (medium)" "EzXML" EzXML.parsexml($medium_xml)
-@add_benchmark "Parse (medium)" "LightXML" LightXML.parse_string($medium_xml)
+# LightXML attaches no finalizer, so an unfreed parse leaks its whole C tree — at ~80 MB
+# per 14 MB parse and hundreds of samples that pages the machine mid-cell. The medium and
+# read-file cells therefore free per sample (teardown, untimed; evals=1 at this duration).
+@add_benchmark "Parse (medium)" "LightXML" (d[] = LightXML.parse_string($medium_xml)) setup=(d = Ref{Any}(nothing)) teardown=(d[] === nothing || LightXML.free(d[]); d[] = nothing)
 @add_benchmark "Parse (medium)" "XMLDict" XMLDict.xml_dict($medium_xml)
 
 #-----------------------------------------------------------------------------# Write (small)
@@ -66,7 +69,7 @@ const SSNode = Node{SubString{String}}
 #-----------------------------------------------------------------------------# Read from file
 @add_benchmark "Read file" "XML.jl" read($medium_file, Node)
 @add_benchmark "Read file" "EzXML" EzXML.readxml($medium_file)
-@add_benchmark "Read file" "LightXML" LightXML.parse_file($medium_file)
+@add_benchmark "Read file" "LightXML" (d[] = LightXML.parse_file($medium_file)) setup=(d = Ref{Any}(nothing)) teardown=(d[] === nothing || LightXML.free(d[]); d[] = nothing)
 
 #-----------------------------------------------------------------------------# Collect element tags
 function xml_collect_tags(node)

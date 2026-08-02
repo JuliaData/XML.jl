@@ -351,16 +351,16 @@ _Measured 2026-08-02, Apple M5 (single-threaded), Julia 1.12.6, EzXML 1.2.3; Ben
 
 # Benchmarks
 
-Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl). Data: `books.xml` (~4 KB) and a generated XMark auction document (~14 MB). The XML.jl column uses `Node` throughout — the full mutable DOM, the like-for-like counterpart of the libxml2 DOMs the C wrappers build; [Performance by access pattern](#performance-by-access-pattern) above shows how the other readers change the picture. Median time, **lower is better.**
+Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl). Data: `books.xml` (~4 KB) and a generated XMark auction document (~14 MB). The XML.jl column uses `Node` throughout — the full mutable DOM, the like-for-like counterpart of the libxml2 DOMs the C wrappers build; [Performance by access pattern](#performance-by-access-pattern) above shows how the other readers change the picture. BenchmarkTools median time, **lower is better.**
 
 | Benchmark | XML.jl | EzXML | LightXML | XMLDict |
 |---|--:|--:|--:|--:|
-| Parse, small | 0.022 ms | 0.013 ms | 0.011 ms | 0.110 ms |
-| Parse, medium | 110 ms | 46.8 ms | 47.1 ms | 348 ms |
-| Write, small | 0.0056 ms | 0.0059 ms | 0.059 ms | — |
-| Write, medium | 27.7 ms | 21.1 ms | 29.1 ms | — |
-| Collect tags, small | 0.00037 ms | 0.0011 ms | 0.0018 ms | — |
-| Collect tags, medium | 5.63 ms | 10.4 ms | 12.9 ms | — |
+| Parse, small | 0.0212 ms | 0.0132 ms | 0.0122 ms | 0.11 ms |
+| Parse, medium | 95.5 ms | 47.3 ms | 37.5 ms | 347 ms |
+| Write, small | 0.00569 ms | 0.00572 ms | 0.0583 ms | — |
+| Write, medium | 25.7 ms | 20.7 ms | 29.1 ms | — |
+| Collect tags, small | 0.000372 ms | 0.00112 ms | 0.00183 ms | — |
+| Collect tags, medium | 4.79 ms | 10.4 ms | 13.2 ms | — |
 
 EzXML and LightXML wrap libxml2 (C): faster on raw parse, slower on in-Julia traversal.
 Times include garbage collection; [PERFORMANCE](PERFORMANCE-v0.4.md) breaks each of its rows
@@ -368,4 +368,4 @@ into the stable GC-free work and the per-session GC share.
 
 For the per-access-pattern decomposition (streaming / partial reads / full DOM / stage breakdown) and the theory behind these numbers, see [**PERFORMANCE-v0.4.md**](PERFORMANCE-v0.4.md).
 
-_Measured 2026-07-22, Apple M5 (single-threaded), Julia 1.12.6; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3), XMLDict 0.4.2. Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl)._
+_Measured 2026-08-02, Apple M5 (single-threaded), Julia 1.12.6; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3), XMLDict 0.4.2. Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl)._
