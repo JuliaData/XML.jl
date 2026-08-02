@@ -25,6 +25,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   tree no longer retains `push!`-growth overcapacity in its children vectors: the retained
   tree shrinks from 80.0 to 71.6 MiB and full walks of it run ~1.4× faster (#107).
 
+- **One measurement protocol across the performance docs**: every timing in
+  PERFORMANCE-v0.4.md and the README access-pattern table is now a BenchmarkTools
+  `@benchmark` median — the per-reader table and the GC-tuning note were previously
+  measured by a custom median-of-N harness on a freshly collected heap, so their numbers
+  were not comparable with the BenchmarkTools tables beside them.
+  `benchmarks/flatnode_bench.jl` is rewritten accordingly (its `--gc-only` mode
+  reproduces the GC-tuning pair) and the affected cells re-measured (#107).
+
 ## [0.4.4] - 2026-07-31
 
 ### Added

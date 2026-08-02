@@ -253,7 +253,7 @@ doc = read("file.xml", LazyNode)
 
 `LazyNode` supports the same read-only interface as `Node`: `nodetype`, `tag`, `attributes`, `value`, `children`, `is_simple`, `simple_value`, plus integer and string indexing.
 
-`LazyNode` is for *partial* reads only: opening is a no-op wrapper (~0.5 µs whatever the file size), a traversal pays only for the bytes it steps over — descending to a target is O(bytes before it), so reaching this 14 MB file's root element costs ~4 µs — and nothing is cached, so repeated visits pay again. Unbeatable for descents and kilobyte-scale documents; for whole-tree walks (283 ms vs ~56/~95 ms build+walk on the 14 MB corpus below) and repeated queries, build `FlatNode` or `Node` instead — see [Performance by access pattern](#performance-by-access-pattern).
+`LazyNode` is for *partial* reads only: opening is a no-op wrapper (~0.5 µs whatever the file size), a traversal pays only for the bytes it steps over — descending to a target is O(bytes before it), so reaching this 14 MB file's root element costs ~4 µs — and nothing is cached, so repeated visits pay again. Unbeatable for descents and kilobyte-scale documents; for whole-tree walks (279 ms vs ~56/~103 ms build+walk on the 14 MB corpus below) and repeated queries, build `FlatNode` or `Node` instead — see [Performance by access pattern](#performance-by-access-pattern).
 
 For streaming and high-throughput workloads, several extra accessors avoid materializing intermediate collections:
 
@@ -333,19 +333,19 @@ end
 
 # Performance by access pattern
 
-One number cannot rank the readers — cost depends on what you do with the document. Same ~14 MB / 882 K-node XMark document as the cross-library table below (source: [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl); **lower is better**; median of repeated runs at the default settings):
+One number cannot rank the readers — cost depends on what you do with the document. Same ~14 MB / 882 K-node XMark document as the cross-library table below (source: [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl); **lower is better**; BenchmarkTools `@benchmark` medians at default parameters):
 
 | | build | walk every node | extract all values | DOM size in memory |
 |---|--:|--:|--:|--:|
-| `Cursor` | — (streams) | 35.8 ms (its one scan) | — | — (no DOM) |
-| `LazyNode` | ~0 (a wrapper) | 283 ms (re-tokenizes) | — | — (source only) |
-| `FlatNode` | 53.4 ms | 2.9 ms | 6.5 ms | 54.9 MiB |
-| `Node` | 90.0 ms | 5.1 ms | 5.1 ms | 71.6 MiB |
-| EzXML (libxml2) | 37.7 ms | — | — | — |
+| `Cursor` | — (streams) | 35.7 ms (its one scan) | — | — (no DOM) |
+| `LazyNode` | ~0 (a wrapper) | 279 ms (re-tokenizes) | — | — (source only) |
+| `FlatNode` | 53.2 ms | 2.97 ms | 6.6 ms | 54.9 MiB |
+| `Node` | 99.8 ms | 3.27 ms | 3.6 ms | 71.6 MiB |
+| EzXML (libxml2) | 47.5 ms | — | — | — |
 
-Reading the table: `Cursor`'s walk *is* its parse — one tokenizing scan, nothing retained. `LazyNode` opens for free and pays per node visited — unbeatable for touching a *fraction* of a large document, and (as the walk column shows) the wrong tool for visiting all of it. `FlatNode` builds ~1.7× faster than `Node`, walks ~1.8× faster, holds ~25% less memory, and its `parent`/`depth` are O(1) where `Node` searches from the root; pure value extraction on an already-built tree is the one pattern where `Node`'s direct fields still win, by ~30%. libxml2 still builds fastest — the remaining gap is materialization, not scanning (see [PERFORMANCE-v0.4.md](PERFORMANCE-v0.4.md)).
+Reading the table: `Cursor`'s walk *is* its parse — one tokenizing scan, nothing retained. `LazyNode` opens for free and pays per node visited — unbeatable for touching a *fraction* of a large document, and (as the walk column shows) the wrong tool for visiting all of it. `FlatNode` builds ~1.9× faster than `Node`, holds ~23% less memory, and its `parent`/`depth` are O(1) where `Node` searches from the root; whole-tree walks are near-parity (`Node`'s exact-size children vectors sharpened its locality), and pure value extraction on an already-built tree is the one pattern where `Node`'s direct fields win outright, by ~1.8×. libxml2 still builds fastest — ~1.1× vs `FlatNode` — and the remaining gap is materialization, not scanning (see [PERFORMANCE-v0.4.md](PERFORMANCE-v0.4.md)).
 
-_Measured 2026-08-01, Apple M5 (single-threaded), Julia 1.12.6, EzXML 1.2.3._
+_Measured 2026-08-02, Apple M5 (single-threaded), Julia 1.12.6, EzXML 1.2.3; BenchmarkTools medians._
 
 <br>
 

@@ -35,20 +35,14 @@ The well-formedness level is a type parameter (`Val{W}`), so `:strict`/`:structu
 Performance isn't one number — it splits by *what you do with the document*. 14 MB [XMark](https://projects.cwi.nl/xmark/) file (XML.jl and EzXML walk the same ~882 K nodes); **lower is better.**
 
 > [!NOTE]
-> **How to read the timings — what memory holds when a number is taken.** In every
-> protocol the code is compiled and warm; what differs is the memory state a run starts
-> from, and therefore how much garbage-collection work it triggers. The *(GC x)* share of
-> a number is only comparable between numbers taken from the same starting state:
->
-> - **Back-to-back samples** (Tables 1–3): each sample inherits the garbage the previous
->   one left behind — the *(GC x)* tail is what a working session actually pays.
-> - **Freshly collected heap** (Table 4): every run starts right after a full collection —
->   the *(GC x)* tail is that run's own allocation cost, with no inherited debt.
-> - **With a built tree held in memory** (the GC-tuning note below): what each collection
->   costs while a tree stays live — the cost a skipped collection avoids re-paying.
->
-> Across all three, the GC share is the volatile part; the GC-free remainder reproduces
-> within a few percent and is the number to compare across sessions or versions.
+> **How to read the timings.** Every timing on this page is a BenchmarkTools
+> `@benchmark` measurement at default parameters: samples run back-to-back from a warm,
+> compiled state, and the quoted number is the median sample, with the median
+> garbage-collection share as its *(GC x)* tail (omitted below 0.05 ms). The GC share
+> is the volatile part of a Julia timing — it moves with the heap state a session
+> inherits — while the number minus its GC share reproduces within a few percent and is
+> the one to compare across sessions or versions. Allocation totals and retained sizes
+> are deterministic facts, identical under any protocol.
 
 ### Stream — events, no tree
 
@@ -95,18 +89,18 @@ libxml2 wins the build; XML.jl materialises an 882 K-node Julia tree, EzXML a le
 
 _Table 2 — full-DOM extraction (parse + pull every tag/text), cross-library._[^profile]
 
-**Decomposed** (XML.jl, the `String` variant — subtract each row's GC share and the stages sum to the Table 2 row's own GC-free time, within noise):
+**Decomposed** (XML.jl, the `String` variant — every row a direct measurement; the lex is the first stage *inside* the parse row, so their difference prices the tree build, and parse + traverse reproduces the Table 2 row within noise):
 
 | Stage | time (incl. GC) | allocated |
 |---|--:|--:|
 | read file (I/O) | 0.6 ms | — |
 | **lex — the DFA** | **37.2 ms** | **0 B** |
-| build the tree — the VPA | ~62 ms (GC 23) | 100 MiB |
+| parse → DOM (lex + build the tree, the VPA) | 99.2 ms (GC 23) | 100 MiB |
 | traverse a built tree | 4.0 ms | 0 B |
 
 _Table 3 — the XML.jl pipeline, decomposed (`String` variant)._[^profile]
 
-The lexer is allocation-free; **the whole libxml2 gap is *materialising* the native tree, not scanning it** — and the GC column shows where that cost lives: the allocation-free lex cannot trigger a collection, so every garbage-collector pause inside a parse lands in the build, the toll of 882 K fresh objects. The GC share is also the *volatile* part of these numbers: it moves with the heap state a session inherits (before the scratch-stack build landed, this page measured the `String` extraction's total anywhere from 115 to 143 ms across sessions), while the GC-free remainder reproduces within a few percent.
+The lexer is allocation-free; **the whole libxml2 gap is *materialising* the native tree, not scanning it** — and the GC column shows where that cost lives: the allocation-free lex cannot trigger a collection, so every garbage-collector pause inside a parse lands in the build, the toll of 882 K fresh objects.
 
 ### `FlatNode` (v0.4.2, experimental)
 
@@ -124,17 +118,17 @@ Measured on the same XMark document:
 
 | Full DOM, per reader | build (incl. GC) | walk every node | extract all values | DOM size in memory |
 |---|--:|--:|--:|--:|
-| **`FlatNode`** | **53.4 ms** | **2.91 ms** | 6.5 ms | **54.9 MiB** |
-| `Node` | 90.0 ms (GC 16.4) | 5.1 ms | **5.1 ms** | 71.6 MiB |
-| EzXML (libxml2) | 37.7 ms | — | — | — |
+| **`FlatNode`** | **53.2 ms (GC 0.4)** | **2.97 ms** | 6.6 ms | **54.9 MiB** |
+| `Node` | 99.8 ms (GC 24) | 3.27 ms | **3.6 ms** | 71.6 MiB |
+| EzXML (libxml2) | 47.5 ms | — | — | — |
 
-_Table 4 — per-reader full-DOM comparison (median run of 7, default settings); *build* is the whole `parse` call, and *DOM size* is the **retained** live tree (`Base.summarysize`), not allocations._[^flatbench]
+_Table 4 — per-reader full-DOM comparison; *build* is the whole `parse` call, and *DOM size* is the **retained** live tree (`Base.summarysize`), not allocations._[^flatbench]
 
-Build allocations: 73.7 MiB (`FlatNode`) vs 99.8 MiB (`Node` — down from 122.3 MiB before the scratch-stack build), and the libxml2 *build* gap narrows from ~2.5× to ~1.4×. Note the GC cells: on a freshly collected heap, `FlatNode`'s build triggers *no* collection at all — a handful of arrays instead of 882 K objects — where `Node`'s pays ~16 ms of GC inside the same corpus. Beyond the cheaper build, access itself is faster on `FlatNode`: full walks run ~1.8× faster (the contiguous scan), and `parent`/`depth` are O(1) index hops where `Node` must search down from the root. The one pattern where `Node` keeps an edge is pure value extraction on an already-built tree (5.1 vs 6.5 ms): direct field reads still beat computed `SubString` views by ~30 % — exact-size children vectors sharpened `Node`'s own cache locality.
+Build allocations: 42.2 MiB (`FlatNode`) vs 99.8 MiB (`Node` — down from 122.3 MiB before the scratch-stack build), and the libxml2 *build* gap is ~1.1× to `FlatNode`, ~2.1× to `Node`. The GC cells say why: `FlatNode`'s build allocates a handful of arrays instead of 882 K objects, so its median GC share is ~0.4 ms where `Node`'s is ~24 ms. Access on the finished stores is closer than the build: whole-tree walks are near-parity (2.97 vs 3.27 ms — exact-size children vectors sharpened `Node`'s cache locality), `parent`/`depth` stay O(1) index hops on `FlatNode` where `Node` must search down from the root, and pure value extraction on an already-built tree is the pattern where `Node`'s direct field reads win outright (3.6 vs 6.6 ms, ~1.8× — a computed `SubString` view per value is the flat store's toll).
 
 ### Choosing
 
-Stream / low-memory / read-only full-DOM / repeated traversal → **XML.jl**; a one-shot build-and-extract is the one job where a libxml2 binder still builds ~1.4× faster (was ~2.5× before `FlatNode`) — either way, pure Julia, no C dependency. Against its own past, v0.4 is **~5× faster and ~12× leaner than 0.3.9** (which used ~1.4 GiB for this file) — see [`benchmarks/profile.jl`](benchmarks/profile.jl), [`benchmarks/profile_vs_039.jl`](benchmarks/profile_vs_039.jl), [`benchmarks/compare.jl`](benchmarks/compare.jl).
+Stream / low-memory / read-only full-DOM / repeated traversal → **XML.jl**; a one-shot build-and-extract is the one job where a libxml2 binder still builds faster — ~1.1× vs `FlatNode`, ~2.1× vs `Node` — either way, pure Julia, no C dependency. Against its own past, v0.4 is **~5× faster and ~12× leaner than 0.3.9** (which used ~1.4 GiB for this file) — see [`benchmarks/profile.jl`](benchmarks/profile.jl), [`benchmarks/profile_vs_039.jl`](benchmarks/profile_vs_039.jl), [`benchmarks/compare.jl`](benchmarks/compare.jl).
 
 > [!NOTE]
 > **`:strict`** adds a character-range scan over text (a second O(content) pass); the overhead scales with the document's *text share* — ~1.1× on the markup-heavy XMark corpus, up to ~20× on a pure-text document; `:lenient` / `:structural` are unaffected.
@@ -143,12 +137,13 @@ Stream / low-memory / read-only full-DOM / repeated traversal → **XML.jl**; a 
 > **GC tuning for tree-holding applications.** A single-threaded Julia process defaults to
 > *one* GC thread; `--gcthreads=4` (the performance-core count here) parallelizes the mark
 > phase, cutting a full collection with this corpus's 882 K-node `Node` tree live from
-> ~49 ms to ~18 ms — and the build's GC share shrinks accordingly (measured 2026-08-01,
-> same machine and Julia as above). Mark threads sleep outside collections
+> ~56 ms to ~20 ms (median `@benchmark GC.gc(true)` sample; the `--gc-only` mode of
+> [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl) reproduces the pair) —
+> and the build's GC share shrinks accordingly. Mark threads sleep outside collections
 > and run only while compute is paused anyway, so the setting takes nothing from
 > computation. It trims GC pauses, not the materialization floor: the build's GC-free work
 > is unchanged.
 
-[^profile]: Tables 1–3: measured 2026-08-01 (the `v0.3.9` row: 2026-06-28), Apple M5 (single-threaded), Julia 1.12.6; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3). Each time is the median sample's total, its *(GC x)* tail that same sample's garbage-collection share — omitted when below 0.05 ms; the total minus it is the GC-free work, the reproducible part of the number. Source: [`benchmarks/profile.jl`](benchmarks/profile.jl).
+[^profile]: Tables 1–3: measured 2026-08-01 (the `v0.3.9` row: 2026-06-28), Apple M5 (single-threaded), Julia 1.12.6; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3); BenchmarkTools at a 5 s budget per cell. Source: [`benchmarks/profile.jl`](benchmarks/profile.jl).
 
-[^flatbench]: Table 4: measured 2026-08-01, same machine and Julia; source [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl) — each cell is the median run of 7, every run starting from a freshly collected heap, so its *(GC x)* tail is that run's own allocation cost, not inherited debt.
+[^flatbench]: Table 4 (and the README access-pattern table): measured 2026-08-02, same machine, Julia and BenchmarkTools settings; source [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl).
