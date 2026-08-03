@@ -484,6 +484,20 @@ end
     end
 end
 
+@testset "Token convenience constructors mirror SubString fields" begin
+    xml = "<a>té</a>"
+    sub = SubString(xml, 4, 5)          # "té" — ends on a 2-byte character
+    t1 = Token(TokenKinds.TEXT, sub)
+    t2 = Token(TokenKinds.TEXT, true, sub)
+    @test (t1.offset, t1.ncodeunits) == (sub.offset, ncodeunits(sub))
+    @test (t2.offset, t2.ncodeunits) == (sub.offset, ncodeunits(sub))
+    @test !t1.has_entities
+    @test t2.has_entities
+    @test raw(t1, xml) == "té" == raw(t2, xml)
+    # Direct, non-inlined call takes the @boundscheck-validated construction path.
+    @test XML.XMLTokenizer._noshift_substring(xml, t1.offset, t1.ncodeunits) == "té"
+end
+
 #-----------------------------------------------------------------------# Edge cases
 @testset "adjacent tags" begin
     xml = "<a></a><b></b>"
