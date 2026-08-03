@@ -9,6 +9,29 @@ using XML.XMLTokenizer: tokenize, TokenKinds, Token, tag_name, attr_value, pi_ta
 kinds(xml) = [t.kind for t in tokenize(xml)]
 raws(xml)  = [String(raw(t, xml)) for t in tokenize(xml)]
 
+# Multibyte torture document: 2-, 3-, and 4-byte UTF-8 in element names, attribute
+# names/values, text, comment, CDATA, PI content and DOCTYPE body, plus an empty
+# attribute value and entity-bearing text. Used by the span-equivalence sweeps below.
+const MULTIBYTE_DOC = """
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE café [ <!-- déjà-vu --> ]>
+<café idée="héllo wörld" 名前="日本語テキスト" emoji="🎈🎉" vide="">
+  texte accentué été 🎯 &amp; fin
+  <日本語 attr='単一引用符'>中身テキスト</日本語>
+  <!-- commentaire évênement 🚀 -->
+  <![CDATA[données brutes ]] presque-fin 💾]]>
+  <?traitement instruction ciblée 🛰?>
+  <vide/>
+</café>
+"""
+
+# Reference reconstruction of a token's byte span [off+1, off+ncu] through Julia's
+# checked, index-walking SubString path (empty spans reconstruct as ""). The accessors
+# must agree with this on every token — proving the tokenizer's span arithmetic
+# equivalent to checked string slicing, multibyte and empty spans included (issue #109).
+checked_span(xml, off, ncu) =
+    ncu == 0 ? SubString(xml, 1, 0) : SubString(xml, off + 1, prevind(xml, off + ncu + 1))
+
 @testset "XMLTokenizer" begin
 
 #-----------------------------------------------------------------------# Basic text
@@ -365,6 +388,114 @@ end
     xml = "<!-- héllo -->"
     toks = collect(tokenize(xml))
     @test raw(toks[2], xml) == " héllo "
+end
+
+@testset "multibyte element names" begin
+    xml = "<café>x</café  ><日本語/><t🎈/>"
+    toks = collect(tokenize(xml))
+    opens  = [tag_name(t, xml) for t in toks if t.kind == TokenKinds.OPEN_TAG]
+    closes = [tag_name(t, xml) for t in toks if t.kind == TokenKinds.CLOSE_TAG]
+    @test opens  == ["café", "日本語", "t🎈"]
+    @test closes == ["café"]
+end
+
+@testset "multibyte attribute names and values" begin
+    xml = """<x 名前="日本語テキスト" emoji="🎈🎉" idée='héllo wörld' vide=""/>"""
+    names = [String(raw(t, xml)) for t in tokenize(xml) if t.kind == TokenKinds.ATTR_NAME]
+    vals  = [String(attr_value(t, xml)) for t in tokenize(xml) if t.kind == TokenKinds.ATTR_VALUE]
+    @test names == ["名前", "emoji", "idée", "vide"]
+    @test vals  == ["日本語テキスト", "🎈🎉", "héllo wörld", ""]
+end
+
+@testset "multibyte immediately before a delimiter" begin
+    # The span's end boundary lands right after a 2-/3-/4-byte character in every reader
+    # that stops on an ASCII sentinel ('<', quotes, '-->', ']]>', '?>', '>').
+    xml = "<!--déjà-->"
+    @test raw(collect(tokenize(xml))[2], xml) == "déjà"
+    xml = "<![CDATA[日]]>"
+    @test raw(collect(tokenize(xml))[2], xml) == "日"
+    xml = "<?p ciblée 🛰?>"
+    @test raw(collect(tokenize(xml))[2], xml) == " ciblée 🛰"
+    xml = "<a>été</a>"
+    @test raw(collect(tokenize(xml))[3], xml) == "été"
+    xml = "<!DOCTYPE ré>"
+    @test raw(collect(tokenize(xml))[2], xml) == " ré"
+    xml = """<x a="é">"""
+    @test attr_value(collect(tokenize(xml))[3], xml) == "é"
+end
+
+@testset "PI with multibyte target" begin
+    xml = "<?ciblé données?>"
+    toks = collect(tokenize(xml))
+    @test pi_target(toks[1], xml) == "ciblé"
+    @test raw(toks[2], xml) == " données"
+end
+
+#-----------------------------------------------------------------------# Span equivalence
+@testset "accessors match checked span reconstruction" begin
+    for xml in (
+        MULTIBYTE_DOC,
+        "<r a=\"1\"><c>text</c><!-- x --><![CDATA[d]]><?pi p?><e/></r>",
+    )
+        for t in tokenize(xml)
+            r = raw(t, xml)
+            @test r isa SubString{String}
+            @test r == checked_span(xml, t.offset, t.ncodeunits)
+            if t.kind == TokenKinds.OPEN_TAG
+                @test tag_name(t, xml) == checked_span(xml, t.offset + 1, t.ncodeunits - 1)
+            elseif t.kind == TokenKinds.CLOSE_TAG
+                @test tag_name(t, xml) == checked_span(xml, t.offset + 2, t.ncodeunits - 2)
+            elseif t.kind == TokenKinds.ATTR_VALUE
+                @test attr_value(t, xml) == checked_span(xml, t.offset + 1, t.ncodeunits - 2)
+            elseif t.kind == TokenKinds.PI_OPEN || t.kind == TokenKinds.XML_DECL_OPEN
+                @test pi_target(t, xml) == checked_span(xml, t.offset + 2, t.ncodeunits - 2)
+            end
+            if t.kind == TokenKinds.TEXT || t.kind == TokenKinds.ATTR_VALUE
+                @test t.has_entities == occursin('&', r)
+            end
+        end
+    end
+end
+
+@testset "token spans are root-relative for SubString input" begin
+    # `SubString(::SubString, …)` flattens to the root string, so tokens scanned from a
+    # SubString carry root-relative offsets; `raw` resolves the root the same way.
+    padded = "x" * MULTIBYTE_DOC * "y"
+    sub = SubString(padded, 2, prevind(padded, lastindex(padded)))
+    @test sub == MULTIBYTE_DOC
+    @test length(collect(tokenize(sub))) == length(collect(tokenize(MULTIBYTE_DOC)))
+    for (t, tref) in zip(tokenize(sub), tokenize(MULTIBYTE_DOC))
+        @test t.kind == tref.kind
+        @test raw(t, sub) == raw(tref, MULTIBYTE_DOC)
+        @test raw(t, sub) == checked_span(padded, t.offset, t.ncodeunits)
+    end
+end
+
+@testset "empty spans reconstruct as empty strings" begin
+    for (xml, k) in (
+        ("<!---->", TokenKinds.COMMENT_CONTENT),
+        ("<![CDATA[]]>", TokenKinds.CDATA_CONTENT),
+        ("<?t?>", TokenKinds.PI_CONTENT),
+    )
+        t = only(tok for tok in tokenize(xml) if tok.kind == k)
+        @test t.ncodeunits == 0
+        @test isempty(raw(t, xml))
+        @test raw(t, xml) == ""
+    end
+end
+
+@testset "Token convenience constructors mirror SubString fields" begin
+    xml = "<a>té</a>"
+    sub = SubString(xml, 4, 5)          # "té" — ends on a 2-byte character
+    t1 = Token(TokenKinds.TEXT, sub)
+    t2 = Token(TokenKinds.TEXT, true, sub)
+    @test (t1.offset, t1.ncodeunits) == (sub.offset, ncodeunits(sub))
+    @test (t2.offset, t2.ncodeunits) == (sub.offset, ncodeunits(sub))
+    @test !t1.has_entities
+    @test t2.has_entities
+    @test raw(t1, xml) == "té" == raw(t2, xml)
+    # Direct, non-inlined call takes the @boundscheck-validated construction path.
+    @test XML.XMLTokenizer._noshift_substring(xml, t1.offset, t1.ncodeunits) == "té"
 end
 
 #-----------------------------------------------------------------------# Edge cases

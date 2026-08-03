@@ -62,23 +62,72 @@ struct Token
     ncodeunits::Int    # == SubString.ncodeunits (byte length of the token text)
 end
 
-# Emit-site constructors: take the throwaway `SubString` view a reader just built and keep
-# only its byte range. The SubString does not escape, so this allocates nothing. They keep
-# every `Token(KIND, SubString(data, a, b))` / `Token(KIND, has_amp, view)` site unchanged.
+# Convenience constructors (kept for tests): build a token from an existing `SubString`
+# view, keeping only its byte range. Scanner emit sites construct tokens directly from
+# integer scan positions via `make_token` below.
 @inline Token(kind::TokenKinds.Kind, raw::SubString) = Token(kind, false, raw.offset, raw.ncodeunits)
 @inline Token(kind::TokenKinds.Kind, has_entities::Bool, raw::SubString) =
     Token(kind, has_entities, raw.offset, raw.ncodeunits)
 
-# Recover the token's text as a zero-copy `SubString` of its source `data`. `prevind` lands
-# the end index on the START of the last character, so the round-trip is correct for
-# multibyte UTF-8 — a naive `SubString(data, off+1, off+ncu)` would pass a continuation byte
-# as the end index and throw. `_token_root` resolves `data::SubString` to its parent string
-# (token offsets are root-relative, since `SubString(::SubString, …)` flattens to the root).
+# Every span the scanner emits has both edges on UTF-8 character boundaries, so a view
+# can be rebuilt straight from the stored (offset, ncodeunits) fields with no index
+# walk. The invariant is structural: `NAME_BYTE_TABLE` classifies every byte 0x80–0xFF
+# (the UTF-8 lead/continuation bytes) as a name byte, so name scans only stop on an
+# ASCII byte or EOF, and every other span edge lands on an ASCII sentinel ('<', '>',
+# '/', quotes, '-->', ']]>', '?>') or EOF. ASCII bytes are character boundaries by
+# construction — even in malformed input. This is the package's one deliberate
+# relaxation of the "never index ± 1 on strings" rule; see issue #109.
+#
+# `SubString`'s internal `Val(:noshift)` constructor stores the two fields directly
+# (`base/strings/substring.jl:39-46` as of 1.12.6), unlike the checked constructor
+# whose unconditional `nextind` re-derives the byte length even under `@inbounds`.
+# The `@boundscheck` block preserves full validation under `--check-bounds=yes` (as in
+# `Pkg.test`); callers wrap the call in `@inbounds`, so production builds elide it.
+# If Base ever drops the constructor, the checked index-walking fallback takes over.
+if hasmethod(SubString{String}, Tuple{String, Int, Int, Val{:noshift}})
+    @inline function _noshift_substring(s::T, offset::Int, ncu::Int) where {T <: AbstractString}
+        @boundscheck begin
+            n = ncodeunits(s)
+            (0 <= offset && 0 <= ncu && offset + ncu <= n) ||
+                throw(BoundsError(s, (offset + 1):(offset + ncu)))
+            if ncu != 0
+                isvalid(s, offset + 1) || throw(StringIndexError(s, offset + 1))
+                offset + ncu == n || isvalid(s, offset + ncu + 1) ||
+                    throw(StringIndexError(s, offset + ncu + 1))
+            end
+        end
+        SubString{T}(s, offset, ncu, Val(:noshift))
+    end
+else
+    @inline function _noshift_substring(s::AbstractString, offset::Int, ncu::Int)
+        ncu == 0 && return SubString(s, 1, 0)
+        SubString(s, offset + 1, prevind(s, offset + ncu + 1))
+    end
+end
+
+# Recover the token's text as a zero-copy `SubString` of its source `data` — a direct
+# rebuild from the token's span fields (see `_noshift_substring`). `_token_root`
+# resolves `data::SubString` to its parent string (token offsets are root-relative,
+# since `SubString(::SubString, …)` flattens to the root).
 @inline _token_root(s::AbstractString) = s
 @inline _token_root(s::SubString)      = s.string
 @inline function raw(t::Token, data::AbstractString)
-    r = _token_root(data)
-    @inbounds SubString(r, t.offset + 1, prevind(r, t.offset + t.ncodeunits + 1))
+    @inbounds _noshift_substring(_token_root(data), t.offset, t.ncodeunits)
+end
+
+# Emit-side helpers. Scan positions are `data`-relative; token spans are root-relative
+# (matching what the flattening `SubString(data, i, j)` emit sites used to store), and
+# `_data_offset` bridges the two. `make_token` covers the data-relative byte range
+# [start, stop); `_span_view` is the same range as a view, for the bounded entity scan
+# on text and attribute values.
+@inline _data_offset(::AbstractString) = 0
+@inline _data_offset(s::SubString)     = s.offset
+@inline function make_token(kind::TokenKinds.Kind, has_entities::Bool, data::AbstractString,
+                            start::Int, stop::Int)
+    Token(kind, has_entities, _data_offset(data) + start - 1, stop - start)
+end
+@inline function _span_view(data::AbstractString, start::Int, stop::Int)
+    @inbounds _noshift_substring(_token_root(data), _data_offset(data) + start - 1, stop - start)
 end
 
 function Base.show(io::IO, t::Token)
@@ -106,9 +155,8 @@ struct TokenizerState
     pending::Token  # buffered token for constructs that emit two tokens at once (e.g. content + close)
 end
 
-# Create an empty token (no pending token buffered). The throwaway `SubString(s,1,0)` has
-# offset/ncodeunits 0, so the resulting Token is the (kind, false, 0, 0) sentinel.
-@inline no_token(s::AbstractString) = Token(TokenKinds.TEXT, @inbounds SubString(s, 1, 0))
+# The empty sentinel token (no pending token buffered): kind TEXT, empty span.
+@inline no_token(::AbstractString) = Token(TokenKinds.TEXT, false, 0, 0)
 # Check whether the state has a buffered pending token (the sentinel has ncodeunits 0;
 # every real pending token — COMMENT/CDATA/PI/DOCTYPE close — is non-empty).
 @inline has_pending(st::TokenizerState) = st.pending.ncodeunits != 0
@@ -255,12 +303,10 @@ end
 # O(doc_size²) on entity-free documents.
 function read_text(data::AbstractString, pos::Int)
     start = pos
-    n = ncodeunits(data)
     lt_idx = findnext('<', data, pos)
-    end_pos = isnothing(lt_idx) ? n + 1 : lt_idx
-    text = @inbounds SubString(data, start, prevind(data, end_pos))
-    has_amp = occursin('&', text)
-    tok = Token(TokenKinds.TEXT, has_amp, text)
+    end_pos = isnothing(lt_idx) ? ncodeunits(data) + 1 : lt_idx
+    has_amp = occursin('&', _span_view(data, start, end_pos))
+    tok = make_token(TokenKinds.TEXT, has_amp, data, start, end_pos)
     (tok, TokenizerState(end_pos, M_DEFAULT, no_token(data)))
 end
 
@@ -290,7 +336,7 @@ function read_bang(data::AbstractString, pos::Int, start::Int)
         pos += 1
         (!iseof(data, pos) && peek(data, pos) == UInt8('-')) || err("expected '<!--'", start)
         pos += 1
-        tok = Token(TokenKinds.COMMENT_OPEN, @inbounds SubString(data, start, pos - 1))
+        tok = make_token(TokenKinds.COMMENT_OPEN, false, data, start, pos)
         return (tok, TokenizerState(pos, M_COMMENT, no_token(data)))
     end
 
@@ -302,7 +348,7 @@ function read_bang(data::AbstractString, pos::Int, start::Int)
             peek(data, pos) == expected || err("invalid CDATA section", start)
             pos += 1
         end
-        tok = Token(TokenKinds.CDATA_OPEN, @inbounds SubString(data, start, pos - 1))
+        tok = make_token(TokenKinds.CDATA_OPEN, false, data, start, pos)
         return (tok, TokenizerState(pos, M_CDATA, no_token(data)))
     end
 
@@ -310,7 +356,7 @@ function read_bang(data::AbstractString, pos::Int, start::Int)
     @inbounds while !iseof(data, pos) && is_name_byte(peek(data, pos))
         pos += 1
     end
-    tok = Token(TokenKinds.DOCTYPE_OPEN, @inbounds SubString(data, start, pos - 1))
+    tok = make_token(TokenKinds.DOCTYPE_OPEN, false, data, start, pos)
     (tok, TokenizerState(pos, M_DOCTYPE, no_token(data)))
 end
 
@@ -328,10 +374,10 @@ function read_pi_start(data::AbstractString, pos::Int, start::Int)
         codeunit(data, name_start + 2) == UInt8('l')
 
     if is_xml
-        tok = Token(TokenKinds.XML_DECL_OPEN, @inbounds SubString(data, start, pos - 1))
+        tok = make_token(TokenKinds.XML_DECL_OPEN, false, data, start, pos)
         (tok, TokenizerState(pos, M_XML_DECL, no_token(data)))
     else
-        tok = Token(TokenKinds.PI_OPEN, @inbounds SubString(data, start, prevind(data, pos)))
+        tok = make_token(TokenKinds.PI_OPEN, false, data, start, pos)
         (tok, TokenizerState(pos, M_PI, no_token(data)))
     end
 end
@@ -342,7 +388,7 @@ function read_open_tag_start(data::AbstractString, pos::Int, start::Int)
     @inbounds while !iseof(data, pos) && is_name_byte(peek(data, pos))
         pos += 1
     end
-    tok = Token(TokenKinds.OPEN_TAG, @inbounds SubString(data, start, prevind(data, pos)))
+    tok = make_token(TokenKinds.OPEN_TAG, false, data, start, pos)
     (tok, TokenizerState(pos, M_TAG, no_token(data)))
 end
 
@@ -351,7 +397,7 @@ function read_close_tag_start(data::AbstractString, pos::Int, start::Int)
     @inbounds while !iseof(data, pos) && is_name_byte(peek(data, pos))
         pos += 1
     end
-    tok = Token(TokenKinds.CLOSE_TAG, @inbounds SubString(data, start, prevind(data, pos)))
+    tok = make_token(TokenKinds.CLOSE_TAG, false, data, start, pos)
     (tok, TokenizerState(pos, M_CLOSE_TAG, no_token(data)))
 end
 
@@ -360,7 +406,7 @@ function read_close_tag_end(data::AbstractString, pos::Int)
     pos = skip_whitespace(data, pos)
     iseof(data, pos) && err("unterminated close tag", pos)
     peek(data, pos) == UInt8('>') || err("expected '>'", pos)
-    tok = Token(TokenKinds.TAG_CLOSE, @inbounds SubString(data, pos, pos))
+    tok = make_token(TokenKinds.TAG_CLOSE, false, data, pos, pos + 1)
     (tok, TokenizerState(pos + 1, M_DEFAULT, no_token(data)))
 end
 
@@ -376,16 +422,16 @@ function read_in_tag(data::AbstractString, pos::Int, mode::Mode)
     # Check for end delimiters
     if is_decl
         if b == UInt8('?') && canpeek(data, pos, 1) && peek(data, pos + 1) == UInt8('>')
-            tok = Token(TokenKinds.XML_DECL_CLOSE, @inbounds SubString(data, pos, pos + 1))
+            tok = make_token(TokenKinds.XML_DECL_CLOSE, false, data, pos, pos + 2)
             return (tok, TokenizerState(pos + 2, M_DEFAULT, no_token(data)))
         end
     else
         if b == UInt8('>')
-            tok = Token(TokenKinds.TAG_CLOSE, @inbounds SubString(data, pos, pos))
+            tok = make_token(TokenKinds.TAG_CLOSE, false, data, pos, pos + 1)
             return (tok, TokenizerState(pos + 1, M_DEFAULT, no_token(data)))
         end
         if b == UInt8('/') && canpeek(data, pos, 1) && peek(data, pos + 1) == UInt8('>')
-            tok = Token(TokenKinds.SELF_CLOSE, @inbounds SubString(data, pos, pos + 1))
+            tok = make_token(TokenKinds.SELF_CLOSE, false, data, pos, pos + 2)
             return (tok, TokenizerState(pos + 2, M_DEFAULT, no_token(data)))
         end
     end
@@ -395,8 +441,8 @@ function read_in_tag(data::AbstractString, pos::Int, mode::Mode)
     @inbounds while !iseof(data, pos) && is_name_byte(peek(data, pos))
         pos += 1
     end
-    name_end = prevind(data, pos)
-    name_start > name_end && err("expected attribute name or tag close", pos)
+    name_stop = pos
+    name_start == name_stop && err("expected attribute name or tag close", pos)
 
     # Consume '=' and surrounding whitespace (not part of any token)
     pos = skip_whitespace(data, pos)
@@ -405,7 +451,7 @@ function read_in_tag(data::AbstractString, pos::Int, mode::Mode)
     pos = skip_whitespace(data, pos)
 
     next_state = is_decl ? M_XML_DECL_VALUE : M_TAG_VALUE
-    tok = Token(TokenKinds.ATTR_NAME, @inbounds SubString(data, name_start, name_end))
+    tok = make_token(TokenKinds.ATTR_NAME, false, data, name_start, name_stop)
     (tok, TokenizerState(pos, next_state, no_token(data)))
 end
 
@@ -424,13 +470,11 @@ function read_attr_value(data::AbstractString, pos::Int, mode::Mode)
     close_idx = findnext(quote_char, data, pos)
     isnothing(close_idx) && err("unterminated attribute value", start)
     # Value range is [pos, close_idx - 1]; entity check is bounded to this view.
-    inner = @inbounds SubString(data, pos, prevind(data, close_idx))
-    has_amp = occursin('&', inner)
+    has_amp = occursin('&', _span_view(data, pos, close_idx))
     pos = close_idx + 1  # one past the closing quote (always ASCII)
 
     next_state = (mode == M_XML_DECL_VALUE) ? M_XML_DECL : M_TAG
-    valraw = @inbounds SubString(data, start, pos - 1)
-    tok = Token(TokenKinds.ATTR_VALUE, has_amp, valraw)
+    tok = make_token(TokenKinds.ATTR_VALUE, has_amp, data, start, pos)
     (tok, TokenizerState(pos, next_state, no_token(data)))
 end
 
@@ -442,12 +486,10 @@ function read_comment_body(data::AbstractString, pos::Int)
         if peek(data, pos) == UInt8('-') &&
            canpeek(data, pos, 1) && peek(data, pos + 1) == UInt8('-') &&
            canpeek(data, pos, 2) && peek(data, pos + 2) == UInt8('>')
-            content_end = prevind(data, pos)
-            close_start = pos
-            pos += 3
-            pending = Token(TokenKinds.COMMENT_CLOSE, SubString(data, close_start, pos - 1))
-            tok = Token(TokenKinds.COMMENT_CONTENT, SubString(data, start, content_end))
-            return (tok, TokenizerState(pos, M_DEFAULT, pending))
+            close_stop = pos + 3
+            pending = make_token(TokenKinds.COMMENT_CLOSE, false, data, pos, close_stop)
+            tok = make_token(TokenKinds.COMMENT_CONTENT, false, data, start, pos)
+            return (tok, TokenizerState(close_stop, M_DEFAULT, pending))
         end
         pos += 1
     end
@@ -461,12 +503,10 @@ function read_cdata_body(data::AbstractString, pos::Int)
         if peek(data, pos) == UInt8(']') &&
            canpeek(data, pos, 1) && peek(data, pos + 1) == UInt8(']') &&
            canpeek(data, pos, 2) && peek(data, pos + 2) == UInt8('>')
-            content_end = prevind(data, pos)
-            close_start = pos
-            pos += 3
-            pending = Token(TokenKinds.CDATA_CLOSE, SubString(data, close_start, pos - 1))
-            tok = Token(TokenKinds.CDATA_CONTENT, SubString(data, start, content_end))
-            return (tok, TokenizerState(pos, M_DEFAULT, pending))
+            close_stop = pos + 3
+            pending = make_token(TokenKinds.CDATA_CLOSE, false, data, pos, close_stop)
+            tok = make_token(TokenKinds.CDATA_CONTENT, false, data, start, pos)
+            return (tok, TokenizerState(close_stop, M_DEFAULT, pending))
         end
         pos += 1
     end
@@ -478,12 +518,10 @@ function read_pi_body(data::AbstractString, pos::Int)
     start = pos
     @inbounds while !iseof(data, pos)
         if peek(data, pos) == UInt8('?') && canpeek(data, pos, 1) && peek(data, pos + 1) == UInt8('>')
-            content_end = prevind(data, pos)
-            close_start = pos
-            pos += 2
-            pending = Token(TokenKinds.PI_CLOSE, SubString(data, close_start, pos - 1))
-            tok = Token(TokenKinds.PI_CONTENT, SubString(data, start, content_end))
-            return (tok, TokenizerState(pos, M_DEFAULT, pending))
+            close_stop = pos + 2
+            pending = make_token(TokenKinds.PI_CLOSE, false, data, pos, close_stop)
+            tok = make_token(TokenKinds.PI_CONTENT, false, data, start, pos)
+            return (tok, TokenizerState(close_stop, M_DEFAULT, pending))
         end
         pos += 1
     end
@@ -519,12 +557,10 @@ function read_doctype_body(data::AbstractString, pos::Int)
             depth -= 1
             pos += 1
         elseif b == UInt8('>') && depth == 0
-            content_end = prevind(data, pos)
-            close_start = pos
-            pos += 1
-            pending = Token(TokenKinds.DOCTYPE_CLOSE, @inbounds SubString(data, close_start, pos - 1))
-            tok = Token(TokenKinds.DOCTYPE_CONTENT, @inbounds SubString(data, start, content_end))
-            return (tok, TokenizerState(pos, M_DEFAULT, pending))
+            close_stop = pos + 1
+            pending = make_token(TokenKinds.DOCTYPE_CLOSE, false, data, pos, close_stop)
+            tok = make_token(TokenKinds.DOCTYPE_CONTENT, false, data, start, pos)
+            return (tok, TokenizerState(close_stop, M_DEFAULT, pending))
         else
             pos += 1
         end
@@ -612,11 +648,11 @@ Extract the element name from an `OPEN_TAG` or `CLOSE_TAG` token. `data` is the 
 token was scanned from (needed to recover the text — see [`raw`](@ref)).
 """
 function tag_name(token::Token, data)
-    r = raw(token, data)
+    r = _token_root(data)
     if token.kind == TokenKinds.OPEN_TAG
-        @inbounds SubString(r, 2, lastindex(r))  # skip '<'; lastindex (not ncodeunits) for multibyte names
+        @inbounds _noshift_substring(r, token.offset + 1, token.ncodeunits - 1)  # skip '<'
     elseif token.kind == TokenKinds.CLOSE_TAG
-        @inbounds SubString(r, 3, lastindex(r))  # skip '</'
+        @inbounds _noshift_substring(r, token.offset + 2, token.ncodeunits - 2)  # skip '</'
     else
         throw(ArgumentError("tag_name requires OPEN_TAG or CLOSE_TAG, got $(token.kind)"))
     end
@@ -630,8 +666,9 @@ Strip the surrounding quotes from an `ATTR_VALUE` token. `data` is the source st
 function attr_value(token::Token, data)
     token.kind == TokenKinds.ATTR_VALUE ||
         throw(ArgumentError("attr_value requires ATTR_VALUE, got $(token.kind)"))
-    r = raw(token, data)
-    @inbounds SubString(r, 2, prevind(r, lastindex(r)))
+    # Strip the quotes by span arithmetic — quotes are ASCII, so both edges stay on
+    # character boundaries.
+    @inbounds _noshift_substring(_token_root(data), token.offset + 1, token.ncodeunits - 2)
 end
 
 """
@@ -642,8 +679,7 @@ Extract the target name from a `PI_OPEN` or `XML_DECL_OPEN` token. `data` is the
 function pi_target(token::Token, data)
     (token.kind == TokenKinds.PI_OPEN || token.kind == TokenKinds.XML_DECL_OPEN) ||
         throw(ArgumentError("pi_target requires PI_OPEN or XML_DECL_OPEN, got $(token.kind)"))
-    r = raw(token, data)
-    @inbounds SubString(r, 3, lastindex(r))  # skip '<?'
+    @inbounds _noshift_substring(_token_root(data), token.offset + 2, token.ncodeunits - 2)  # skip '<?'
 end
 
 end # module XMLTokenizer
