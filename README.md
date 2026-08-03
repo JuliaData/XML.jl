@@ -355,12 +355,12 @@ Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl). Data: `books.xml
 
 | Benchmark | XML.jl | EzXML | LightXML | XMLDict |
 |---|--:|--:|--:|--:|
-| Parse, small | 0.0158 ms | 0.0131 ms | 0.0114 ms | 0.11 ms |
-| Parse, medium | 77.4 ms | 46.1 ms | 39.0 ms | 352 ms |
-| Write, small | 0.00559 ms | 0.00577 ms | 0.0581 ms | — |
-| Write, medium | 24.4 ms | 21.5 ms | 28.3 ms | — |
-| Collect tags, small | 0.00037 ms | 0.00107 ms | 0.00183 ms | — |
-| Collect tags, medium | 4.81 ms | 8.99 ms | 13.1 ms | — |
+| Parse, small | 15.6 µs | 13.3 µs | 11.2 µs | 116 µs |
+| Parse, medium | 77.6 ms | 46.3 ms | 37.5 ms | 367 ms |
+| Write, small | 5.60 µs | 5.56 µs | 58.2 µs | — |
+| Write, medium | 26.8 ms | 21.2 ms | 30.1 ms | — |
+| Collect tags, small | 0.37 µs | 1.12 µs | 1.87 µs | — |
+| Collect tags, medium | 4.83 ms | 9.44 ms | 14.2 ms | — |
 
 EzXML and LightXML wrap libxml2 (C): faster on raw parse, slower on in-Julia traversal.
 Times include garbage collection; [PERFORMANCE](PERFORMANCE-v0.4.md) breaks each of its rows

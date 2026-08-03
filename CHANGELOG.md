@@ -45,6 +45,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   −36 % — allocations unchanged: the removed round-trips were index arithmetic, not heap
   traffic (#109).
 
+- **The cross-library benchmark suite bounds its own C heap**: the medium and read-file
+  EzXML cells free their C tree per sample (untimed `finalize` teardown — cell timings
+  verified unchanged), and dead finalizer-held trees are collected between cells, so a
+  full suite run no longer pages the machine. Sub-millisecond rows of the README table
+  are now quoted in microseconds.
+
 ## [0.4.4] - 2026-07-31
 
 ### Added
