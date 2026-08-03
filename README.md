@@ -355,12 +355,12 @@ Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl). Data: `books.xml
 
 | Benchmark | XML.jl | EzXML | LightXML | XMLDict |
 |---|--:|--:|--:|--:|
-| Parse, small | 0.0212 ms | 0.0132 ms | 0.0122 ms | 0.11 ms |
-| Parse, medium | 95.5 ms | 47.3 ms | 37.5 ms | 347 ms |
-| Write, small | 0.00569 ms | 0.00572 ms | 0.0583 ms | — |
-| Write, medium | 25.7 ms | 20.7 ms | 29.1 ms | — |
-| Collect tags, small | 0.000372 ms | 0.00112 ms | 0.00183 ms | — |
-| Collect tags, medium | 4.79 ms | 10.4 ms | 13.2 ms | — |
+| Parse, small | 0.0158 ms | 0.0131 ms | 0.0114 ms | 0.11 ms |
+| Parse, medium | 77.4 ms | 46.1 ms | 39.0 ms | 352 ms |
+| Write, small | 0.00559 ms | 0.00577 ms | 0.0581 ms | — |
+| Write, medium | 24.4 ms | 21.5 ms | 28.3 ms | — |
+| Collect tags, small | 0.00037 ms | 0.00107 ms | 0.00183 ms | — |
+| Collect tags, medium | 4.81 ms | 8.99 ms | 13.1 ms | — |
 
 EzXML and LightXML wrap libxml2 (C): faster on raw parse, slower on in-Julia traversal.
 Times include garbage collection; [PERFORMANCE](PERFORMANCE-v0.4.md) breaks each of its rows
@@ -368,4 +368,4 @@ into the stable GC-free work and the per-session GC share.
 
 For the per-access-pattern decomposition (streaming / partial reads / full DOM / stage breakdown) and the theory behind these numbers, see [**PERFORMANCE-v0.4.md**](PERFORMANCE-v0.4.md).
 
-_Measured 2026-08-02, Apple M5 (single-threaded), Julia 1.12.6; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3), XMLDict 0.4.2. Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl)._
+_Measured 2026-08-03, Apple M5 (single-threaded), Julia 1.12.6; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3), XMLDict 0.4.2. Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl)._
