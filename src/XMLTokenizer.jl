@@ -81,34 +81,38 @@ end
 # `SubString`'s internal `Val(:noshift)` constructor takes the two fields directly
 # (`base/strings/substring.jl:39-46` as of 1.12.6), unlike the checked constructor
 # whose unconditional `nextind` re-derives the byte length even under `@inbounds`.
-# The `@boundscheck` block preserves full validation under `--check-bounds=yes` (as in
-# `Pkg.test`); callers wrap the call in `@inbounds`, so production builds elide it.
-# Elision reaches one inlining level only, and only into callees that actually inline,
-# so the constructor call below carries its own `@inbounds` plus a callsite `@inline`:
-# Base's constructor validates under its own `@boundscheck` (a `prevind` plus two
-# `isvalid` — `substring.jl:40-44`) and does not inline on its own, which would leave
-# that validation running. The block above already covers it, and `--check-bounds=yes`
-# re-enables every check regardless (#111).
-# If Base ever drops the constructor, the checked index-walking fallback takes over.
-if hasmethod(SubString{String}, Tuple{String, Int, Int, Val{:noshift}})
-    @inline function _noshift_substring(s::T, offset::Int, ncu::Int) where {T <: AbstractString}
-        @boundscheck begin
-            n = ncodeunits(s)
-            (0 <= offset && 0 <= ncu && offset + ncu <= n) ||
-                throw(BoundsError(s, (offset + 1):(offset + ncu)))
-            if ncu != 0
-                isvalid(s, offset + 1) || throw(StringIndexError(s, offset + 1))
-                offset + ncu == n || isvalid(s, offset + ncu + 1) ||
-                    throw(StringIndexError(s, offset + ncu + 1))
-            end
-        end
+# Which body a build gets is decided at load time (below): `--check-bounds=yes` (as in
+# `Pkg.test`) compiles the checked reference reconstruction wholesale, so the whole
+# test suite exercises index walks and edge validation on every span; default builds
+# compile the bare noshift store. In the noshift body, the constructor call carries
+# `@inbounds` plus a callsite `@inline`: Base's constructor validates under its own
+# `@boundscheck` (a `prevind` plus two `isvalid` — `substring.jl:40-44`) and neither
+# elides past one non-inlined level nor inlines on its own, which would leave that
+# validation running (#111). If Base ever drops the constructor, the checked
+# reconstruction takes over outright.
+# The checked reference reconstruction: index walks through the public constructor,
+# validating both edges (it throws exactly where an invalid span would misbehave).
+# This is the whole fast path under `--check-bounds=yes` and on Julias without the
+# noshift constructor. Branchless on purpose: the constructor itself yields the empty
+# view when the end index falls below the start (ncu == 0), and a second
+# construction path here defeats the unboxed union return of accessor chains that
+# zero-allocation guards pin (#113).
+@inline _checked_substring(s::AbstractString, offset::Int, ncu::Int) =
+    SubString(s, offset + 1, prevind(s, offset + ncu + 1))
+
+# Method selection at load time, like the `hasmethod` guard: `--check-bounds=yes` (as
+# in `Pkg.test`; precompile caches are keyed by the flag) gets the checked reference
+# reconstruction wholesale — walks, validation and all — while default builds get the
+# bare noshift store. One body per build, deliberately: an intra-body `@boundscheck`
+# split leaves two construction paths in the lowered code, and that alone defeats the
+# unboxed union return of accessor chains that zero-allocation guards pin (#113).
+if hasmethod(SubString{String}, Tuple{String, Int, Int, Val{:noshift}}) &&
+   Base.JLOptions().check_bounds != 1
+    @inline _noshift_substring(s::T, offset::Int, ncu::Int) where {T <: AbstractString} =
         @inbounds @inline SubString{T}(s, offset, ncu, Val(:noshift))
-    end
 else
-    @inline function _noshift_substring(s::AbstractString, offset::Int, ncu::Int)
-        ncu == 0 && return SubString(s, 1, 0)
-        SubString(s, offset + 1, prevind(s, offset + ncu + 1))
-    end
+    _noshift_substring(s::AbstractString, offset::Int, ncu::Int) =
+        @inline _checked_substring(s, offset, ncu)
 end
 
 # Recover the token's text as a zero-copy `SubString` of its source `data` — a direct
