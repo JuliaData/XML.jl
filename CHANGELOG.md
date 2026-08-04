@@ -9,66 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **GC-tuning note in PERFORMANCE-v0.4.md**: a single-threaded Julia process defaults to one
-  GC thread; `--gcthreads=4` cuts a full collection with a large live `Node` tree ~2.7× on
-  the benchmark corpus, at no cost to computation (mark threads only run while compute is
-  paused). Measured guidance for applications that hold big trees.
+- **GC-tuning note in PERFORMANCE-v0.4.md**: `--gcthreads=4` cuts a full collection with a
+  large live `Node` tree ~2.7× on the benchmark corpus, at no cost to computation —
+  measured guidance for applications that hold big trees.
 
 ### Changed
 
 - **The `Node` build no longer allocates per-element vectors**: children and attributes
-  accumulate on two parse-wide scratch stacks and each closing tag slices out one
-  exact-size vector — or `nothing`, allocation-free, when the element has none. On the
-  14 MB benchmark corpus this removes ~380 K allocations (−13 %) and ~22 MiB of garbage per
-  build, for a median build time of −7.5 % (BenchmarkTools) — and the time win grows with
-  how much garbage the collector has to manage. The finished
-  tree no longer retains `push!`-growth overcapacity in its children vectors: the retained
-  tree shrinks from 80.0 to 71.6 MiB and full walks of it run ~1.4× faster (#107).
+  accumulate on parse-wide scratch stacks, sliced out exact-size at each closing tag. On
+  the 14 MB benchmark corpus: ~380 K allocations and ~22 MiB of garbage less per build,
+  median build −7.5 %, retained tree 80.0 → 71.6 MiB, full walks ~1.4× faster (#107).
 
-- **One measurement protocol across the performance docs**: every timing in
-  PERFORMANCE-v0.4.md and the README access-pattern table is now a BenchmarkTools
-  `@benchmark` median — the per-reader table and the GC-tuning note were previously
-  measured by a custom median-of-N script on a freshly collected heap, so their numbers
-  were not comparable with the BenchmarkTools tables beside them.
-  `benchmarks/flatnode_bench.jl` is rewritten accordingly (its `--gc-only` mode
-  reproduces the GC-tuning pair) and the affected cells re-measured (#107).
+- **Views are span-native end to end**: tokens carry `(offset, ncodeunits)` byte spans,
+  and every view — `raw`, the tag/attribute/PI accessors, `FlatNode`'s span→view
+  helpers — is rebuilt by direct field construction, with no `prevind`/`nextind` walks.
+  Sound because every span edge lands on an ASCII byte or EOF, hence a UTF-8 character
+  boundary; `--check-bounds=yes` builds (as in `Pkg.test`) compile the checked
+  reconstruction instead, selected at load time. On the 14 MB corpus: lex 37.4 → 23.4 ms,
+  `FlatNode` extract 6.6 → 3.1 ms, and three cross-library headlines flip — `FlatNode`
+  out-builds libxml2 (~1.7×) and out-extracts `Node`'s direct field reads, and pure-Julia
+  streaming runs ~2.5× ahead of EzXML's `StreamReader`. Allocations unchanged throughout
+  (#109, #111, #113).
 
-- **Span-native tokens: the tokenizer no longer round-trips byte spans through checked
-  `SubString` construction.** Emit sites build tokens directly from the integer scan
-  positions already in hand, and token views (`raw`, the tag/attribute/PI accessors) are
-  rebuilt by direct field construction — no `prevind`/`nextind` walks. Sound because every
-  span edge the scanner produces is an ASCII byte or EOF, hence a UTF-8 character boundary
-  by construction; full validation stays active under `--check-bounds=yes` (as in
-  `Pkg.test`). On the 14 MB benchmark corpus this cuts the pure lex ~32 % (37.4 → 25.6 ms)
-  and, through the shared tokenizer, every reader: `Node` build −17 %, `FlatNode` build
-  −35 % (it now out-builds libxml2), `Cursor` full stream −34 %, `LazyNode` full walk
-  −36 % — allocations unchanged: the removed round-trips were index arithmetic, not heap
-  traffic (#109).
-
-- **The cross-library benchmark suite bounds its own C heap**: the medium and read-file
-  EzXML cells free their C tree per sample (untimed `finalize` teardown — cell timings
-  verified unchanged), and dead finalizer-held trees are collected between cells, so a
-  full suite run no longer pages the machine. Sub-millisecond rows of the README table
-  are now quoted in microseconds (#110).
-
-- **The span-native fast path now truly elides every validation walk**: `@inbounds`
-  elision reaches one inlining level and applies only to callees that actually inline —
-  Base's `Val(:noshift)` constructor did neither, so every view construction still paid
-  its internal `prevind` plus two `isvalid` under production flags. The constructor call
-  now carries `@inbounds` plus a callsite `@inline`; `--check-bounds=yes` (as in
-  `Pkg.test`) still validates every span the suite builds. On the 14 MB benchmark corpus:
-  lex −7 %, `Node` build −10 %, `FlatNode` build −19 % (now ~1.7× ahead of libxml2),
-  `Cursor` full stream −12 %, `LazyNode` full walk −8 %; allocations unchanged (#111).
-
-- **`FlatNode`'s span→view helpers use the span-native path too**: every accessor
-  (`tag`, `value`, attributes, by-key lookups, `sourcetext`) and the build's close-tag
-  comparison rebuilt views with a `prevind` walk plus the checked constructor's
-  unconditional `nextind`; they now route through the tokenizer's `_noshift_substring`,
-  sound one hop removed (stored spans are token spans or tokenizer-accessor field
-  pairs). Full extract on the 14 MB corpus drops from 6.6 to 3.1 ms (−54 %) — the flat
-  store now out-extracts `Node`'s direct field reads — and the build gains ~4 %. Under
-  `--check-bounds=yes` (as in `Pkg.test`) the build compiles the checked reference
-  reconstruction wholesale, selected at load time; allocations unchanged (#113).
+- **Measurement upkeep**: every timing in PERFORMANCE-v0.4.md and the README is a
+  BenchmarkTools `@benchmark` median (`benchmarks/flatnode_bench.jl` rewritten
+  accordingly); the cross-library suite bounds its own C heap (per-sample `finalize`
+  teardown, between-cell collection) so a full run no longer pages the machine; and
+  sub-millisecond README rows are quoted in microseconds (#107, #110).
 
 ## [0.4.4] - 2026-07-31
 
