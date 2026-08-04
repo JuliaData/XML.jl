@@ -78,11 +78,17 @@ end
 # construction — even in malformed input. This is the package's one deliberate
 # relaxation of the "never index ± 1 on strings" rule; see issue #109.
 #
-# `SubString`'s internal `Val(:noshift)` constructor stores the two fields directly
+# `SubString`'s internal `Val(:noshift)` constructor takes the two fields directly
 # (`base/strings/substring.jl:39-46` as of 1.12.6), unlike the checked constructor
 # whose unconditional `nextind` re-derives the byte length even under `@inbounds`.
 # The `@boundscheck` block preserves full validation under `--check-bounds=yes` (as in
 # `Pkg.test`); callers wrap the call in `@inbounds`, so production builds elide it.
+# Elision reaches one inlining level only, and only into callees that actually inline,
+# so the constructor call below carries its own `@inbounds` plus a callsite `@inline`:
+# Base's constructor validates under its own `@boundscheck` (a `prevind` plus two
+# `isvalid` — `substring.jl:40-44`) and does not inline on its own, which would leave
+# that validation running. The block above already covers it, and `--check-bounds=yes`
+# re-enables every check regardless (#111).
 # If Base ever drops the constructor, the checked index-walking fallback takes over.
 if hasmethod(SubString{String}, Tuple{String, Int, Int, Val{:noshift}})
     @inline function _noshift_substring(s::T, offset::Int, ncu::Int) where {T <: AbstractString}
@@ -96,7 +102,7 @@ if hasmethod(SubString{String}, Tuple{String, Int, Int, Val{:noshift}})
                     throw(StringIndexError(s, offset + ncu + 1))
             end
         end
-        SubString{T}(s, offset, ncu, Val(:noshift))
+        @inbounds @inline SubString{T}(s, offset, ncu, Val(:noshift))
     end
 else
     @inline function _noshift_substring(s::AbstractString, offset::Int, ncu::Int)
