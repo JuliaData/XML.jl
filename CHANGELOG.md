@@ -60,6 +60,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lex −7 %, `Node` build −10 %, `FlatNode` build −19 % (now ~1.7× ahead of libxml2),
   `Cursor` full stream −12 %, `LazyNode` full walk −8 %; allocations unchanged (#111).
 
+- **`FlatNode`'s span→view helpers use the span-native path too**: every accessor
+  (`tag`, `value`, attributes, by-key lookups, `sourcetext`) and the build's close-tag
+  comparison rebuilt views with a `prevind` walk plus the checked constructor's
+  unconditional `nextind`; they now route through the tokenizer's `_noshift_substring`,
+  sound one hop removed (stored spans are token spans or tokenizer-accessor field
+  pairs). Full extract on the 14 MB corpus drops from 6.6 to 3.1 ms (−54 %) — the flat
+  store now out-extracts `Node`'s direct field reads — and the build gains ~4 %. Under
+  `--check-bounds=yes` (as in `Pkg.test`) the build compiles the checked reference
+  reconstruction wholesale, selected at load time; allocations unchanged (#113).
+
 ## [0.4.4] - 2026-07-31
 
 ### Added
