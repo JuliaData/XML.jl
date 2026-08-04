@@ -69,43 +69,25 @@ end
 @inline Token(kind::TokenKinds.Kind, has_entities::Bool, raw::SubString) =
     Token(kind, has_entities, raw.offset, raw.ncodeunits)
 
-# Every span the scanner emits has both edges on UTF-8 character boundaries, so a view
-# can be rebuilt straight from the stored (offset, ncodeunits) fields with no index
-# walk. The invariant is structural: `NAME_BYTE_TABLE` classifies every byte 0x80–0xFF
-# (the UTF-8 lead/continuation bytes) as a name byte, so name scans only stop on an
-# ASCII byte or EOF, and every other span edge lands on an ASCII sentinel ('<', '>',
-# '/', quotes, '-->', ']]>', '?>') or EOF. ASCII bytes are character boundaries by
-# construction — even in malformed input. This is the package's one deliberate
-# relaxation of the "never index ± 1 on strings" rule; see issue #109.
-#
-# `SubString`'s internal `Val(:noshift)` constructor takes the two fields directly
-# (`base/strings/substring.jl:39-46` as of 1.12.6), unlike the checked constructor
-# whose unconditional `nextind` re-derives the byte length even under `@inbounds`.
-# Which body a build gets is decided at load time (below): `--check-bounds=yes` (as in
-# `Pkg.test`) compiles the checked reference reconstruction wholesale, so the whole
-# test suite exercises index walks and edge validation on every span; default builds
-# compile the bare noshift store. In the noshift body, the constructor call carries
-# `@inbounds` plus a callsite `@inline`: Base's constructor validates under its own
-# `@boundscheck` (a `prevind` plus two `isvalid` — `substring.jl:40-44`) and neither
-# elides past one non-inlined level nor inlines on its own, which would leave that
-# validation running (#111). If Base ever drops the constructor, the checked
-# reconstruction takes over outright.
-# The checked reference reconstruction: index walks through the public constructor,
-# validating both edges (it throws exactly where an invalid span would misbehave).
-# This is the whole fast path under `--check-bounds=yes` and on Julias without the
-# noshift constructor. Branchless on purpose: the constructor itself yields the empty
-# view when the end index falls below the start (ncu == 0), and a second
-# construction path here defeats the unboxed union return of accessor chains that
-# zero-allocation guards pin (#113).
+# Token views are rebuilt straight from the stored (offset, ncodeunits) fields — the
+# package's one deliberate relaxation of the "never index ± 1 on strings" rule (#109).
+# Safe because every span edge the scanner emits is an ASCII byte or EOF:
+# `NAME_BYTE_TABLE` classifies 0x80–0xFF as name bytes, so scans only stop on ASCII,
+# and ASCII bytes are UTF-8 character boundaries even in malformed input.
+
+# Checked reference reconstruction: index walks through the public constructor, which
+# validates both edges and yields the empty view natively (branchless on purpose — see
+# the union-return note below).
 @inline _checked_substring(s::AbstractString, offset::Int, ncu::Int) =
     SubString(s, offset + 1, prevind(s, offset + ncu + 1))
 
-# Method selection at load time, like the `hasmethod` guard: `--check-bounds=yes` (as
-# in `Pkg.test`; precompile caches are keyed by the flag) gets the checked reference
-# reconstruction wholesale — walks, validation and all — while default builds get the
-# bare noshift store. One body per build, deliberately: an intra-body `@boundscheck`
-# split leaves two construction paths in the lowered code, and that alone defeats the
-# unboxed union return of accessor chains that zero-allocation guards pin (#113).
+# One body per build, selected at load time (precompile caches are keyed by the flag):
+# `--check-bounds=yes` (as in `Pkg.test`) compiles the checked reconstruction wholesale
+# — an intra-body `@boundscheck` split would leave two construction paths and re-box
+# accessor chains' union returns (#113). Default builds compile the bare noshift store
+# (`substring.jl:39-46` @ 1.12.6); its call needs `@inbounds` plus a callsite
+# `@inline`, since elision reaches one inlining level and Base's self-validating
+# constructor does not inline on its own (#111).
 if hasmethod(SubString{String}, Tuple{String, Int, Int, Val{:noshift}}) &&
    Base.JLOptions().check_bounds != 1
     @inline _noshift_substring(s::T, offset::Int, ncu::Int) where {T <: AbstractString} =
