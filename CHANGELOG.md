@@ -51,6 +51,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   full suite run no longer pages the machine. Sub-millisecond rows of the README table
   are now quoted in microseconds (#110).
 
+- **The span-native fast path now truly elides every validation walk**: `@inbounds`
+  elision reaches one inlining level and applies only to callees that actually inline —
+  Base's `Val(:noshift)` constructor did neither, so every view construction still paid
+  its internal `prevind` plus two `isvalid` under production flags. The constructor call
+  now carries `@inbounds` plus a callsite `@inline`; `--check-bounds=yes` (as in
+  `Pkg.test`) still validates every span the suite builds. On the 14 MB benchmark corpus:
+  lex −7 %, `Node` build −10 %, `FlatNode` build −19 % (now ~1.7× ahead of libxml2),
+  `Cursor` full stream −12 %, `LazyNode` full walk −8 %; allocations unchanged (#111).
+
 ## [0.4.4] - 2026-07-31
 
 ### Added

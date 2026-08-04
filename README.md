@@ -253,7 +253,7 @@ doc = read("file.xml", LazyNode)
 
 `LazyNode` supports the same read-only interface as `Node`: `nodetype`, `tag`, `attributes`, `value`, `children`, `is_simple`, `simple_value`, plus integer and string indexing.
 
-`LazyNode` is for *partial* reads only: opening is a no-op wrapper (~0.5 µs whatever the file size), a traversal pays only for the bytes it steps over — descending to a target is O(bytes before it), so reaching this 14 MB file's root element costs ~4 µs — and nothing is cached, so repeated visits pay again. Unbeatable for descents and kilobyte-scale documents; for whole-tree walks (185 ms vs ~38/~85 ms build+walk on the 14 MB corpus below) and repeated queries, build `FlatNode` or `Node` instead — see [Performance by access pattern](#performance-by-access-pattern).
+`LazyNode` is for *partial* reads only: opening is a no-op wrapper (~0.5 µs whatever the file size), a traversal pays only for the bytes it steps over — descending to a target is O(bytes before it), so reaching this 14 MB file's root element costs ~4 µs — and nothing is cached, so repeated visits pay again. Unbeatable for descents and kilobyte-scale documents; for whole-tree walks (171 ms vs ~31/~76 ms build+walk on the 14 MB corpus below) and repeated queries, build `FlatNode` or `Node` instead — see [Performance by access pattern](#performance-by-access-pattern).
 
 For streaming and high-throughput workloads, several extra accessors avoid materializing intermediate collections:
 
@@ -337,15 +337,15 @@ One number cannot rank the readers — cost depends on what you do with the docu
 
 | | build | walk every node | extract all values | DOM size in memory |
 |---|--:|--:|--:|--:|
-| `Cursor` | — (streams) | 25.3 ms (its one scan) | — | — (no DOM) |
-| `LazyNode` | ~0 (a wrapper) | 185 ms (re-tokenizes) | — | — (source only) |
-| `FlatNode` | 34.9 ms | 2.96 ms | 6.6 ms | 54.9 MiB |
-| `Node` | 81.1 ms | 3.49 ms | 3.6 ms | 71.6 MiB |
-| EzXML (libxml2) | 45.8 ms | — | — | — |
+| `Cursor` | — (streams) | 23.1 ms (its one scan) | — | — (no DOM) |
+| `LazyNode` | ~0 (a wrapper) | 171 ms (re-tokenizes) | — | — (source only) |
+| `FlatNode` | 28.3 ms | 2.97 ms | 6.5 ms | 54.9 MiB |
+| `Node` | 72.9 ms | 3.34 ms | 3.6 ms | 71.6 MiB |
+| EzXML (libxml2) | 47.2 ms | — | — | — |
 
-Reading the table: `Cursor`'s walk *is* its parse — one tokenizing scan, nothing retained. `LazyNode` opens for free and pays per node visited — unbeatable for touching a *fraction* of a large document, and (as the walk column shows) the wrong tool for visiting all of it. `FlatNode` builds ~2.3× faster than `Node`, holds ~23% less memory, and its `parent`/`depth` are O(1) where `Node` searches from the root; whole-tree walks are close (`Node`'s exact-size children vectors keep its locality sharp), and pure value extraction on an already-built tree is the one pattern where `Node`'s direct fields win outright, by ~1.8×. `FlatNode` now out-builds even libxml2 (~1.3×), and `Node`'s remaining gap to the C library is materialization, not scanning (see [PERFORMANCE-v0.4.md](PERFORMANCE-v0.4.md)).
+Reading the table: `Cursor`'s walk *is* its parse — one tokenizing scan, nothing retained. `LazyNode` opens for free and pays per node visited — unbeatable for touching a *fraction* of a large document, and (as the walk column shows) the wrong tool for visiting all of it. `FlatNode` builds ~2.6× faster than `Node`, holds ~23% less memory, and its `parent`/`depth` are O(1) where `Node` searches from the root; whole-tree walks are close (`Node`'s exact-size children vectors keep its locality sharp), and pure value extraction on an already-built tree is the one pattern where `Node`'s direct fields win outright, by ~1.8×. `FlatNode` now out-builds even libxml2 (~1.7×), and `Node`'s remaining gap to the C library is materialization, not scanning (see [PERFORMANCE-v0.4.md](PERFORMANCE-v0.4.md)).
 
-_Measured 2026-08-03, Apple M5 (single-threaded), Julia 1.12.6, EzXML 1.2.3; BenchmarkTools medians._
+_Measured 2026-08-04, Apple M5 (single-threaded), Julia 1.12.6, EzXML 1.2.3; BenchmarkTools medians._
 
 <br>
 
