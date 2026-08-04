@@ -118,13 +118,13 @@ Measured on the same XMark document:
 
 | Full DOM, per reader | build (incl. GC) | walk every node | extract all values | DOM size in memory |
 |---|--:|--:|--:|--:|
-| **`FlatNode`** | **28.3 ms (GC 0.1)** | **2.97 ms** | 6.5 ms | **54.9 MiB** |
-| `Node` | 72.9 ms (GC 23) | 3.34 ms | **3.6 ms** | 71.6 MiB |
-| EzXML (libxml2) | 47.2 ms | — | — | — |
+| **`FlatNode`** | **27.2 ms (GC 0.1)** | **2.97 ms** | **3.1 ms** | **54.9 MiB** |
+| `Node` | 70.7 ms (GC 23) | 3.46 ms | 3.7 ms | 71.6 MiB |
+| EzXML (libxml2) | 46.6 ms | — | — | — |
 
 _Table 4 — per-reader full-DOM comparison; *build* is the whole `parse` call, and *DOM size* is the **retained** live tree (`Base.summarysize`), not allocations._[^flatbench]
 
-Build allocations: 42.2 MiB (`FlatNode`) vs 99.8 MiB (`Node` — down from 122.3 MiB before the scratch-stack build), and the *build* ranking now puts `FlatNode` ahead of libxml2 itself (~1.7× faster; `Node` remains ~1.5× behind the C library). The GC cells say why `FlatNode` builds so cheaply: its build allocates a handful of arrays instead of 882 K objects, so its median GC share is ~0.1 ms where `Node`'s is ~23 ms. Access on the finished stores: whole-tree walks are close (2.97 vs 3.34 ms — exact-size children vectors keep `Node`'s locality sharp), `parent`/`depth` stay O(1) index hops on `FlatNode` where `Node` must search down from the root, and pure value extraction on an already-built tree is the pattern where `Node`'s direct field reads win outright (3.6 vs 6.5 ms, ~1.8× — a computed `SubString` view per value is the flat store's toll).
+Build allocations: 42.2 MiB (`FlatNode`) vs 99.8 MiB (`Node` — down from 122.3 MiB before the scratch-stack build), and the *build* ranking now puts `FlatNode` ahead of libxml2 itself (~1.7× faster; `Node` remains ~1.5× behind the C library). The GC cells say why `FlatNode` builds so cheaply: its build allocates a handful of arrays instead of 882 K objects, so its median GC share is ~0.1 ms where `Node`'s is ~23 ms. Access on the finished stores: whole-tree walks are close (2.97 vs 3.46 ms — exact-size children vectors keep `Node`'s locality sharp), `parent`/`depth` stay O(1) index hops on `FlatNode` where `Node` must search down from the root, and even pure value extraction now goes to the flat store (3.1 vs 3.7 ms): the computed `SubString` view per value — once a ~1.8× toll against `Node`'s direct field reads — costs two integer stores since the span-native work.
 
 ### Choosing
 
