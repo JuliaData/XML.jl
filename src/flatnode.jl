@@ -70,8 +70,13 @@ struct FlatNode
 end
 
 @inline _rec(n::FlatNode) = @inbounds n.store.recs[n.i]
+# Span→view via the tokenizer's fully-elided noshift path: every span the store records
+# is a token span or the field pair of a tokenizer accessor's SubString (see `_frng`
+# below), so both edges are UTF-8 character boundaries by construction — the same
+# invariant as XMLTokenizer's `_noshift_substring`, one hop removed (#113).
+# `--check-bounds=yes` (as in Pkg.test) still validates every span.
 @inline _fsub(store::FlatStore, off::Int32, len::Int32) =
-    @inbounds SubString(store.source, off + 1, prevind(store.source, off + len + 1))
+    @inbounds XMLTokenizer._noshift_substring(store.source, Int(off), Int(len))
 
 # byte range of a SubString into its (root) parent string
 @inline _frng(s::SubString{String}) = (Int32(s.offset), Int32(s.ncodeunits))
@@ -270,7 +275,7 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
 end
 
 @inline _fsub_or_empty(source::String, off::Int32, len::Int32) =
-    len > 0 ? (@inbounds SubString(source, off + 1, prevind(source, off + len + 1))) : SubString(source, 1, 0)
+    len > 0 ? (@inbounds XMLTokenizer._noshift_substring(source, Int(off), Int(len))) : SubString(source, 1, 0)
 
 #-----------------------------------------------------------------------------# parse / read entry points
 Base.parse(xml::AbstractString, ::Type{FlatNode}; wellformed::Symbol=:structural) =
