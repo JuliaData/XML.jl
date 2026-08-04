@@ -257,3 +257,25 @@ if @isdefined(valid_tests)
         @info "W3C not-wf: identical verdicts on $n_agree documents"
     end
 end
+
+@testset "multibyte accessor surface matches Node" begin
+    # 2-/3-/4-byte UTF-8 across element names, attribute names/values, text and
+    # source slices — pins the span→view reconstruction on every accessor.
+    xml = """<café idée="héllo wörld" 名前="日本語テキスト" emoji="🎈🎉" vide=""><日本語 attr='単一引用符'>中身テキスト</日本語><t🎈>été 🎯</t🎈><vidé/></café>"""
+    f = parse(xml, FlatNode)
+    n = parse(xml, Node)
+    @test f == n
+    froot = f[end]; nroot = n[end]
+    @test tag(froot) == tag(nroot) == "café"
+    @test tag(froot) isa SubString{String}
+    @test [k => v for (k, v) in attributes(froot)] == [k => v for (k, v) in attributes(nroot)]
+    @test get(froot, "名前", "") == "日本語テキスト"
+    @test get(froot, "vide", missing) == ""
+    fels = children(froot); nels = children(nroot)
+    @test [tag(c) for c in fels] == [tag(c) for c in nels] == ["日本語", "t🎈", "vidé"]
+    @test value(only(children(fels[1]))) == "中身テキスト"
+    @test fels[1]["attr"] == "単一引用符"
+    @test value(only(children(fels[2]))) == "été 🎯"
+    @test XML.sourcetext(fels[1]) == "<日本語 attr='単一引用符'>中身テキスト</日本語>"
+    @test XML.sourcetext(fels[3]) == "<vidé/>"
+end
