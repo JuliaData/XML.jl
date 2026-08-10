@@ -130,3 +130,43 @@ end
         end
     end
 end
+
+# Lazy child iteration — the protocol itself must not allocate: no per-call tokenizer
+# wrapper, no heap cursor, no boxed iteration tuple. The recursive traversal is the
+# field-report shape (one eachchildnode per visited node, spreadsheet-style hot loop).
+function walk_count(n)
+    c = 1
+    for ch in XML.eachchildnode(n)
+        c += walk_count(ch)
+    end
+    c
+end
+measure_walk(n) = @allocated walk_count(n)
+
+function element_count(n)
+    c = 0
+    for el in eachelement(n)
+        c += 1 + element_count(el)
+    end
+    c
+end
+measure_elements(n) = @allocated element_count(n)
+
+@testset "Lazy iteration: allocation-free traversal" begin
+    torture_xml = """<?xml version="1.0"?><!-- top --><r a="1">t1<e1 x="y"><in>deep</in><self/></e1><!-- c --><![CDATA[cd]]><?pi d?><e2>café</e2>tail</r>"""
+    doc = parse(torture_xml, LazyNode)
+
+    @testset "traversal reads correctly" begin
+        @test walk_count(doc) == 15       # doubles as compile warm-up
+        @test element_count(doc) == 5
+    end
+
+    if _NO_COVERAGE
+        @testset "recursive eachchildnode traversal" begin
+            @test measure_walk(doc) == 0
+        end
+        @testset "eachelement traversal" begin
+            @test measure_elements(doc) == 0
+        end
+    end
+end

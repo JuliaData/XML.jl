@@ -40,11 +40,6 @@ nodetype(n::LazyNode) = n.nodetype
 
 _lazy_pos(n::LazyNode) = n.token.offset + 1
 _lazy_tokenizer(n::LazyNode) = tokenize(n.data, _lazy_pos(n))
-# Source string backing a lazy tokenizer (StatefulTokenizer) — needed to reconstruct token
-# text now that `Token` holds only a byte range. Used where the owning `LazyNode` is out of
-# scope (e.g. inside `LazyAttrIterator`, which carries only the tokenizer).
-@inline _src(iter) = iter.t.data
-
 # Entity-decode a TEXT/ATTR_VALUE token only when the tokenizer actually saw a `&`. When
 # `has_entities` is false the raw `SubString{String}` view is returned with no allocation
 # and no byte scan — the dominant case for spreadsheet-style data. `_decode_attr` strips
@@ -143,8 +138,10 @@ end
 # itself never mutates — which lets the whole iterator (tokenizer included) stay
 # stack-allocated when a `for` loop inlines it (#105). The standard iteration contract
 # applies: `iterate` must not be called again after it has returned `nothing`.
-struct LazyAttrIterator{I}
-    iter::I
+struct LazyAttrIterator{S <: AbstractString}
+    data::S
+    t::Tokenizer{S}
+    start::TokenizerState
     active::Bool
 end
 
@@ -162,23 +159,28 @@ attribute.
 For a single attribute by name, prefer `get(n, key, default)` — it short-circuits as soon
 as the match is found.
 """
-@inline function eachattribute(n::LazyNode)
-    iter = _lazy_tokenizer(n)
+@inline function eachattribute(n::LazyNode{S}) where {S}
+    t = Tokenizer(n.data, _lazy_pos(n))
+    st = _init_state(t)
     is_attrs = n.nodetype === Element || n.nodetype === Declaration
-    is_attrs && iterate(iter)  # skip OPEN_TAG / XML_DECL_OPEN
-    LazyAttrIterator{typeof(iter)}(iter, is_attrs)
+    if is_attrs
+        r = iterate(t, st)  # skip OPEN_TAG / XML_DECL_OPEN
+        isnothing(r) || (st = r[2])
+    end
+    LazyAttrIterator{S}(n.data, t, st, is_attrs)
 end
 
-@inline function Base.iterate(it::LazyAttrIterator, _ = nothing)
+@inline function Base.iterate(it::LazyAttrIterator, st::TokenizerState = it.start)
     it.active || return nothing
-    r = iterate(it.iter)
+    r = iterate(it.t, st)
     isnothing(r) && return nothing
-    tok = r[1]
+    tok, st = r
     tok.kind === TokenKinds.ATTR_NAME || return nothing
-    name = raw(tok, _src(it.iter))
-    r = iterate(it.iter)
+    name = raw(tok, it.data)
+    r = iterate(it.t, st)
     isnothing(r) && return nothing
-    ((name => _decode_attr(r[1], _src(it.iter))), nothing)
+    vtok, st = r
+    ((name => _decode_attr(vtok, it.data)), st)
 end
 
 #-----------------------------------------------------------------------------# foreach_attr
@@ -313,6 +315,40 @@ end
 function _lazy_skip_until!(iter, target::TokenKinds.Kind)
     for tok in iter
         tok.kind === target && return
+    end
+end
+
+# Functional twins of the skip helpers: advance the stateless `Tokenizer` from `st` and
+# return the state after the skipped construct. The lazy iterators thread these states
+# through `iterate`'s functional slot instead of mutating a shared cursor.
+function _skip_until(t::Tokenizer, st::TokenizerState, target::TokenKinds.Kind)
+    while true
+        r = iterate(t, st)
+        isnothing(r) && return st
+        tok, st = r
+        tok.kind === target && return st
+    end
+end
+
+function _skip_element(t::Tokenizer, st::TokenizerState)
+    depth = 1
+    while true
+        r = iterate(t, st)
+        isnothing(r) && return st
+        tok, st = r
+        k = tok.kind
+        if k === TokenKinds.OPEN_TAG
+            depth += 1
+        elseif k === TokenKinds.SELF_CLOSE
+            depth -= 1
+            depth == 0 && return st
+        elseif k === TokenKinds.CLOSE_TAG
+            depth -= 1
+            if depth == 0
+                r = iterate(t, st)  # consume trailing TAG_CLOSE
+                return isnothing(r) ? st : r[2]
+            end
+        end
     end
 end
 
@@ -458,14 +494,18 @@ const _CI_READY   = 0x00
 const _CI_PENDING = 0x01  # an element was yielded; its unskipped subtree lies ahead
 const _CI_DONE    = 0x02
 
-struct LazyChildIterator{S <: AbstractString, I}
+# Fully functional: the tokenizer's isbits state and the phase flag travel in `iterate`'s
+# state tuple, so the iterator is immutable, restartable, and the whole protocol keeps to
+# the stack — no per-call tokenizer wrapper, no heap cursor (#118).
+struct LazyChildIterator{S <: AbstractString}
     data::S
-    iter::I
-    state::Base.RefValue{UInt8}
+    t::Tokenizer{S}
+    start::TokenizerState
+    phase0::UInt8  # _CI_READY, or _CI_DONE for childless node kinds
 end
 
 Base.IteratorSize(::Type{<:LazyChildIterator}) = Base.SizeUnknown()
-Base.eltype(::Type{LazyChildIterator{S,I}}) where {S,I} = LazyNode{S}
+Base.eltype(::Type{LazyChildIterator{S}}) where {S} = LazyNode{S}
 
 """
     eachchildnode(n::LazyNode)
@@ -477,66 +517,93 @@ See also [`children`](@ref), which returns a `Vector{LazyNode}`.
 """
 function eachchildnode(n::LazyNode{S}) where {S}
     nt = n.nodetype
-    iter = _lazy_tokenizer(n)
+    t = Tokenizer(n.data, _lazy_pos(n))
+    st = _init_state(t)
     if nt === Document
-        return LazyChildIterator{S, typeof(iter)}(n.data, iter, Ref(_CI_READY))
+        return LazyChildIterator{S}(n.data, t, st, _CI_READY)
     elseif nt === Element
-        for tok in iter
+        while true
+            r = iterate(t, st)
+            isnothing(r) && break
+            tok, st = r
             if tok.kind === TokenKinds.SELF_CLOSE
-                return LazyChildIterator{S, typeof(iter)}(n.data, iter, Ref(_CI_DONE))
+                return LazyChildIterator{S}(n.data, t, st, _CI_DONE)
             elseif tok.kind === TokenKinds.TAG_CLOSE
-                return LazyChildIterator{S, typeof(iter)}(n.data, iter, Ref(_CI_READY))
+                return LazyChildIterator{S}(n.data, t, st, _CI_READY)
             end
         end
     end
-    LazyChildIterator{S, typeof(iter)}(n.data, iter, Ref(_CI_DONE))
+    LazyChildIterator{S}(n.data, t, st, _CI_DONE)
 end
 
 # eachelement's generic definition filters children(node); for LazyNode, build on the
-# lazy child iterator instead so no intermediate Vector is materialized.
-eachelement(node::LazyNode) = Iterators.filter(n -> nodetype(n) === Element, eachchildnode(node))
+# lazy child iterator instead so no intermediate Vector is materialized. The filter is a
+# dedicated iterator rather than Iterators.filter: the child protocol's union return only
+# stays unboxed while the whole iterate chain inlines, and Base's Filter breaks the chain.
+struct LazyElementIterator{S <: AbstractString}
+    ci::LazyChildIterator{S}
+end
+Base.IteratorSize(::Type{<:LazyElementIterator}) = Base.SizeUnknown()
+Base.eltype(::Type{LazyElementIterator{S}}) where {S} = LazyNode{S}
 
-function Base.iterate(ci::LazyChildIterator, _ = nothing)
-    s = ci.state[]
-    s === _CI_DONE && return nothing
-    if s === _CI_PENDING
-        ci.state[] = _CI_READY
-        _lazy_skip_element!(ci.iter)
+eachelement(node::LazyNode) = LazyElementIterator(eachchildnode(node))
+
+@inline Base.iterate(ei::LazyElementIterator) = _ei_filter(ei.ci, iterate(ei.ci))
+@inline Base.iterate(ei::LazyElementIterator, s::Tuple{TokenizerState, UInt8}) = _ei_filter(ei.ci, iterate(ei.ci, s))
+@inline function _ei_filter(ci::LazyChildIterator, r)
+    while r !== nothing
+        r[1].nodetype === Element && return r
+        r = iterate(ci, r[2])
     end
-    for tok in ci.iter
+    nothing
+end
+
+@inline Base.iterate(ci::LazyChildIterator) = _ci_next(ci, ci.start, ci.phase0)
+@inline Base.iterate(ci::LazyChildIterator, s::Tuple{TokenizerState, UInt8}) = _ci_next(ci, s[1], s[2])
+
+# The yielded tuple is built at a SINGLE site — an unboxed union return survives only one
+# construction path (the same rule the span→view helpers pin down) — and the chain must
+# inline into the caller's loop: across a non-inlined boundary the union boxes per step.
+@inline function _ci_next(ci::LazyChildIterator, st::TokenizerState, phase::UInt8)
+    phase === _CI_DONE && return nothing
+    t = ci.t
+    if phase === _CI_PENDING
+        st = _skip_element(t, st)
+    end
+    while true
+        r = iterate(t, st)
+        isnothing(r) && return nothing
+        tok, st = r
         k = tok.kind
+        newphase = _CI_READY
+        local nt::NodeType
         if k === TokenKinds.TEXT
-            return (LazyNode(ci.data, tok, Text), nothing)
+            nt = Text
         elseif k === TokenKinds.OPEN_TAG
-            ci.state[] = _CI_PENDING
-            return (LazyNode(ci.data, tok, Element), nothing)
+            nt = Element
+            newphase = _CI_PENDING
         elseif k === TokenKinds.COMMENT_OPEN
-            node = LazyNode(ci.data, tok, Comment)
-            _lazy_skip_until!(ci.iter, TokenKinds.COMMENT_CLOSE)
-            return (node, nothing)
+            nt = Comment
+            st = _skip_until(t, st, TokenKinds.COMMENT_CLOSE)
         elseif k === TokenKinds.CDATA_OPEN
-            node = LazyNode(ci.data, tok, CData)
-            _lazy_skip_until!(ci.iter, TokenKinds.CDATA_CLOSE)
-            return (node, nothing)
+            nt = CData
+            st = _skip_until(t, st, TokenKinds.CDATA_CLOSE)
         elseif k === TokenKinds.PI_OPEN
-            node = LazyNode(ci.data, tok, ProcessingInstruction)
-            _lazy_skip_until!(ci.iter, TokenKinds.PI_CLOSE)
-            return (node, nothing)
+            nt = ProcessingInstruction
+            st = _skip_until(t, st, TokenKinds.PI_CLOSE)
         elseif k === TokenKinds.XML_DECL_OPEN
-            node = LazyNode(ci.data, tok, Declaration)
-            _lazy_skip_until!(ci.iter, TokenKinds.XML_DECL_CLOSE)
-            return (node, nothing)
+            nt = Declaration
+            st = _skip_until(t, st, TokenKinds.XML_DECL_CLOSE)
         elseif k === TokenKinds.DOCTYPE_OPEN
-            node = LazyNode(ci.data, tok, DTD)
-            _lazy_skip_until!(ci.iter, TokenKinds.DOCTYPE_CLOSE)
-            return (node, nothing)
+            nt = DTD
+            st = _skip_until(t, st, TokenKinds.DOCTYPE_CLOSE)
         elseif k === TokenKinds.CLOSE_TAG || k === TokenKinds.TAG_CLOSE
-            ci.state[] = _CI_DONE
             return nothing
+        else
+            continue
         end
+        return (LazyNode(ci.data, tok, nt), (st, newphase))
     end
-    ci.state[] = _CI_DONE
-    return nothing
 end
 
 #-----------------------------------------------------------------------------# is_simple / simple_value

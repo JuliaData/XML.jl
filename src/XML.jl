@@ -15,7 +15,7 @@ export
 include("XMLTokenizer.jl")
 using .XMLTokenizer:
     XMLTokenizer, tokenize, tag_name, attr_value, pi_target, raw,
-    TokenKinds, Token, Tokenizer, TokenizerState, _noshift_substring
+    TokenKinds, Token, Tokenizer, TokenizerState, _init_state, _noshift_substring
 
 # Include order is the dependency contract: types before readers, readers before entry points.
 include("escape.jl")     # ESCAPE_CHARS + escape/unescape — leaf, everything below may call it
