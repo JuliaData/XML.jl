@@ -3886,6 +3886,37 @@ end
             @test nodetype(comment) == Comment
             @test isempty(collect(eachchildnode(comment)))
         end
+
+        @testset "deep recursive equivalence with Node" begin
+            # Full-tree pin at every depth and for every child kind, with multibyte
+            # names and content: the lazy child protocol must yield exactly the eager
+            # tree — nodetype, tag, value, attributes, and child order.
+            xml = """<?xml version="1.0" encoding="UTF-8"?><!-- déb --><café idée="α">t1<fils β="2"><petit>p&amp;q</petit><vide/></fils><!-- c --><![CDATA[raw <>&]]><?cible données?><autre>café</autre>fin</café>"""
+            strpairs(itr) = [String(k) => String(v) for (k, v) in itr]
+            function lazy_sig(n)
+                out = Any[]
+                attrs = nodetype(n) in (Element, Declaration) ? strpairs(eachattribute(n)) : Pair{String, String}[]
+                v = value(n)
+                push!(out, (nodetype(n), tag(n), v === nothing ? nothing : String(v), attrs))
+                for c in eachchildnode(n)
+                    append!(out, lazy_sig(c))
+                end
+                out
+            end
+            function eager_sig(n)
+                out = Any[]
+                a = attributes(n)
+                v = value(n)
+                push!(out, (nodetype(n), tag(n), v === nothing ? nothing : String(v), a === nothing ? Pair{String, String}[] : strpairs(a)))
+                for c in something(children(n), ())
+                    append!(out, eager_sig(c))
+                end
+                out
+            end
+            lz = parse(xml, LazyNode)
+            nd = parse(xml, Node)
+            @test lazy_sig(lz) == eager_sig(nd)
+        end
     end
 end
 
