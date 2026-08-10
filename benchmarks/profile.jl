@@ -112,7 +112,7 @@ end
 
 #--------------------------------------------------------------# (4) TRAVERSE (per reader)
 # Whole pre-built tree, one child-iterator per visited node — the per-cell hot-loop
-# shape reported from spreadsheet workloads. One walk function, one seam: each reader
+# shape reported from spreadsheet workloads. One traversal function, one seam: each reader
 # iterates children through its own protocol (`eachchildnode` for the lazy readers;
 # `Node` stores its children and has no lazy child iterator), so the rows compare the
 # readers' iteration protocols over identical work. The attribute sweep adds
@@ -176,5 +176,5 @@ row("LazyNode",           @benchmark traverse_walk($LAZY))
 row("FlatNode",           @benchmark traverse_walk($FLAT))
 row("Node",               @benchmark traverse_walk($TREE))
 row("LazyNode attr sweep",@benchmark attr_sweep($LAZY))
-println("\n(same recursive walk for the three readers; a traversal that allocates per",
+println("\n(same recursive traversal for the three readers; a traversal that allocates per",
         "\n node shows it in the allocs column, not in a ratio)")

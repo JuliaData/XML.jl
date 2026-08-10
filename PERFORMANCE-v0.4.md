@@ -105,7 +105,7 @@ The lexer is allocation-free; **the whole libxml2 gap is *materialising* the nat
 Traversal of a pre-built tree is allocation-free for **every** reader — the differences are
 pure re-scan work, and the allocation column is measured, not assumed:
 
-| Whole-tree traversal (same recursive walk) | time | allocations |
+| Whole-tree traversal (same recursive function) | time | allocations |
 |---|--:|--:|
 | `FlatNode` | 3.8 ms | 0 |
 | `Node` | 4.2 ms | 0 |
