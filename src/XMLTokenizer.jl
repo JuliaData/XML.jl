@@ -204,7 +204,11 @@ end
 Base.IteratorSize(::Type{<:Tokenizer}) = Base.SizeUnknown()
 Base.eltype(::Type{<:Tokenizer}) = Token
 
-function Base.iterate(t::Tokenizer, st::TokenizerState=TokenizerState(t.start, M_DEFAULT, no_token(t.data)))
+# Initial state for iterating `t` from its start position — the single source of truth
+# shared by the default `iterate` entry and the functional lazy iterators.
+@inline _init_state(t::Tokenizer) = TokenizerState(t.start, M_DEFAULT, no_token(t.data))
+
+function Base.iterate(t::Tokenizer, st::TokenizerState=_init_state(t))
     (; data) = t
     (; pending, pos, mode) = st
 

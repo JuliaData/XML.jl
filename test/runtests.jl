@@ -3887,6 +3887,21 @@ end
             @test isempty(collect(eachchildnode(comment)))
         end
 
+        @testset "iterators are restartable" begin
+            # The child and element iterators are immutable values threading their whole
+            # state through `iterate` — a second full pass over the SAME iterator object
+            # sees the same sequence (a shared-cursor design would come back empty).
+            xml = "<root><a/>text<b><c/></b><!-- x --></root>"
+            root = parse(xml, LazyNode)[1]
+            it = eachchildnode(root)
+            first_pass = map(nodetype, collect(it))
+            @test map(nodetype, collect(it)) == first_pass
+            @test length(first_pass) == 4
+            ei = eachelement(root)
+            @test map(tag, collect(ei)) == ["a", "b"]
+            @test map(tag, collect(ei)) == ["a", "b"]
+        end
+
         @testset "deep recursive equivalence with Node" begin
             # Full-tree pin at every depth and for every child kind, with multibyte
             # names and content: the lazy child protocol must yield exactly the eager
