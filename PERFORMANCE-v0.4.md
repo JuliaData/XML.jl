@@ -60,7 +60,7 @@ Structured pull helpers keep scans cheap without hand-tracked depth: `for_each_c
 
 ### Partial reads — `LazyNode`
 
-Opening is a no-op wrapper (~0.5 µs on this 14 MB file) and nothing is ever cached: each visit re-tokenizes and rebuilds its small handles — allocation-free, the iterators thread their whole state through Julia's iteration protocol — so a repeated look-up costs only its re-scan time, and costs repeat per visit. A traversal pays only for the bytes it actually steps over: the child iterator defers a yielded element's subtree skip until the *next sibling* is requested, so descending to a target is O(bytes before it) — touching this document's root element costs ~4 µs, and a nine-node document-order descent ~5 µs. What still costs: *horizontal* scans pay the subtrees they step past (as any index-free forward reader must), and *repeated* look-ups pay again — those two patterns tip the scale toward `FlatNode`/`Node`.
+Opening is a no-op wrapper (sub-microsecond on this 14 MB file) and nothing is ever cached: each visit re-tokenizes and rebuilds its small handles — allocation-free, the iterators thread their whole state through Julia's iteration protocol — so a repeated look-up costs only its re-scan time, and costs repeat per visit. A traversal pays only for the bytes it actually steps over: the child iterator defers a yielded element's subtree skip until the *next sibling* is requested, so descending to a target is O(bytes before it); scanning *everything* is the worst case, priced per reader in Table 3b. What still costs: *horizontal* scans pay the subtrees they step past (as any index-free forward reader must), and *repeated* look-ups pay again — those two patterns tip the scale toward `FlatNode`/`Node`.
 
 > [!NOTE]
 > Ask only for what you need: a `for` loop over `eachchildnode` fetches the next sibling — and pays its predecessor's deferred subtree skip — at the top of each round, so exit *from within the body* once you are done:
@@ -101,6 +101,20 @@ _Table 2 — full-DOM extraction (parse + pull every tag/text), cross-library._[
 _Table 3 — the XML.jl pipeline, decomposed (`String` variant)._[^profile]
 
 The lexer is allocation-free; **the whole libxml2 gap is *materialising* the native tree, not scanning it** — and the GC column shows where that cost lives: the allocation-free lex cannot trigger a collection, so every garbage-collector pause inside a parse lands in the build, the toll of 882 K fresh objects.
+
+Traversal of a pre-built tree is allocation-free for **every** reader — the differences are
+pure re-scan work, and the allocation column is measured, not assumed:
+
+| Whole-tree traversal (same recursive walk) | time | allocations |
+|---|--:|--:|
+| `FlatNode` | 3.8 ms | 0 |
+| `Node` | 4.2 ms | 0 |
+| `LazyNode` | 134 ms | 0 |
+| `LazyNode`, adding the attribute sweep | 142 ms | 0 |
+
+_Table 3b — whole-tree traversal per reader: one child iterator and a tag + value read per
+visited node (the spreadsheet hot-loop shape). `LazyNode` re-tokenizes everything it steps
+over — pay-per-visit by design; see the partial-reads section for when that trade wins._[^profile]
 
 ### `FlatNode` (v0.4.2, experimental)
 
