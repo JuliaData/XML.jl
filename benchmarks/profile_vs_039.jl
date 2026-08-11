@@ -1,11 +1,11 @@
 # benchmarks/profile_vs_039.jl
 #
-# Supplies the previous-release column for profile.jl's DOM tables. Builds a temp git
-# worktree at the LATEST release tag found locally — the printed label says which tag ran;
-# the published v0.3.9 rows were measured when that was the latest — and runs the SAME
-# parse + full-extraction traversal under it in a clean subprocess (separate temp env),
-# so dev vs release is apples-to-apples for the DOM. 0.3.x has no `Cursor`, so streaming
-# has no direct 0.3.x analog and is omitted.
+# Supplies the v0.3.9 column for profile.jl's DOM tables. PERFORMANCE-v0.4.md is a
+# snapshot of v0.4 against v0.3.9 — the 0.3 → 0.4 story — so the tag is PINNED to
+# v0.3.9 below; bump it deliberately if the document's story ever changes. Builds a temp
+# git worktree at that tag and runs the SAME parse + full-extraction traversal under it
+# in a clean subprocess (separate temp env), so dev vs v0.3.9 is apples-to-apples for
+# the DOM. 0.3.x has no `Cursor`, so streaming has no direct 0.3.x analog and is omitted.
 #
 #   julia --project=benchmarks benchmarks/profile_vs_039.jl
 
@@ -15,11 +15,9 @@ const ROOT = dirname(@__DIR__)
 const FILE = joinpath(@__DIR__, "data", "xmark.xml")
 isfile(FILE) || error("generate xmark.xml first (run benchmarks.jl or profile.jl)")
 
-const TAG = let tags = filter(t -> startswith(t, "v"),
-                              readlines(`git -C $ROOT tag --sort=version:refname`))
-    isempty(tags) && error("no vX.Y.Z release tag found locally; `git fetch --tags` first")
-    last(tags)
-end
+const TAG = "v0.3.9"  # the document's comparison point — pinned, not "latest"
+TAG in readlines(`git -C $ROOT tag`) ||
+    error("tag $TAG not found locally; `git fetch --tags` first")
 println("dev profile vs $TAG  (worktree + subprocess) ...")
 
 wt      = mktempdir()
@@ -70,7 +68,7 @@ run(pipeline(`git -C $ROOT worktree remove --force $wt`, stdout = devnull, stder
 
 m(b)  = round(median(b).time / 1e6, digits = 2)
 mb(b) = round(b.memory / 2^20, digits = 1)
-println("\n=== $TAG — the previous-release column (DOM tables) ===")
+println("\n=== $TAG — the v0.3.9 column (DOM tables) ===")
 println("  nodes walked:     ", res["nodes"],
         "   (v0.4 walks 882026; v0.4 preserves whitespace Text nodes, 0.3.x dropped them)")
 println("  parse → DOM:      ", m(res["parse"]),   " ms / ", mb(res["parse"]),   " MiB")
