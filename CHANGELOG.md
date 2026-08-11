@@ -15,12 +15,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`LazyNode` iteration is allocation-free and restartable**: the child, element, and
-  attribute iterators are immutable values that thread the tokenizer's isbits state
-  through Julia's iteration protocol, instead of allocating a mutable tokenizer wrapper,
-  a heap cursor, and a boxed tuple per step. A full lazy traversal of the 14 MB benchmark
-  document drops from 2.6 M allocations / 127 MiB of garbage to zero (median −26 %), and
-  a second pass over the same iterator sees the full sequence again (#118).
+- **`LazyNode` iteration is allocation-light, with its shared-cursor semantics pinned**:
+  the child, element, and attribute iterators hold the tokenizer's isbits state as inline
+  fields — no per-call mutable tokenizer wrapper, no heap `RefValue` cursor, no boxed
+  tuple per step. Pulling children through an iterator allocates nothing; creating one
+  costs a single small object, elided where it never loops. Every loop over the same
+  iterator object resumes where the previous one stopped — the contract downstream row
+  streams (XLSX.jl) rely on, now pinned in tests. A full lazy traversal of the 14 MB
+  benchmark document drops from 2.6 M allocations / 127 MiB of garbage to 273 K / 21 MiB,
+  median −23 % (#118, #119, #121).
 
 - **The `Node` build no longer allocates per-element vectors**: children and attributes
   accumulate on parse-wide scratch stacks, sliced out exact-size at each closing tag. On

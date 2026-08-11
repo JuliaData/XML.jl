@@ -3887,19 +3887,31 @@ end
             @test isempty(collect(eachchildnode(comment)))
         end
 
-        @testset "iterators are restartable" begin
-            # The child and element iterators are immutable values threading their whole
-            # state through `iterate` — a second full pass over the SAME iterator object
-            # sees the same sequence (a shared-cursor design would come back empty).
-            xml = "<root><a/>text<b><c/></b><!-- x --></root>"
+        @testset "iterators resume across loops (shared-cursor contract)" begin
+            # Downstream consumers (XLSX.jl's row stream) store one child iterator and
+            # pull from it with a fresh `for … break` per row, relying on the cursor
+            # advancing past everything already yielded. Pin that contract: a second
+            # loop over the SAME iterator object resumes after the last yielded node —
+            # it does not restart — and an exhausted iterator stays exhausted.
+            xml = "<root><a/>text<b><c/></b><!-- x --><d/></root>"
             root = parse(xml, LazyNode)[1]
             it = eachchildnode(root)
-            first_pass = map(nodetype, collect(it))
-            @test map(nodetype, collect(it)) == first_pass
-            @test length(first_pass) == 4
+            first_nt = nothing
+            for ch in it
+                first_nt = nodetype(ch)
+                break
+            end
+            @test first_nt == Element                              # <a/>
+            @test [nodetype(ch) for ch in it] == [Text, Element, Comment, Element]
+            @test isempty(collect(it))
+
             ei = eachelement(root)
-            @test map(tag, collect(ei)) == ["a", "b"]
-            @test map(tag, collect(ei)) == ["a", "b"]
+            @test tag(first(ei)) == "a"
+            @test [tag(e) for e in ei] == ["b", "d"]
+
+            at = eachattribute(parse("""<e x="1" y="2" z="3"/>""", LazyNode)[1])
+            @test first(at)[1] == "x"
+            @test [String(k) for (k, _) in at] == ["y", "z"]
         end
 
         @testset "deep recursive equivalence with Node" begin

@@ -131,9 +131,12 @@ end
     end
 end
 
-# Lazy child iteration — the protocol itself must not allocate: no per-call tokenizer
-# wrapper, no heap cursor, no boxed iteration tuple. The recursive traversal is the
-# field-report shape (one eachchildnode per visited node, spreadsheet-style hot loop).
+# Lazy child iteration — the iteration protocol must not allocate: pulling any number of
+# children through an already-created iterator is 0 B (no per-step tuple boxing, no heap
+# cursor cell, no per-call tokenizer wrapper). Creating an iterator costs one small
+# mutable object — its shared, resumable cursor, the semantics downstream row streams
+# (XLSX.jl) depend on — and escape analysis elides it when the iterator dies without
+# looping, so a recursive traversal allocates at most one object per container node.
 function walk_count(n)
     c = 1
     for ch in XML.eachchildnode(n)
@@ -152,21 +155,43 @@ function element_count(n)
 end
 measure_elements(n) = @allocated element_count(n)
 
-@testset "Lazy iteration: allocation-free traversal" begin
+function consume_count(it)
+    c = 0
+    for _ in it
+        c += 1
+    end
+    c
+end
+measure_consume(it) = @allocated consume_count(it)
+measure_mk_child(n) = @allocated XML.eachchildnode(n)
+
+@testset "Lazy iteration: allocation-light traversal" begin
     torture_xml = """<?xml version="1.0"?><!-- top --><r a="1">t1<e1 x="y"><in>deep</in><self/></e1><!-- c --><![CDATA[cd]]><?pi d?><e2>café</e2>tail</r>"""
     doc = parse(torture_xml, LazyNode)
+    attr_el = only(eachelement(parse("""<e x="1" y="2" z="3"/>""", LazyNode)))
 
     @testset "traversal reads correctly" begin
         @test walk_count(doc) == 15       # doubles as compile warm-up
         @test element_count(doc) == 5
+        @test consume_count(XML.eachchildnode(doc)) == 3
+        @test consume_count(eachattribute(attr_el)) == 3
+        measure_mk_child(doc)             # warm-up for the creation guard
     end
 
     if _NO_COVERAGE
-        @testset "recursive eachchildnode traversal" begin
-            @test measure_walk(doc) == 0
+        @testset "consuming a pre-built iterator is free" begin
+            @test measure_consume(XML.eachchildnode(doc)) == 0
+            @test measure_consume(eachelement(doc)) == 0
+            @test measure_consume(eachattribute(attr_el)) == 0
         end
-        @testset "eachelement traversal" begin
-            @test measure_elements(doc) == 0
+        @testset "iterator creation is one small object" begin
+            @test measure_mk_child(doc) <= 96
+        end
+        @testset "recursive traversal: at most one object per container node" begin
+            # 6 containers here (the document + 5 elements); ceilings hold even if a
+            # future compiler elides more of them.
+            @test measure_walk(doc) <= 6 * 96
+            @test measure_elements(doc) <= 6 * 96
         end
     end
 end
