@@ -102,15 +102,17 @@ _Table 3 — the XML.jl pipeline, decomposed (`String` variant)._[^profile]
 
 The lexer is allocation-free; **the whole libxml2 gap is *materialising* the native tree, not scanning it** — and the GC column shows where that cost lives: the allocation-free lex cannot trigger a collection, so every garbage-collector pause inside a parse lands in the build, the toll of 882 K fresh objects.
 
-Traversal of a pre-built tree is allocation-free for **every** reader — the differences are
-pure re-scan work, and the allocation column is measured, not assumed:
+Traversal of a pre-built tree stays off the allocator where it counts — iteration *steps*
+are free for all three readers, and the allocation column is measured, not assumed. `Node`
+and `FlatNode` allocate nothing at all; `LazyNode` allocates one small object per container
+node — its resumable child cursor, elided by the compiler wherever a container is empty:
 
 | Whole-tree traversal (same recursive function) | time | allocations |
 |---|--:|--:|
 | `FlatNode` | 3.8 ms | 0 |
-| `Node` | 4.2 ms | 0 |
-| `LazyNode` | 134 ms | 0 |
-| `LazyNode`, adding the attribute sweep | 142 ms | 0 |
+| `Node` | 4.1 ms | 0 |
+| `LazyNode` | 138 ms | 272,762 |
+| `LazyNode`, adding the attribute sweep | 146 ms | 272,762 |
 
 _Table 3b — whole-tree traversal per reader: one child iterator and a tag + value read per
 visited node (the spreadsheet hot-loop shape). `LazyNode` re-tokenizes everything it steps
