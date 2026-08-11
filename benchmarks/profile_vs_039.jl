@@ -1,9 +1,11 @@
 # benchmarks/profile_vs_039.jl
 #
-# Supplies the v0.3.9 column for profile.jl's DOM regimes. Builds a temp git worktree at
-# the latest release tag and runs the SAME parse + full-walk extraction under 0.3.9 in a
-# clean subprocess (separate temp env), so v0.4 vs 0.3.9 is apples-to-apples for the DOM.
-# 0.3.x has no `Cursor`, so the STREAM regime has no direct 0.3.x analog and is omitted.
+# Supplies the previous-release column for profile.jl's DOM tables. Builds a temp git
+# worktree at the LATEST release tag found locally — the printed label says which tag ran;
+# the published v0.3.9 rows were measured when that was the latest — and runs the SAME
+# parse + full-extraction traversal under it in a clean subprocess (separate temp env),
+# so dev vs release is apples-to-apples for the DOM. 0.3.x has no `Cursor`, so streaming
+# has no direct 0.3.x analog and is omitted.
 #
 #   julia --project=benchmarks benchmarks/profile_vs_039.jl
 
@@ -27,7 +29,7 @@ script  = joinpath(wt, "_b.jl")
 
 run(pipeline(`git -C $ROOT worktree add $wt $TAG`, stdout = devnull, stderr = devnull))
 
-# Subprocess: same walk as profile.jl (touch tag + value on every node), under 0.3.9.
+# Subprocess: same traversal as profile.jl (touch tag + value on every node), under the tag.
 write(script, """
 using Pkg
 Pkg.activate(; temp = true)
@@ -68,7 +70,7 @@ run(pipeline(`git -C $ROOT worktree remove --force $wt`, stdout = devnull, stder
 
 m(b)  = round(median(b).time / 1e6, digits = 2)
 mb(b) = round(b.memory / 2^20, digits = 1)
-println("\n=== v$TAG — the v0.3.9 column (DOM regimes) ===")
+println("\n=== $TAG — the previous-release column (DOM tables) ===")
 println("  nodes walked:     ", res["nodes"],
         "   (v0.4 walks 882026; v0.4 preserves whitespace Text nodes, 0.3.x dropped them)")
 println("  parse → DOM:      ", m(res["parse"]),   " ms / ", mb(res["parse"]),   " MiB")

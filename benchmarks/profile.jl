@@ -13,8 +13,9 @@
 #
 # Each line shows the median time, the per-evaluation allocation COUNT, and the
 # allocated bytes — the count is an absolute: a per-node cost hides in a ratio but
-# not in a counter. A v0.3.9 column for (2)/(3) is added by the subprocess pass in
-# profile_vs_039.jl (run separately).
+# not in a counter. A previous-release column for (2)/(3) is added by the subprocess
+# pass in profile_vs_039.jl (run separately; it benches the latest local release tag —
+# the published v0.3.9 rows date from when that was the latest).
 #
 #   julia --project=benchmarks benchmarks/profile.jl
 
