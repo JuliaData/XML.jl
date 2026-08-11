@@ -44,8 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Measurement upkeep**: every timing in PERFORMANCE-v0.4.md and the README is a
   BenchmarkTools `@benchmark` median (`benchmarks/flatnode_bench.jl` rewritten
   accordingly); the cross-library suite bounds its own C heap (per-sample `finalize`
-  teardown, between-cell collection) so a full run no longer pages the machine; and
-  sub-millisecond README rows are quoted in microseconds (#107, #110).
+  teardown, between-cell collection) so a full run no longer pages the machine;
+  sub-millisecond README rows are quoted in microseconds (#107, #110); and the
+  decomposed pipeline reports the absolute allocation count of every cell and gains a
+  per-reader whole-tree traversal section — a per-node cost hides in a ratio but not in
+  a counter (#120).
 
 ## [0.4.4] - 2026-07-31
 

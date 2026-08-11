@@ -4,7 +4,7 @@ The headline cross-library figures live in the [README](README.md#benchmarks). T
 
 ## The theory behind "optimal"
 
-XML parsing splits into two language-theory levels, and v0.4 hits the **asymptotic lower bound** of each — the sense in which the lexer and parser are "optimal". The gap to a C library like [libxml2](https://en.wikipedia.org/wiki/Libxml2) is constant-factor (C tuning, a leaner non-Julia-heap tree), not asymptotic — and only on the pointer-tree `Node` build; `FlatNode` out-builds libxml2 (Table 4), and at streaming XML.jl is ~2.5× *faster* (Table 1).
+XML parsing splits into two language-theory levels, and v0.4 hits the **asymptotic lower bound** of each — the sense in which the lexer and parser are "optimal". The gap to a C library like [libxml2](https://en.wikipedia.org/wiki/Libxml2) is constant-factor (C tuning, a leaner non-Julia-heap tree), not asymptotic — and only on the pointer-tree `Node` build; `FlatNode` out-builds libxml2 (Table 5), and at streaming XML.jl is ~2.5× *faster* (Table 1).
 
 ### Level 1 — lexing is finite-state
 
@@ -60,7 +60,7 @@ Structured pull helpers keep scans cheap without hand-tracked depth: `for_each_c
 
 ### Partial reads — `LazyNode`
 
-Opening is a no-op wrapper (~0.5 µs on this 14 MB file) and nothing is ever cached: each visit re-tokenizes and rebuilds its small handles — allocation-free, the iterators thread their whole state through Julia's iteration protocol — so a repeated look-up costs only its re-scan time, and costs repeat per visit. A traversal pays only for the bytes it actually steps over: the child iterator defers a yielded element's subtree skip until the *next sibling* is requested, so descending to a target is O(bytes before it) — touching this document's root element costs ~4 µs, and a nine-node document-order descent ~5 µs. What still costs: *horizontal* scans pay the subtrees they step past (as any index-free forward reader must), and *repeated* look-ups pay again — those two patterns tip the scale toward `FlatNode`/`Node`.
+Opening is a no-op wrapper (sub-microsecond on this 14 MB file) and nothing is ever cached: each visit re-tokenizes and rebuilds its small handles — allocation-free, the iterators thread their whole state through Julia's iteration protocol — so a repeated look-up costs only its re-scan time, and costs repeat per visit. A traversal pays only for the bytes it actually steps over: the child iterator defers a yielded element's subtree skip until the *next sibling* is requested, so descending to a target is O(bytes before it); scanning *everything* is the worst case, priced per reader in Table 4. What still costs: *horizontal* scans pay the subtrees they step past (as any index-free forward reader must), and *repeated* look-ups pay again — those two patterns tip the scale toward `FlatNode`/`Node`.
 
 > [!NOTE]
 > Ask only for what you need: a `for` loop over `eachchildnode` fetches the next sibling — and pays its predecessor's deferred subtree skip — at the top of each round, so exit *from within the body* once you are done:
@@ -102,6 +102,22 @@ _Table 3 — the XML.jl pipeline, decomposed (`String` variant)._[^profile]
 
 The lexer is allocation-free; **the whole libxml2 gap is *materialising* the native tree, not scanning it** — and the GC column shows where that cost lives: the allocation-free lex cannot trigger a collection, so every garbage-collector pause inside a parse lands in the build, the toll of 882 K fresh objects.
 
+Traversal of a pre-built tree stays off the allocator where it counts — iteration *steps*
+are free for all three readers, and the allocation column is measured, not assumed. `Node`
+and `FlatNode` allocate nothing at all; `LazyNode` allocates one small object per container
+node — its resumable child cursor, elided by the compiler wherever a container is empty:
+
+| Whole-tree traversal (same recursive function) | time | allocations |
+|---|--:|--:|
+| `FlatNode` | 3.8 ms | 0 |
+| `Node` | 4.1 ms | 0 |
+| `LazyNode` | 138 ms | 272,762 |
+| `LazyNode`, adding the attribute sweep | 146 ms | 272,762 |
+
+_Table 4 — whole-tree traversal per reader: one child iterator and a tag + value read per
+visited node (the spreadsheet hot-loop shape). `LazyNode` re-tokenizes everything it steps
+over — pay-per-visit by design; see the partial-reads section for when that trade wins._[^profile]
+
 ### `FlatNode` (v0.4.2, experimental)
 
 One contiguous array of isbits records with index links instead of per-node pointers — an eager *read-only* alternative to the pointer-tree `Node`.
@@ -122,7 +138,7 @@ Measured on the same XMark document:
 | `Node` | 70.7 ms (GC 23) | 3.46 ms | 3.7 ms | 71.6 MiB |
 | EzXML (libxml2) | 46.6 ms | — | — | — |
 
-_Table 4 — per-reader full-DOM comparison; *build* is the whole `parse` call, and *DOM size* is the **retained** live tree (`Base.summarysize`), not allocations._[^flatbench]
+_Table 5 — per-reader full-DOM comparison; *build* is the whole `parse` call, and *DOM size* is the **retained** live tree (`Base.summarysize`), not allocations._[^flatbench]
 
 Build allocations: 42.2 MiB (`FlatNode`) vs 99.8 MiB (`Node`), and the *build* ranking puts `FlatNode` ahead of libxml2 itself (~1.7× faster; `Node` sits ~1.5× behind the C library). The GC cells say why `FlatNode` builds so cheaply: its build allocates a handful of arrays instead of 882 K objects, so its median GC share is ~0.1 ms where `Node`'s is ~23 ms. Access on the finished stores: whole-tree walks are close (2.97 vs 3.46 ms — exact-size children vectors keep `Node`'s locality sharp), `parent`/`depth` stay O(1) index hops on `FlatNode` where `Node` must search down from the root, and pure value extraction is close too, flat store slightly ahead (3.1 vs 3.7 ms — a per-value `SubString` view costs two integer stores).
 
@@ -146,4 +162,4 @@ Stream / low-memory / read-only full-DOM / repeated traversal → **XML.jl**; `F
 
 [^profile]: Tables 1–3: measured 2026-08-04 (the `v0.3.9` row: 2026-06-28), Apple M5 (single-threaded), Julia 1.12.6; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3); BenchmarkTools at a 5 s budget per cell. Source: [`benchmarks/profile.jl`](benchmarks/profile.jl).
 
-[^flatbench]: Table 4 (and the README access-pattern table): measured 2026-08-04, same machine, Julia and BenchmarkTools settings; source [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl).
+[^flatbench]: Table 5 (and the README access-pattern table): measured 2026-08-04, same machine, Julia and BenchmarkTools settings; source [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl).
