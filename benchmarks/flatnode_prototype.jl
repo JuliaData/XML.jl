@@ -9,7 +9,8 @@
 # Goal: validate the PERFORMANCE-v0.4.md hypothesis that the whole full-DOM gap to
 # libxml2 is *materialising* the pointer tree — i.e. this layout should build faster,
 # retain far less, and collapse the Julia-GC mark cost (a pointerfree Vector is one GC
-# leaf vs ~2.5n pointer-bearing objects). NOT shipped in v0.4; candidate for v0.5.
+# leaf vs ~2.5n pointer-bearing objects). Shipped as src/flatnode.jl in v0.4.2; kept as
+# the standalone prototype that validated the hypothesis.
 #
 #   julia --project=benchmarks benchmarks/flatnode_prototype.jl
 

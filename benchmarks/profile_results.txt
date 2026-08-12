@@ -5,19 +5,29 @@ validation — lex tokens:     1850962
 validation — bytes touched:  XML.jl=9968541  EzXML=4173492  (sanity, should be same order)
 
 === (1) STREAM — file → events, no tree built ===
-  XML.jl Cursor               53.7 ms      17.4 MiB
-  EzXML StreamReader         66.93 ms      35.5 MiB
+  XML.jl Cursor              25.84 ms                     1 allocs     0.0 MiB
+  EzXML StreamReader         67.27 ms (GC 1.1)      1172072 allocs    35.5 MiB
 
 === (2) FULL EXTRACTION — parse + pull every tag/text ===
-  XML.jl (String)           134.97 ms     122.3 MiB
-  XML.jl (SubString)        110.37 ms     120.3 MiB
-  EzXML                      61.99 ms      53.8 MiB
-  LightXML (elem)            62.46 ms      57.4 MiB
+  XML.jl (String)            73.01 ms (GC 19.6)     2526927 allocs    99.8 MiB
+  XML.jl (SubString)         68.26 ms (GC 19.6)     2416965 allocs    94.6 MiB
+  EzXML                      62.01 ms               1764045 allocs    53.8 MiB
+  LightXML (elem)            63.11 ms (GC 1.4)       940356 allocs    57.4 MiB
 
 === (3) DECOMPOSE — XML.jl pipeline stages ===
-  read file (I/O)             0.58 ms      13.5 MiB
-  lex only (tokenize)        37.43 ms       0.0 MiB
-  parse → DOM               106.64 ms     122.3 MiB
-  traverse only               6.16 ms       0.0 MiB
+  read file (I/O)             0.61 ms                    10 allocs    13.5 MiB
+  lex only (tokenize)        23.41 ms                     0 allocs     0.0 MiB
+  parse → DOM                 68.0 ms (GC 19.0)     2526927 allocs    99.8 MiB
+  traverse only               4.17 ms                     0 allocs     0.0 MiB
 
 (build ≈ parse − lex; traverse is on a pre-built tree)
+
+=== (4) TRAVERSE — whole tree, one eachchildnode per node ===
+validation — traverse nodes: Lazy=882026  Flat=882026  Node=882026
+  LazyNode                  138.69 ms (GC 0.5)       272762 allocs    20.8 MiB
+  FlatNode                     3.8 ms                     0 allocs     0.0 MiB
+  Node                        4.09 ms                     0 allocs     0.0 MiB
+  LazyNode attr sweep       145.95 ms (GC 0.4)       272762 allocs    20.8 MiB
+
+(same recursive traversal for the three readers; a traversal that allocates per
+ node shows it in the allocs column, not in a ratio)
