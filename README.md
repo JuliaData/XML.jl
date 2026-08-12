@@ -253,7 +253,7 @@ doc = read("file.xml", LazyNode)
 
 `LazyNode` supports the same read-only interface as `Node`: `nodetype`, `tag`, `attributes`, `value`, `children`, `is_simple`, `simple_value`, plus integer and string indexing.
 
-`LazyNode` is for *partial* reads only: opening is a no-op wrapper (~0.5 µs whatever the file size), a traversal pays only for the bytes it steps over — descending to a target is O(bytes before it), so reaching this 14 MB file's root element costs ~4 µs — and nothing is cached, so repeated visits pay again. Unbeatable for descents and kilobyte-scale documents; for whole-tree walks (171 ms vs ~31/~76 ms build+walk on the 14 MB corpus below) and repeated queries, build `FlatNode` or `Node` instead — see [Performance by access pattern](#performance-by-access-pattern).
+`LazyNode` is for *partial* reads only: opening is a no-op wrapper (sub-microsecond whatever the file size), a traversal pays only for the bytes it steps over — descending to a target is O(bytes before it) — and nothing is cached, so repeated visits pay again. Unbeatable for descents and kilobyte-scale documents; for whole-tree walks (133 ms vs ~30/~74 ms build+walk on the 14 MB corpus below) and repeated queries, build `FlatNode` or `Node` instead — see [Performance by access pattern](#performance-by-access-pattern).
 
 For streaming and high-throughput workloads, several extra accessors avoid materializing intermediate collections:
 
@@ -338,14 +338,14 @@ One number cannot rank the readers — cost depends on what you do with the docu
 | | build | walk every node | extract all values | DOM size in memory |
 |---|--:|--:|--:|--:|
 | `Cursor` | — (streams) | 23.2 ms (its one scan) | — | — (no DOM) |
-| `LazyNode` | ~0 (a wrapper) | 171 ms (re-tokenizes) | — | — (source only) |
+| `LazyNode` | ~0 (a wrapper) | 133 ms (re-tokenizes) | — | — (source only) |
 | `FlatNode` | 27.2 ms | 2.97 ms | 3.1 ms | 54.9 MiB |
 | `Node` | 70.7 ms | 3.46 ms | 3.7 ms | 71.6 MiB |
 | EzXML (libxml2) | 46.6 ms | — | — | — |
 
 Reading the table: `Cursor`'s walk *is* its parse — one tokenizing scan, nothing retained. `LazyNode` opens for free and pays per node visited — unbeatable for touching a *fraction* of a large document, and (as the walk column shows) the wrong tool for visiting all of it. `FlatNode` builds ~2.6× faster than `Node`, holds ~23% less memory, and its `parent`/`depth` are O(1) where `Node` searches from the root; whole-tree walks are close (`Node`'s exact-size children vectors keep its locality sharp), and pure value extraction is close too, flat store slightly ahead (3.1 vs 3.7 ms — a per-value `SubString` view costs two integer stores). `FlatNode` out-builds even libxml2 (~1.7×), and `Node`'s gap to the C library is materialization, not scanning (see [PERFORMANCE-v0.4.md](PERFORMANCE-v0.4.md)).
 
-_Measured 2026-08-04, Apple M5 (single-threaded), Julia 1.12.6, EzXML 1.2.3; BenchmarkTools medians._
+_Measured 2026-08-04 (the `LazyNode` walk: 2026-08-12), Apple M5 (single-threaded), Julia 1.12.6, EzXML 1.2.3; BenchmarkTools medians._
 
 <br>
 
