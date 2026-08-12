@@ -195,3 +195,19 @@ measure_mk_child(n) = @allocated XML.eachchildnode(n)
         end
     end
 end
+
+# Node build — the scratch-stack contract: children and attributes accumulate on
+# parse-wide stacks, sliced out exact-size at each closing tag (no per-element vector
+# churn). 400 one-attribute one-text elements cost ~4.0 K allocations today; a churn
+# regression re-adds at least two vectors per element (≥ +800), so the ceiling sits
+# between the two and survives version-to-version noise.
+measure_node_build_allocs(xml) = Base.@allocations parse(xml, Node)
+
+@testset "Node build: scratch-stack allocation ceiling" begin
+    churn_xml = "<root>" * repeat("<e a=\"1\">t</e>", 400) * "</root>"
+    @test length(children(only(children(parse(churn_xml, Node))))) == 400
+    measure_node_build_allocs(churn_xml)   # warm-up
+    if _NO_COVERAGE
+        @test measure_node_build_allocs(churn_xml) <= 4500
+    end
+end
