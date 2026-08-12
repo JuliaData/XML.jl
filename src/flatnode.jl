@@ -482,9 +482,16 @@ is_simple(n::FlatNode) = (r = _rec(n);
     r.kind === Element && r.attr_count == 0 && r.first_child != 0 &&
     (c = @inbounds n.store.recs[r.first_child]; c.next_sibling == 0 && (c.kind === Text || c.kind === CData)))
 
-# Hand-flattened `value(FlatNode(n.store, _rec(n).first_child))`: the extra call depth
-# pushed the SubString constructor past the inlining budget, and a constructor left as
-# `invoke` heap-materializes the returned view — 32 B per call (#105).
+# Both bodies below are `value(::FlatNode)` hand-applied to the child record, and the
+# duplication is DELIBERATE — do not factor it into a shared helper. Through any extra
+# call depth (the old `value(FlatNode(store, first_child))` route, or a shared helper —
+# measured with a definition-site `@inline` and with a callsite `@inline`), the
+# `@inbounds` chain stops reaching the noshift constructor's own `@boundscheck` (elision
+# crosses one level, into inlined callees only): the constructor then inlines *with* its
+# checked machinery, and those branches around the view construction re-box the union
+# return — 32 B per call on the default-bounds build, invisible to `Pkg.test`, whose
+# `--check-bounds=yes` selects the checked reconstruction body outright. The allocation
+# guards enforce both copies (#111, #113, #114).
 @inline function is_simple_value(n::FlatNode)
     is_simple(n) || return nothing
     c = @inbounds n.store.recs[_rec(n).first_child]
@@ -493,9 +500,12 @@ is_simple(n::FlatNode) = (r = _rec(n);
     c.value_len < 0 ? unescape(raw) : raw
 end
 
-function simple_value(n::FlatNode)
+@inline function simple_value(n::FlatNode)
     is_simple(n) || error("`simple_value` requires a simple node: an Element with no attributes and exactly one Text or CData child. See `is_simple`.")
-    value(FlatNode(n.store, _rec(n).first_child))
+    c = @inbounds n.store.recs[_rec(n).first_child]
+    c.value_offset < 0 && return nothing
+    raw = _fsub(n.store, c.value_offset, abs(c.value_len))
+    c.value_len < 0 ? unescape(raw) : raw
 end
 
 #-----------------------------------------------------------------------------# conversion / write / show
