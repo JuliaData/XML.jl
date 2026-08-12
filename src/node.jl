@@ -160,7 +160,9 @@ Lazy iterator over the child *elements* of `node`, skipping every other node typ
 (`Text`, `Comment`, `CData`, `ProcessingInstruction`, …). Since v0.4 preserves
 inter-element whitespace, `children` on pretty-printed documents interleaves
 whitespace `Text` nodes with elements — `eachelement` is the idiomatic way to
-iterate the elements only. Works with both `Node` and `LazyNode`.
+iterate the elements only. Works with every tree reader (`Node`, `LazyNode`,
+`FlatNode`); on `LazyNode` the returned iterator shares its cursor across loops
+(see [`eachchildnode`](@ref)).
 
     for el in eachelement(node)
         # el isa Element node
@@ -194,7 +196,8 @@ is_simple(o::Node) = o.nodetype === Element &&
     simple_value(node) -> Union{String, SubString{String}}
 
 Return the textual content of a simple element (see [`is_simple`](@ref)): a `String` on
-`Node`, a zero-copy `SubString{String}` on the other readers. Errors if `node` is not
+`Node`, a `SubString{String}` on the other readers — zero-copy for entity-free content
+(entity-bearing values are decoded into a fresh string first). Errors if `node` is not
 simple.
 """
 simple_value(o::Node) = is_simple(o) ? o.children[1].value :
