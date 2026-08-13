@@ -62,15 +62,17 @@ struct Raw
     Raw(args...; kw...) = error("""
         `XML.Raw` has been removed in XML.jl v0.4.
         Use `parse(str, Node)` or `read(filename, Node)` instead.
-        The streaming Raw/LazyNode API has been replaced by a token-based parser.
-        See `?XML.Node` for the new API.""")
+        The 0.3.x streaming Raw API has been replaced by a token-based parser;
+        for streaming, see `?XML.Cursor`. See `?XML.Node` for the tree API.""")
 end
 
 # Removed functions — informative errors
 const _REMOVED_LAZYNODE_MSG = """
-    This function was part of the LazyNode API, which has been removed in XML.jl v0.4.
-    Use `parse(str, Node)` to get a full DOM tree and navigate with `children`, `tag`,
-    `attributes`, `value`, and integer indexing (e.g. `node[1]`)."""
+    This function was part of the 0.3.x LazyNode navigation API (next/prev/parent/depth),
+    which has been removed in XML.jl v0.4. Use `parse(str, Node)` for a full DOM tree
+    (navigate with `children`, `tag`, `attributes`, `value`, integer indexing), or
+    `parse(str, LazyNode)` — the current lazy reader — with iteration and indexing, or
+    the `Cursor` streaming API with `next!`."""
 
 for f in (:next, :prev)
     msg = "`XML.$f` has been removed. $_REMOVED_LAZYNODE_MSG"

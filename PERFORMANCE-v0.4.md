@@ -60,7 +60,7 @@ Structured pull helpers keep scans cheap without hand-tracked depth: `for_each_c
 
 ### Partial reads — `LazyNode`
 
-Opening is a no-op wrapper (sub-microsecond on this 14 MB file) and nothing is ever cached: each visit re-tokenizes and rebuilds its small handles — allocation-free, the iterators thread their whole state through Julia's iteration protocol — so a repeated look-up costs only its re-scan time, and costs repeat per visit. A traversal pays only for the bytes it actually steps over: the child iterator defers a yielded element's subtree skip until the *next sibling* is requested, so descending to a target is O(bytes before it); scanning *everything* is the worst case, priced per reader in Table 4. What still costs: *horizontal* scans pay the subtrees they step past (as any index-free forward reader must), and *repeated* look-ups pay again — those two patterns tip the scale toward `FlatNode`/`Node`.
+Opening is a no-op wrapper (sub-microsecond on this 14 MB file) and nothing is ever cached: each visit re-tokenizes and rebuilds its small handles — iteration steps allocate nothing, and each child or attribute scan is one small resumable cursor object, elided when it never loops (Table 4 prices the full-scan case) — so a repeated look-up costs only its re-scan time, and costs repeat per visit. A traversal pays only for the bytes it actually steps over: the child iterator defers a yielded element's subtree skip until the *next sibling* is requested, so descending to a target is O(bytes before it); scanning *everything* is the worst case, priced per reader in Table 4. What still costs: *horizontal* scans pay the subtrees they step past (as any index-free forward reader must), and *repeated* look-ups pay again — those two patterns tip the scale toward `FlatNode`/`Node`.
 
 > [!NOTE]
 > Ask only for what you need: a `for` loop over `eachchildnode` fetches the next sibling — and pays its predecessor's deferred subtree skip — at the top of each round, so exit *from within the body* once you are done:
@@ -107,12 +107,12 @@ are free for all three readers, and the allocation column is measured, not assum
 and `FlatNode` allocate nothing at all; `LazyNode` allocates one small object per container
 node — its resumable child cursor, elided by the compiler wherever a container is empty:
 
-| Whole-tree traversal (same recursive function) | time | allocations |
+| Whole-tree traversal (same recursive function) | time (incl. GC) | allocations |
 |---|--:|--:|
 | `FlatNode` | 3.8 ms | 0 |
 | `Node` | 4.1 ms | 0 |
-| `LazyNode` | 138 ms | 272,762 |
-| `LazyNode`, adding the attribute sweep | 146 ms | 272,762 |
+| `LazyNode` | 138 ms (GC 0.4) | 272,762 |
+| `LazyNode`, adding the attribute sweep | 146 ms (GC 0.4) | 272,762 |
 
 _Table 4 — whole-tree traversal per reader: one child iterator and a tag + value read per
 visited node (the spreadsheet hot-loop shape). `LazyNode` re-tokenizes everything it steps
@@ -144,7 +144,7 @@ Build allocations: 42.2 MiB (`FlatNode`) vs 99.8 MiB (`Node`), and the *build* r
 
 ### Choosing
 
-Stream / low-memory / read-only full-DOM / repeated traversal → **XML.jl**; `FlatNode` out-builds the libxml2 binder (~1.7×: 27.2 vs 46.6 ms), and the C library's one win is the one-shot *`Node`* build-and-extract (~1.3× end-to-end, Table 2) — either way, pure Julia, no C dependency. Against its own past, v0.4 is **~5× faster and ~12× leaner than 0.3.9** (which used ~1.4 GiB for this file) — see [`benchmarks/profile.jl`](benchmarks/profile.jl), [`benchmarks/profile_vs_039.jl`](benchmarks/profile_vs_039.jl), [`benchmarks/compare.jl`](benchmarks/compare.jl).
+Stream / low-memory / read-only full-DOM / repeated traversal → **XML.jl**; `FlatNode` out-builds the libxml2 binder (~1.7×: 27.2 vs 46.6 ms), and the C library's one win is the one-shot *`Node`* build-and-extract (~1.3× end-to-end, Table 2) — either way, pure Julia, no C dependency. Against its own past, v0.4 is **~7× faster and ~14× leaner than 0.3.9** (530 → 79 ms and ~1.4 GiB → 100 MiB on this file, Table 2) — see [`benchmarks/profile.jl`](benchmarks/profile.jl), [`benchmarks/profile_vs_039.jl`](benchmarks/profile_vs_039.jl), [`benchmarks/compare.jl`](benchmarks/compare.jl).
 
 > [!NOTE]
 > **`:strict`** adds a character-range scan over text (a second O(content) pass); the overhead scales with the document's *text share* — ~1.1× on the markup-heavy XMark corpus, up to ~20× on a pure-text document; `:lenient` / `:structural` are unaffected.
@@ -160,6 +160,6 @@ Stream / low-memory / read-only full-DOM / repeated traversal → **XML.jl**; `F
 > computation. It trims GC pauses, not the materialization floor: the build's GC-free work
 > is unchanged.
 
-[^profile]: Tables 1–3: measured 2026-08-04 (the `v0.3.9` row: 2026-06-28), Apple M5 (single-threaded), Julia 1.12.6; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3); BenchmarkTools at a 5 s budget per cell. Source: [`benchmarks/profile.jl`](benchmarks/profile.jl).
+[^profile]: Tables 1–3: measured 2026-08-04; Table 4: measured 2026-08-11 (the `v0.3.9` row: 2026-06-28) — same machine and settings throughout: Apple M5 (single-threaded), Julia 1.12.6; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3); BenchmarkTools at a 5 s budget per cell. Source: [`benchmarks/profile.jl`](benchmarks/profile.jl).
 
 [^flatbench]: Table 5 (and the README access-pattern table): measured 2026-08-04, same machine, Julia and BenchmarkTools settings; source [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl).

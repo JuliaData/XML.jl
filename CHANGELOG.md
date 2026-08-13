@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   costs a single small object, elided where it never loops. Every loop over the same
   iterator object resumes where the previous one stopped — the contract downstream row
   streams (XLSX.jl) rely on, now pinned in tests. A full lazy traversal of the 14 MB
-  benchmark document drops from 2.6 M allocations / 127 MiB of garbage to 273 K / 21 MiB,
+  benchmark document drops from 2.6 M allocations / 121 MiB of garbage to 273 K / 21 MiB,
   median −23 % (#118, #119, #121).
 
 - **The `Node` build no longer allocates per-element vectors**: children and attributes
@@ -36,9 +36,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Sound because every span edge lands on an ASCII byte or EOF, hence a UTF-8 character
   boundary; `--check-bounds=yes` builds (as in `Pkg.test`) compile the checked
   reconstruction instead, selected at load time. On the 14 MB corpus: lex 37.4 → 23.4 ms,
-  `FlatNode` extract 6.6 → 3.1 ms, and three cross-library headlines flip — `FlatNode`
-  out-builds libxml2 (~1.7×) and out-extracts `Node`'s direct field reads, and pure-Julia
-  streaming runs ~2.5× ahead of EzXML's `StreamReader`. Allocations unchanged throughout
+  `FlatNode` extract 6.6 → 3.1 ms, and two headlines flip — `FlatNode` out-builds libxml2
+  (~1.7×) and out-extracts `Node`'s direct field reads — while pure-Julia streaming widens
+  its lead over EzXML's `StreamReader` to ~2.5×. Allocations unchanged throughout
   (#109, #111, #113).
 
 - **Measurement upkeep**: every timing in PERFORMANCE-v0.4.md and the README is a
@@ -49,6 +49,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   decomposed pipeline reports the absolute allocation count of every cell and gains a
   per-reader whole-tree traversal section — a per-node cost hides in a ratio but not in
   a counter (#120).
+
+### Fixed
+
+- **`simple_value(::FlatNode)` no longer heap-allocates on default-bounds builds** —
+  32 B per call on the build users actually run, a regression the span-native rerouting
+  introduced and that neither `Pkg.test` (which forces `--check-bounds=yes`) nor
+  coverage CI could see. A new CI job now runs the suite on the default-bounds build
+  with the allocation guards active, and the `Node` build gains an allocation ceiling
+  pinning its scratch-stack contract (#122).
 
 ## [0.4.4] - 2026-07-31
 

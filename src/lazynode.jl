@@ -151,9 +151,13 @@ Base.eltype(::Type{<:LazyAttrIterator}) = Pair{SubString{String}, SubString{Stri
     eachattribute(n::LazyNode)
 
 Lazy iterator yielding decoded `name => value` pairs for the attributes of `n` (an
-`Element` or `Declaration`). Allocation-free: no [`Attributes`](@ref) dict, no
-intermediate vector, and no per-pair boxing — suitable for hot paths that scan every
-attribute.
+`Element` or `Declaration`). Iteration steps allocate nothing — no [`Attributes`](@ref)
+dict, no intermediate vector, no per-pair boxing; creating the iterator costs one small
+object — suitable for hot paths that scan every attribute.
+
+The iterator holds one shared cursor: every loop over the same object resumes after the
+last yielded pair, and an exhausted iterator stays exhausted — call `eachattribute`
+again for a fresh pass.
 
 For a single attribute by name, prefer `get(n, key, default)` — it short-circuits as soon
 as the match is found.
@@ -191,7 +195,7 @@ Call `f(name_token, value_token)` for each attribute of `n` (an `Element` or
 `Declaration`), where both arguments are raw `Token` values.
 
 To read attributes as decoded `name => value` pairs, use [`eachattribute`](@ref) — it is
-equally allocation-free. The token layer only makes sense for consumers that need byte
+equally allocation-light. The token layer only makes sense for consumers that need byte
 offsets or the verbatim source: `XML.XMLTokenizer.attr_value(tok, n.data)` strips the
 surrounding quotes but performs **no** character-reference resolution and **no** XML 1.0
 §3.3.3 white-space normalization, so its output differs from the decoded accessors
@@ -319,8 +323,9 @@ function _lazy_skip_until!(iter, target::TokenKinds.Kind)
 end
 
 # Functional twins of the skip helpers: advance the stateless `Tokenizer` from `st` and
-# return the state after the skipped construct. The lazy iterators thread these states
-# through `iterate`'s functional slot instead of mutating a shared cursor.
+# return the state after the skipped construct. The lazy iterators call these from
+# `_ci_next` and store the returned state back into their own mutable cursor fields
+# (the shared-cursor resumption contract on `LazyChildIterator`).
 function _skip_until(t::Tokenizer, st::TokenizerState, target::TokenKinds.Kind)
     while true
         r = iterate(t, st)
@@ -514,6 +519,12 @@ Base.eltype(::Type{LazyChildIterator{S}}) where {S} = LazyNode{S}
 
 Return a lazy iterator over the children of `n`, yielding one [`LazyNode`](@ref) at a time
 without collecting them all into a vector.
+
+The iterator holds one shared cursor: every loop over the same object resumes after the
+last yielded child — the contract downstream row streams rely on — and an exhausted
+iterator stays exhausted. Call `eachchildnode` again for a fresh pass;
+[`eachelement`](@ref) built on a `LazyNode` inherits the same semantics. Iteration steps
+allocate nothing; creating the iterator costs one small object.
 
 See also [`children`](@ref), which returns a `Vector{LazyNode}`.
 """
