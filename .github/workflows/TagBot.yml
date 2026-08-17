@@ -13,3 +13,14 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           ssh: ${{ secrets.DOCUMENTER_KEY }}
+          # Release body = the registration comment's notes + diff link only — no
+          # auto-generated "Merged pull requests" / "Closed issues" lists (they
+          # duplicate the notes; the history lives in the CHANGELOG).
+          changelog: |
+            ## {{ package }} {{ version }}
+
+            [Diff since {{ previous_release }}]({{ compare_url }})
+
+            {{# custom }}
+            {{{ custom }}}
+            {{/ custom }}
