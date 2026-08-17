@@ -57,13 +57,21 @@ jobs:
     # compiles the checked branch instead, leaving the user-facing path untested), and
     # coverage off lets the numeric allocation guards assert (coverage counters allocate
     # inside the measured calls, so the guards skip themselves under coverage).
-    name: Julia 1 - ubuntu-latest - x64 - default-bounds allocation guards
+    # 'lts' is a third body again: Base has no noshift SubString constructor on 1.10,
+    # so that build selects the two-branch fallback under either flag.
+    name: Julia ${{ matrix.version }} - ubuntu-latest - x64 - default-bounds allocation guards
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        version:
+          - '1'
+          - 'lts'
     steps:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
         with:
-          version: '1'
+          version: ${{ matrix.version }}
           arch: x64
       - uses: actions/cache@v6
         env:
