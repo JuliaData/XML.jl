@@ -5,6 +5,12 @@ All notable changes to XML.jl will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Julia 1.10 builds mis-executed downstream worksheet scans** — XLSX.jl workbook opens failed with `No sheetData node found in worksheet` ([XLSX.jl#448](https://github.com/JuliaData/XLSX.jl/issues/448)): a Julia 1.10 compilation defect triggered by v0.4.5's branchless span fallback. The 1.10 build now selects the earlier two-branch body (1.11+ builds are unchanged), and the Downstream and default-bounds CI jobs also run on LTS.
+
 ## [0.4.5] - 2026-08-13
 
 ### Added

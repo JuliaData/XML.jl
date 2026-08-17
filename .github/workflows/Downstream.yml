@@ -7,7 +7,7 @@ on:
 
 jobs:
   test:
-    name: ${{ matrix.package }}
+    name: ${{ matrix.package }} - Julia ${{ matrix.version }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -15,11 +15,17 @@ jobs:
         package:
           - "SatelliteToolboxOrbitDataMessages"
           - "XLSX"
+        # 'lts' runs the fallback span reconstruction (Base has no noshift SubString
+        # constructor on 1.10), a different compiled body than '1' — and dependents are
+        # the only callers large enough to exercise it the way users do.
+        version:
+          - '1'
+          - 'lts'
     steps:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
         with:
-          version: 1
+          version: ${{ matrix.version }}
           arch: x64
           show-versioninfo: true
       - uses: julia-actions/julia-buildpkg@latest
