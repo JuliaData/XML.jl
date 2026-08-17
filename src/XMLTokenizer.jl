@@ -92,9 +92,21 @@ if hasmethod(SubString{String}, Tuple{String, Int, Int, Val{:noshift}}) &&
    Base.JLOptions().check_bounds != 1
     @inline _noshift_substring(s::T, offset::Int, ncu::Int) where {T <: AbstractString} =
         @inbounds @inline SubString{T}(s, offset, ncu, Val(:noshift))
-else
+elseif hasmethod(SubString{String}, Tuple{String, Int, Int, Val{:noshift}})
+    # 1.11+ under `--check-bounds=yes` (`hasmethod` is a generation test — this body
+    # never calls the noshift constructor): keep the branchless checked shape, whose
+    # single construction path leaves union returns unboxed under `yes` (#113).
     _noshift_substring(s::AbstractString, offset::Int, ncu::Int) =
         @inline _checked_substring(s, offset, ncu)
+else
+    # Julia 1.10, either bounds flag (Base has no noshift constructor there). The
+    # branchless shape above makes 1.10 mis-compile large callers — stale reads of an
+    # escaping `Cursor` (JuliaData/XLSX.jl#448); this pre-#114 two-branch shape,
+    # green on 1.10 through v0.4.2–v0.4.4, avoids it. Details: the fix PR.
+    @inline function _noshift_substring(s::AbstractString, offset::Int, ncu::Int)
+        ncu == 0 && return SubString(s, 1, 0)
+        SubString(s, offset + 1, prevind(s, offset + ncu + 1))
+    end
 end
 
 # Recover the token's text as a zero-copy `SubString` of its source `data` — a direct
