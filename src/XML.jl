@@ -11,7 +11,12 @@ export
     Cursor, next!, for_each_child, @for_each_child, skip_element!, eof,
     xpath,
     h
-    
+
+# `escape`/`unescape` are supported API but stay unexported (the bare names are too
+# generic to bring into scope with `using XML`). The `public` keyword only parses on
+# Julia 1.11+, hence the guarded `eval` — a no-op on 1.10, which has no such notion.
+VERSION >= v"1.11" && eval(Meta.parse("public escape, unescape"))
+
 include("XMLTokenizer.jl")
 using .XMLTokenizer:
     XMLTokenizer, tokenize, tag_name, attr_value, pi_target, raw,

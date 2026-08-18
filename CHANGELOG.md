@@ -5,6 +5,12 @@ All notable changes to XML.jl will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`XML.escape` and `XML.unescape` are now public API** ([#125](https://github.com/JuliaData/XML.jl/issues/125)): declared `public` on Julia 1.11+ (a no-op on 1.10, which has no such notion) and covered by semver, for downstream code that assembles XML strings itself, as XLSX.jl does. They stay unexported — the bare names are too generic to bring into scope with `using XML`. `escape` handles all five predefined entities, so it is safe for quoted attribute values as well as text content.
+
 ## [0.4.6] - 2026-08-17
 
 ### Fixed
@@ -409,6 +415,7 @@ First release since XML.jl moved to [JuliaData](https://github.com/JuliaData/XML
 
 - Initial release.
 
+[Unreleased]: https://github.com/JuliaData/XML.jl/compare/v0.4.6...HEAD
 [0.4.6]: https://github.com/JuliaData/XML.jl/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/JuliaData/XML.jl/compare/v0.4.4...v0.4.5
 [0.4.4]: https://github.com/JuliaData/XML.jl/compare/v0.4.3...v0.4.4
