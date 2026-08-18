@@ -228,13 +228,14 @@ end
 canonical_xml(n) = String(take!(canonical_xml(IOBuffer(), n)))
 
 # Ledger of the reference pairs whose canonical form XML.jl does not reproduce yet,
-# keyed by the conformance feature that closes them. Every entry runs as @test_broken:
-# when a feature lands, its cases error as unexpected passes and must move out of here.
+# keyed by the conformance feature that closes them and its tracker issue. Every entry
+# runs as @test_broken: when a feature lands, its cases error as unexpected passes and
+# must move out of here.
 const CANON_KNOWN_FAIL = Dict{String, String}()
 let
-    eol = "line-end normalization (XML 1.0 §2.11): literal CR / CR LF in content must be read as LF"
-    ent = "internal entity expansion (§4.4): entities declared in the internal subset are reported unexpanded"
-    att = "ATTLIST default attribute injection (§3.3.2)"
+    eol = "line-end normalization (XML 1.0 §2.11, #129): literal CR / CR LF in content must be read as LF"
+    ent = "internal entity expansion (§4.4, #130): entities declared in the internal subset are reported unexpanded"
+    att = "ATTLIST default attribute injection (§3.3.2, #131)"
     ntn = "notation declarations: Second Canonical Form prepends a DOCTYPE carrying <!NOTATION …>"
     for (reason, ids) in (
         eol => ["valid-sa-047", "valid-sa-059", "valid-sa-092", "valid-sa-098", "valid-sa-116",
