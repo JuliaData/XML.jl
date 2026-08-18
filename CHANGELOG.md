@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The W3C conformance testset now byte-compares parsed values against the suite's canonical `out/` references** ([#94](https://github.com/JuliaData/XML.jl/issues/94)): a test-side canonical-XML writer (James Clark's form, as shipped in the suite) renders each parse result for comparison with the expected output — 262 reference pairs in scope, 147 byte-identical, and the 115 others ledgered as `@test_broken` under the conformance feature that closes them (line-end normalization §2.11, internal entity expansion §4.4, ATTLIST default injection §3.3.2, notation declarations). The pugixml- and libexpat-ported processing-instruction testsets now also assert the upstream-expected target/data values instead of node counts.
 
+### Fixed
+
+- **Line ends are now normalized per XML 1.0 §2.11** (all four readers): literal CR LF and lone CR read as LF — in character data, CDATA sections, processing-instruction data, comments, attribute values, and the DOCTYPE value — while CR written as a character reference (`&#13;`) still reads as a real CR. Previously the raw bytes came through, so CRLF documents read differently in XML.jl than in conforming parsers. The normalization happens once on input at every document entry point, exactly as the spec words it ("behave as if it normalized all line breaks … on input, before parsing"): a CR-free document passes through untouched after one scan, and a CR-carrying document is rewritten once, so `sourcetext` and source spans then refer to the normalized document. On write, a CR in text content is now escaped as `&#13;`, so values round-trip exactly. This turned 62 of the ledgered W3C canonical-reference gaps green ([#129](https://github.com/JuliaData/XML.jl/issues/129)).
+
 ## [0.4.6] - 2026-08-17
 
 ### Fixed

@@ -45,6 +45,8 @@ aliasing-contract note on [`next!`](@ref).
 """
 function Cursor(data::S) where {S <: AbstractString}
     data = _drop_bom(data)   # a leading U+FEFF BOM char is an encoding signature, not content (§4.3.3)
+    d = _normalize_input_eol(data)   # §2.11: line ends normalize on input, before parsing
+    d === data || return Cursor(d)   # CR-carrying document: restart on the normalized copy
     st = _CURSOR_XT.StatefulTokenizer(_CURSOR_XT.Tokenizer(data, 1))
     Cursor{S}(st, _CURSOR_XT.no_token(data), Document, 0, 0, false, false)
 end
@@ -60,6 +62,8 @@ The first [`next!`](@ref) lands on whatever element begins at `startpos`, at dep
 auto-stops at its subtree boundary (the depth break). LazyNode-agnostic primitive.
 """
 function Cursor(data::S, startpos::Integer) where {S <: AbstractString}
+    d = _normalize_input_eol(data)   # §2.11 — same input-side normalization as Cursor(data)
+    d === data || return Cursor(d, _translate_eol_pos(data, Int(startpos)))
     st = _CURSOR_XT.StatefulTokenizer(_CURSOR_XT.Tokenizer(data, startpos))
     Cursor{S}(st, _CURSOR_XT.no_token(data), Document, 0, 0, false, false)
 end

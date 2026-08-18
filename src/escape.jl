@@ -94,6 +94,56 @@ function _rewrite_attr_ws(s::AbstractString)
     String(take!(io))
 end
 
+# XML 1.0 §2.11 end-of-line normalization, applied ON INPUT at every reader's document
+# entry point (next to the BOM handling), exactly as the spec words it: "the XML processor
+# MUST behave as if it normalized all line breaks … on input, before parsing". The literal
+# pair CR LF becomes ONE LF, then each remaining literal #xD becomes LF; character
+# references (`&#13;`) are written with `&`, which the rewrite never touches, so they
+# survive to entity resolution. A CR-free document — the entire LF world — is returned
+# unchanged after one memchr-backed scan; a CR-carrying document is rewritten ONCE, and
+# every downstream span, token and zero-copy view then lives in the normalized document.
+# Normalizing per VALUE instead was measured to heap-box the union-returning value
+# accessors' clean-path return (32 B per value: any extra live branch or inlined scan in
+# those bodies overflows the caller-side union-split of their merge φ — #105/#113 class).
+_normalize_input_eol(s::AbstractString) = occursin('\r', s) ? _rewrite_content_eol(s) : s
+
+# After the CR LF → LF rewrite, a byte position shifts left by the number of CR LF pairs
+# strictly before it (a lone CR rewrites in place). For translating caller-supplied
+# start offsets (`Cursor(data, startpos)`) when the document needed rewriting.
+function _translate_eol_pos(s::AbstractString, pos::Int)
+    cu = codeunits(s)
+    n = min(pos - 1, length(cu))
+    shift = 0
+    j = 1
+    @inbounds while j < n
+        if cu[j] == 0x0D && cu[j + 1] == 0x0A
+            shift += 1
+            j += 2
+        else
+            j += 1
+        end
+    end
+    pos - shift
+end
+
+function _rewrite_content_eol(s::AbstractString)
+    cu = codeunits(s)
+    io = IOBuffer(sizehint = ncodeunits(s))
+    n = length(cu)
+    j = 1
+    @inbounds while j <= n
+        b = cu[j]
+        if b == 0x0D
+            Base.write(io, 0x0A)
+            j < n && cu[j + 1] == 0x0A && (j += 1)
+        else
+            Base.write(io, b)
+        end
+        j += 1
+    end
+    String(take!(io))
+end
+
 # The rewrite result is wrapped back into `SubString` so both paths return the same
 # concrete type: every reader's decode funnel calls this on its hot path, and a
 # `Union{SubString{String}, String}` return would heap-box the dominant clean-path

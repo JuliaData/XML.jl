@@ -3275,6 +3275,95 @@ end
         end
     end
 
+    @testset "line-end normalization (XML 1.0 §2.11)" begin
+        # Literal CR and the CRLF pair in content read as LF — in character data, CDATA
+        # sections, PI data, comments, and the DOCTYPE value — while CR written as a
+        # character reference (&#13;) survives. Normalization happens ON INPUT at every
+        # document entry point, before parsing (hence before entity resolution), uniformly
+        # across the four readers (#129).
+        function content_by_reader(xml)
+            n = value(only(children(only(elements(parse(xml, Node))))))
+            l = value(only(children(only(elements(parse(xml, LazyNode))))))
+            f = value(only(children(only(elements(parse(xml, FlatNode))))))
+            cur = Cursor(xml)
+            c = nothing
+            while next!(cur) !== nothing
+                nodetype(cur) in (Text, CData) && (c = String(value(cur)))
+            end
+            (n, l, f, c)
+        end
+
+        @testset "literal CR / CRLF in character data becomes LF" begin
+            @test all(==("x\ny\nz"), content_by_reader("<a>x\r\ny\rz</a>"))
+            @test value(parse("<a>x\r</a>", Node)[1][1]) == "x\n"      # lone CR at the end
+            @test value(parse("<a>\r</a>", Node)[1][1]) == "\n"        # CR-only text
+            @test value(parse("<a>x\r\n\ry</a>", Node)[1][1]) == "x\n\ny"
+        end
+
+        @testset "character references survive" begin
+            @test all(==("a\rb"), content_by_reader("<a>a&#13;b</a>"))
+            # the discriminating mix: the reference resolves to CR, the literal pair folds to LF
+            @test all(==("a\r\nb"), content_by_reader("<a>a&#13;\r\nb</a>"))
+        end
+
+        @testset "CDATA sections normalize, without entity decoding" begin
+            @test all(==("p\nq&amp;"), content_by_reader("<a><![CDATA[p\r\nq&amp;]]></a>"))
+        end
+
+        @testset "PI data and comments normalize" begin
+            @test value(parse("<?p a\r\nb?><a/>", Node)[1]) == "a\nb"
+            @test value(parse("<?p a\r\nb?><a/>", LazyNode)[1]) == "a\nb"
+            @test value(parse("<!-- c\r\nd --><a/>", Node)[1]) == " c\nd "
+            @test value(parse("<!-- c\r\nd --><a/>", LazyNode)[1]) == " c\nd "
+        end
+
+        @testset "DOCTYPE value normalizes" begin
+            xml = "<!DOCTYPE a [\r\n<!ELEMENT a (#PCDATA)>\r\n]><a/>"
+            @test !occursin('\r', value(parse(xml, Node)[1]))
+            @test !occursin('\r', value(parse(xml, LazyNode)[1]))
+        end
+
+        @testset "simple_value paths" begin
+            @test simple_value(only(elements(parse("<a>x\r\ny</a>", LazyNode)))) == "x\ny"
+            @test simple_value(only(elements(parse("<a>x\r\ny</a>", FlatNode)))) == "x\ny"
+            @test simple_value(only(elements(parse("<a><![CDATA[x\r\ny]]></a>", LazyNode)))) == "x\ny"
+        end
+
+        @testset "attribute values stay on the §3.3.3 path" begin
+            @test only(elements(parse("<a k=\"u\r\nv\"/>", Node)))["k"] == "u v"
+        end
+
+        @testset "wellformed levels agree" begin
+            for w in (:lenient, :structural, :strict)
+                @test value(parse("<a>x\r\ny</a>", Node; wellformed = w)[1][1]) == "x\ny"
+            end
+            @test value(parse("x\r\ny", Node; wellformed = :lenient)[1]) == "x\ny"  # fragment
+        end
+
+        @testset "write escapes CR in character data as a character reference" begin
+            out = XML.write(parse("<a>p&#13;q</a>", Node))
+            @test occursin("p&#13;q", out)
+            back = value(only(children(only(elements(parse(out, Node))))))
+            @test back == "p\rq"                          # the value round-trips exactly
+        end
+
+        @testset "input normalization: CR-free documents pass through untouched" begin
+            # §2.11 runs ON INPUT (one scan, one rewrite when dirty) — per-value
+            # normalization was measured to heap-box the union-returning accessors'
+            # clean-path return (see _normalize_input_eol's note)
+            clean = "no carriage returns here"
+            @test XML._normalize_input_eol(clean) === clean          # identity, not a copy
+            @test XML._normalize_input_eol("p\r\nq\rr") == "p\nq\nr"
+            @test XML._rewrite_content_eol("a\r\n\rb") == "a\n\nb"
+            @test XML._translate_eol_pos("x\r\ny\r\nz", 5) == 4      # two bytes → one CRLF pair before
+            measure(v) = @allocated XML._normalize_input_eol(v)      # function barrier
+            measure(clean)
+            if Base.JLOptions().code_coverage == 0       # coverage counters skew @allocated
+                @test measure(clean) == 0
+            end
+        end
+    end
+
     @testset "Declaration attributes" begin
         doc = parse("""<?xml version="1.0" encoding="UTF-8"?><root/>""", LazyNode)
         decl = doc[1]
