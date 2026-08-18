@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`XML.escape` and `XML.unescape` are now public API** ([#125](https://github.com/JuliaData/XML.jl/issues/125)): declared `public` on Julia 1.11+ (a no-op on 1.10, which has no such notion) and covered by semver, for downstream code that assembles XML strings itself, as XLSX.jl does. They stay unexported — the bare names are too generic to bring into scope with `using XML`. `escape` handles all five predefined entities, so it is safe for quoted attribute values as well as text content.
 
+- **The W3C conformance testset now byte-compares parsed values against the suite's canonical `out/` references** ([#94](https://github.com/JuliaData/XML.jl/issues/94)): a test-side canonical-XML writer (James Clark's form, as shipped in the suite) renders each parse result for comparison with the expected output — 262 reference pairs in scope, 147 byte-identical, and the 115 others ledgered as `@test_broken` under the conformance feature that closes them (line-end normalization §2.11, internal entity expansion §4.4, ATTLIST default injection §3.3.2, notation declarations). The pugixml- and libexpat-ported processing-instruction testsets now also assert the upstream-expected target/data values instead of node counts.
+
 ## [0.4.6] - 2026-08-17
 
 ### Fixed
