@@ -17,6 +17,15 @@ Test.push_testset(_ROOT_TS)
 #                              ESCAPE / UNESCAPE                               #
 #==============================================================================#
 @testset "escape / unescape" begin
+    @testset "declared public, not exported" begin
+        if VERSION >= v"1.11"   # `Base.ispublic` and the `public` notion exist from 1.11
+            @test Base.ispublic(XML, :escape)
+            @test Base.ispublic(XML, :unescape)
+        end
+        @test !Base.isexported(XML, :escape)
+        @test !Base.isexported(XML, :unescape)
+    end
+
     @testset "all five predefined entities" begin
         @test escape("&") == "&amp;"
         @test escape("<") == "&lt;"
