@@ -12,17 +12,25 @@ using Test
     #                        Processing Instructions                           #
     #==========================================================================#
     @testset "PI parsing" begin
+        # Upstream parse_pi_parse / parse_pi_parse_spaces assert target and data, down to
+        # the kept trailing space. XML.jl maps upstream's empty data ("") to `nothing`.
         doc = parse("<?pi?><root/>", Node)
         pis = filter(x -> nodetype(x) == ProcessingInstruction, children(doc))
         @test length(pis) == 1
+        @test tag(pis[1]) == "pi"
+        @test value(pis[1]) === nothing
 
         doc = parse("<?pi value?><root/>", Node)
         pis = filter(x -> nodetype(x) == ProcessingInstruction, children(doc))
         @test length(pis) == 1
+        @test tag(pis[1]) == "pi"
+        @test value(pis[1]) == "value"
 
         doc = parse("<?target  \r\n\t  value ?><root/>", Node)
         pis = filter(x -> nodetype(x) == ProcessingInstruction, children(doc))
         @test length(pis) == 1
+        @test tag(pis[1]) == "target"
+        @test value(pis[1]) == "value "
     end
 
     @testset "PI errors" begin

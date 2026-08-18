@@ -145,20 +145,27 @@ using Test
     #                        Processing Instructions                           #
     #==========================================================================#
     @testset "Processing instructions" begin
+        # Upstream test_pi_handled_in_default asserts the exact PI text round-trips
         doc = parse("<?mypi data?><doc/>", Node)
         pis = filter(x -> nodetype(x) == ProcessingInstruction, children(doc))
         @test length(pis) == 1
+        @test tag(pis[1]) == "mypi"
+        @test value(pis[1]) == "data"
 
         doc = parse("<doc><?inner-pi some data?></doc>", Node)
         root = children(doc)[1]
         pis = filter(x -> nodetype(x) == ProcessingInstruction, children(root))
         @test length(pis) == 1
+        @test tag(pis[1]) == "inner-pi"
+        @test value(pis[1]) == "some data"
     end
 
     @testset "PI with no data" begin
         doc = parse("<?mypi?><doc/>", Node)
         pis = filter(x -> nodetype(x) == ProcessingInstruction, children(doc))
         @test length(pis) == 1
+        @test tag(pis[1]) == "mypi"
+        @test value(pis[1]) === nothing
     end
 
     #==========================================================================#

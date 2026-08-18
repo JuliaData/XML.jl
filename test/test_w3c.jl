@@ -9,6 +9,9 @@
 #
 # We only run tests with ENTITIES="none" since XML.jl does not expand external entities.
 # We skip XML 1.1 tests (VERSION="1.1" or RECOMMENDATION="XML1.1").
+#
+# Tests with an OUTPUT attribute also pin the parsed VALUES: the referenced out/ file is
+# the expected parse result in canonical form, byte-compared in the last testset below.
 
 using XML
 using XML: Node, nodetype, Document
@@ -53,6 +56,9 @@ function _collect_tests!(tests, node, base_dir)
                 entities = get(attrs, "ENTITIES", "none"),  # testcases.dtd defaults ENTITIES to "none" when the attribute is omitted
                 id = get(attrs, "ID", ""),
                 uri = joinpath(base_dir, attrs["URI"]),
+                # OUTPUT points at the expected parse result in Second Canonical Form
+                # (testcases.dtd: James Clark's canonical XML + NOTATION declarations)
+                output = haskey(attrs, "OUTPUT") ? joinpath(base_dir, attrs["OUTPUT"]) : "",
                 version = get(attrs, "VERSION", "1.0"),
                 recommendation = get(attrs, "RECOMMENDATION", ""),
             ))
@@ -156,4 +162,147 @@ notwf_tests = filter(t -> t.type == "not-wf", xml10_tests)
         n_fail > 0 && @info "W3C not-wf: $n_fail not yet rejected (out-of-scope validity errors: DTD/entity)" examples=first(failures, 20)
         @info "W3C not-well-formed: $n_pass / $(n_pass + n_fail) rejected"
     end
+end
+
+#==============================================================================#
+#        Canonical-output comparison against the suite's out/ references       #
+#==============================================================================#
+# Tests with an OUTPUT attribute do dual duty (testcases.dtd): the document must parse,
+# and the data reported must match the referenced out/ file, which is in "Second
+# Canonical Form" — James Clark's canonical XML (xmltest/canonxml.html in the suite)
+# plus a DOCTYPE carrying the NOTATION declarations when the document declares any.
+# Canonical form makes every normalization decision byte-visible: attributes sorted,
+# whitespace as explicit character references, entities expanded, comments and the
+# XML declaration dropped, and no prolog/epilog whitespace (CanonXML ::= Pi* element Pi*).
+
+function canonical_escape(io::IO, s::AbstractString)
+    # Datachar: & < > " as named entities, tab/LF/CR as decimal references. All escaped
+    # bytes are ASCII and multibyte UTF-8 units are all > 0x7F, so a byte loop can
+    # neither split nor misread a multibyte character.
+    for b in codeunits(s)
+        if b == UInt8('&');      write(io, "&amp;")
+        elseif b == UInt8('<');  write(io, "&lt;")
+        elseif b == UInt8('>');  write(io, "&gt;")
+        elseif b == UInt8('"');  write(io, "&quot;")
+        elseif b == 0x09;        write(io, "&#9;")
+        elseif b == 0x0A;        write(io, "&#10;")
+        elseif b == 0x0D;        write(io, "&#13;")
+        else;                    write(io, b)
+        end
+    end
+end
+
+function canonical_xml(io::IO, n)
+    nt = nodetype(n)
+    if nt == XML.Document
+        # CanonXML ::= Pi* element Pi* — document-level whitespace, comments, the XML
+        # declaration and the DOCTYPE are absent from the canonical form (the
+        # notation-carrying DOCTYPE of Second Canonical Form is a ledgered gap below)
+        for c in XML.children(n)
+            ct = nodetype(c)
+            (ct == XML.Element || ct == XML.ProcessingInstruction) && canonical_xml(io, c)
+        end
+    elseif nt == XML.Element
+        write(io, '<'); write(io, XML.tag(n))
+        atts = XML.attributes(n)
+        if atts !== nothing
+            for (name, val) in sort!(collect(atts); by = first)  # lexicographic, Unicode bit order
+                write(io, ' '); write(io, name); write(io, "=\"")
+                canonical_escape(io, val); write(io, '"')
+            end
+        end
+        write(io, '>')
+        foreach(c -> canonical_xml(io, c), XML.children(n))
+        write(io, "</"); write(io, XML.tag(n)); write(io, '>')
+    elseif nt == XML.Text || nt == XML.CData
+        v = XML.value(n)
+        v === nothing || canonical_escape(io, v)
+    elseif nt == XML.ProcessingInstruction
+        write(io, "<?"); write(io, XML.tag(n)); write(io, ' ')  # target/data separator: always one space
+        v = XML.value(n)
+        v === nothing || write(io, v)  # PI data is written raw; Datachar escaping does not apply
+        write(io, "?>")
+    end  # Declaration, Comment, DTD: not part of the canonical form
+    return io
+end
+canonical_xml(n) = String(take!(canonical_xml(IOBuffer(), n)))
+
+# Ledger of the reference pairs whose canonical form XML.jl does not reproduce yet,
+# keyed by the conformance feature that closes them. Every entry runs as @test_broken:
+# when a feature lands, its cases error as unexpected passes and must move out of here.
+const CANON_KNOWN_FAIL = Dict{String, String}()
+let
+    eol = "line-end normalization (XML 1.0 §2.11): literal CR / CR LF in content must be read as LF"
+    ent = "internal entity expansion (§4.4): entities declared in the internal subset are reported unexpanded"
+    att = "ATTLIST default attribute injection (§3.3.2)"
+    ntn = "notation declarations: Second Canonical Form prepends a DOCTYPE carrying <!NOTATION …>"
+    for (reason, ids) in (
+        eol => ["valid-sa-047", "valid-sa-059", "valid-sa-092", "valid-sa-098", "valid-sa-116",
+                "ibm-valid-P01-ibm01v01.xml", "ibm-valid-P39-ibm39v01.xml", "ibm-valid-P40-ibm40v01.xml",
+                "ibm-valid-P41-ibm41v01.xml", "ibm-valid-P42-ibm42v01.xml", "ibm-valid-P44-ibm44v01.xml",
+                "ibm-valid-P45-ibm45v01.xml", "ibm-valid-P47-ibm47v01.xml", "ibm-valid-P51-ibm51v01.xml",
+                "ibm-valid-P52-ibm52v01.xml", "ibm-valid-P54-ibm54v02.xml", "ibm-valid-P54-ibm54v03.xml",
+                "ibm-valid-P55-ibm55v01.xml", "ibm-valid-P56-ibm56v02.xml", "ibm-valid-P56-ibm56v03.xml",
+                "ibm-valid-P56-ibm56v04.xml", "ibm-valid-P56-ibm56v05.xml", "ibm-valid-P56-ibm56v06.xml",
+                "ibm-valid-P56-ibm56v07.xml", "ibm-valid-P56-ibm56v09.xml", "ibm-valid-P56-ibm56v10.xml",
+                "ibm-valid-P59-ibm59v01.xml", "ibm-valid-P59-ibm59v02.xml", "ibm-valid-P60-ibm60v01.xml",
+                "ibm-valid-P60-ibm60v02.xml", "ibm-valid-P60-ibm60v03.xml", "ibm-valid-P60-ibm60v04.xml",
+                "ibm-valid-P66-ibm66v01.xml", "ibm-invalid-P39-ibm39i01.xml", "ibm-invalid-P39-ibm39i02.xml",
+                "ibm-invalid-P39-ibm39i03.xml", "ibm-invalid-P39-ibm39i04.xml", "ibm-invalid-P41-ibm41i01.xml",
+                "ibm-invalid-P41-ibm41i02.xml", "ibm-invalid-P45-ibm45i01.xml", "ibm-invalid-P51-ibm51i03.xml",
+                "ibm-invalid-P56-ibm56i01.xml", "ibm-invalid-P56-ibm56i02.xml", "ibm-invalid-P56-ibm56i05.xml",
+                "ibm-invalid-P56-ibm56i06.xml", "ibm-invalid-P56-ibm56i07.xml", "ibm-invalid-P56-ibm56i08.xml",
+                "ibm-invalid-P56-ibm56i09.xml", "ibm-invalid-P56-ibm56i10.xml", "ibm-invalid-P56-ibm56i11.xml",
+                "ibm-invalid-P56-ibm56i12.xml", "ibm-invalid-P56-ibm56i13.xml", "ibm-invalid-P56-ibm56i14.xml",
+                "ibm-invalid-P56-ibm56i15.xml", "ibm-invalid-P56-ibm56i16.xml", "ibm-invalid-P56-ibm56i17.xml",
+                "ibm-invalid-P56-ibm56i18.xml", "ibm-invalid-P59-ibm59i01.xml", "ibm-invalid-P60-ibm60i01.xml",
+                "ibm-invalid-P60-ibm60i02.xml", "ibm-invalid-P60-ibm60i03.xml", "ibm-invalid-P60-ibm60i04.xml"],
+        ent => ["valid-sa-023", "valid-sa-024", "valid-sa-053", "valid-sa-066", "valid-sa-068",
+                "valid-sa-085", "valid-sa-086", "valid-sa-087", "valid-sa-088", "valid-sa-089",
+                "valid-sa-108", "valid-sa-110", "valid-sa-114", "valid-sa-115", "valid-sa-117",
+                "valid-sa-118", "v-pe03",
+                "ibm-valid-P09-ibm09v01.xml", "ibm-valid-P09-ibm09v02.xml", "ibm-valid-P09-ibm09v04.xml",
+                "ibm-valid-P10-ibm10v01.xml", "ibm-valid-P10-ibm10v02.xml", "ibm-valid-P10-ibm10v03.xml",
+                "ibm-valid-P10-ibm10v04.xml", "ibm-valid-P10-ibm10v05.xml", "ibm-valid-P10-ibm10v06.xml",
+                "ibm-valid-P10-ibm10v07.xml", "ibm-valid-P10-ibm10v08.xml"],
+        att => ["valid-sa-045", "valid-sa-046", "valid-sa-058", "valid-sa-080", "valid-sa-094",
+                "valid-sa-096", "valid-sa-111", "v-sgml01"],
+        ntn => ["valid-sa-069", "valid-sa-076", "valid-sa-090", "valid-sa-091", "sa02",
+                "ibm-valid-P56-ibm56v08.xml", "ibm-valid-P57-ibm57v01.xml", "ibm-valid-P58-ibm58v01.xml",
+                "ibm-valid-P58-ibm58v02.xml", "ibm-valid-P82-ibm82v01.xml",
+                "ibm-invalid-P58-ibm58i01.xml", "ibm-invalid-P58-ibm58i02.xml"],
+        eol * " + " * att => ["valid-sa-044", "ibm-invalid-P56-ibm56i03.xml"],
+        eol * " + " * ent => ["ibm-valid-P29-ibm29v01.xml", "ibm-valid-P43-ibm43v01.xml",
+                              "ibm-valid-P67-ibm67v01.xml"],
+    )
+        for id in ids
+            CANON_KNOWN_FAIL[id] = reason
+        end
+    end
+end
+
+canon_tests = filter(t -> !isempty(t.output), xml10_tests)
+
+@testset "Canonical output matches the suite's out/ references" begin
+    # Scope pin: the xmlts20130923 suite carries 262 reference pairs reachable at
+    # ENTITIES="none" / XML 1.0. A lower count means the collector or a filter regressed.
+    @test count(t -> isfile(t.uri) && isfile(t.output), canon_tests) == 262
+    n_conforming = 0
+    n_known = 0
+    regressions = String[]
+    for t in canon_tests
+        (isfile(t.uri) && isfile(t.output)) || continue
+        doc = read(t.uri, Node; wellformed = :strict)
+        ok = canonical_xml(doc) == String(read(t.output))
+        if haskey(CANON_KNOWN_FAIL, t.id)
+            @test_broken ok  # ledgered gap: flips to an unexpected pass when its feature lands
+            n_known += 1
+        else
+            ok || push!(regressions, t.id)
+            @test ok
+            n_conforming += ok
+        end
+    end
+    isempty(regressions) || @warn "canonical-output regressions" regressions
+    @info "W3C canonical output: $n_conforming byte-identical, $n_known ledgered gaps (CANON_KNOWN_FAIL)"
 end
