@@ -47,6 +47,9 @@ end
 cell("build FlatNode", @benchmark(parse($xml, FlatNode)); alloc = true)
 cell("build Node",     @benchmark(parse($xml, Node));     alloc = true)
 cell("build EzXML",    @benchmark(EzXML.parsexml($xml)))   # C-heap tree: Julia alloc not meaningful
+# LazyNode materializes nothing, so its "build" is the document entry alone: one line-end
+# scan of the source (§2.11), allocation-free, proportional to document size.
+cell("open LazyNode",  @benchmark(parse($xml, LazyNode));  alloc = true)
 
 # ── handles for the access benchmarks ──
 const F = parse(xml, FlatNode)
