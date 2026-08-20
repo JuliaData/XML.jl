@@ -3362,6 +3362,35 @@ end
                 @test measure(clean) == 0
             end
         end
+
+        @testset "every raw-string entry normalizes; bridges inherit it" begin
+            # §2.11 applies at each constructor that can be handed a raw document, not only
+            # at `parse`/`read`: `LazyNode(data, nodetype)` and `Cursor(data, startpos)` are
+            # public entries too. The bridges then receive already-normalized data and skip
+            # the scan, so they are asserted here rather than assumed.
+            crlf = "<r>\r\n  <a>x\r\ny</a>\r\n</r>"
+
+            lz = LazyNode(crlf, Document)                       # public two-argument entry
+            @test value(only(children(only(elements(only(elements(lz))))))) == "x\ny"
+
+            function cursor_values(c)
+                out = String[]
+                while next!(c) !== nothing
+                    v = value(c)
+                    v === nothing || push!(out, String(v))
+                end
+                out
+            end
+            @test all(v -> !occursin('\r', v), cursor_values(Cursor(crlf)))
+
+            # start offsets are translated into the normalized copy, so a subtree cursor
+            # opened on the raw string still lands on the right element
+            apos = findfirst("<a>", crlf).start
+            @test any(==("x\ny"), cursor_values(Cursor(crlf, apos)))
+
+            # the LazyNode → Cursor bridge walks the normalized copy, not the raw input
+            @test any(==("x\ny"), cursor_values(Cursor(only(elements(only(elements(lz)))))))
+        end
     end
 
     @testset "Declaration attributes" begin

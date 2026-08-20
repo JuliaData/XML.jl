@@ -32,9 +32,15 @@ struct LazyNode{S <: AbstractString}
     nodetype::NodeType
 end
 
-function LazyNode(data::S, nt::NodeType) where {S <: AbstractString}
-    LazyNode{S}(data, Token(TokenKinds.TEXT, SubString(data, 1, 0)), nt)
-end
+# Public raw-string entry: §2.11 applies here, exactly as it does at `parse`/`read`. Without
+# it a hand-built `LazyNode(raw, Document)` walks un-normalized data and hands CR to the
+# application, and the `Cursor(::LazyNode)` bridge could not trust its input.
+LazyNode(data::AbstractString, nt::NodeType) = _lazynode_at(_normalize_input_eol(data), nt)
+
+# `d` is ALREADY §2.11-normalized — no scan. Parametric on `d`'s own type, so a rewritten
+# document (always a `String`) builds `LazyNode{String}`.
+@inline _lazynode_at(d::S, nt::NodeType) where {S <: AbstractString} =
+    LazyNode{S}(d, Token(TokenKinds.TEXT, SubString(d, 1, 0)), nt)
 
 nodetype(n::LazyNode) = n.nodetype
 
@@ -688,7 +694,7 @@ Base.length(n::LazyNode) = length(children(n))
 
 #-----------------------------------------------------------------------------# parse / read
 Base.parse(::Type{LazyNode}, xml::AbstractString) = parse(xml, LazyNode)
-Base.parse(xml::AbstractString, ::Type{LazyNode}) = LazyNode(_normalize_input_eol(_drop_bom(String(xml))), Document)
+Base.parse(xml::AbstractString, ::Type{LazyNode}) = _lazynode_at(_normalize_input_eol(_drop_bom(String(xml))), Document)
 
 Base.read(filename::AbstractString, ::Type{LazyNode}) = parse(String(_normalize_bom(read(filename))), LazyNode)
 Base.read(io::IO, ::Type{LazyNode}) = parse(String(_normalize_bom(read(io))), LazyNode)
