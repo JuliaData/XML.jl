@@ -4074,6 +4074,80 @@ end
     end
 end
 
+#==============================================================================#
+#                      SOURCE STRING TYPE — LAZY READERS                       #
+#==============================================================================#
+# A document handed in as some other `AbstractString` — a `StringView` over a memory-mapped
+# file being the documented case — must reach the lazy readers uncopied, and its attributes
+# must materialize by copying their own bytes rather than rebuilding the document (#134).
+# A minimal wrapper stands in for such a source, so the suite needs no extra dependency.
+struct WrappedSource <: AbstractString
+    s::String
+end
+Base.ncodeunits(w::WrappedSource) = ncodeunits(w.s)
+Base.codeunit(w::WrappedSource) = codeunit(w.s)
+Base.codeunit(w::WrappedSource, i::Integer) = codeunit(w.s, i)
+Base.isvalid(w::WrappedSource, i::Integer) = isvalid(w.s, i)
+Base.iterate(w::WrappedSource, i::Integer = firstindex(w.s)) = iterate(w.s, i)
+Base.thisind(w::WrappedSource, i::Int) = thisind(w.s, i)
+
+@testset "lazy readers keep the source string type" begin
+    xml = "<root><c r=\"A1\" e=\"a&amp;b\">té xt</c></root>"
+    src = WrappedSource(xml)
+    lazy_c(s) = only(elements(only(elements(parse(s, LazyNode)))))
+
+    @testset "the entries hand the source through, uncopied" begin
+        @test parse(src, LazyNode) isa LazyNode{WrappedSource}
+        @test parse(src, Cursor) isa Cursor{WrappedSource}
+        @test parse(Cursor, src) isa Cursor{WrappedSource}
+        @test parse(xml, LazyNode) isa LazyNode{String}     # the common path is unchanged
+        @test parse(xml, Cursor) isa Cursor{String}
+    end
+
+    @testset "accessors read the same values through the wrapper" begin
+        el = lazy_c(src)
+        @test tag(el) == "c"
+        @test value(only(children(el))) == "té xt"
+        @test get(el, "r", "") == "A1"
+        @test tag(el) == tag(lazy_c(xml))
+    end
+
+    @testset "attributes materialize as SubString{String} from any source" begin
+        # The dict's element type is `SubString{String}` whatever the document is, so a
+        # non-String source has each attribute's own bytes copied. Converting the token view
+        # instead rebuilds the whole document once per attribute.
+        a = attributes(lazy_c(src))
+        @test a isa XML.Attributes{SubString{String}}
+        @test a["r"] == "A1"
+        @test a["e"] == "a&b"                               # entity-decoded values convert too
+        @test a == attributes(lazy_c(xml))
+
+        cur = parse(src, Cursor)
+        while next!(cur) !== nothing && tag(cur) != "c" end
+        @test attributes(cur) isa XML.Attributes{SubString{String}}
+        @test attributes(cur)["e"] == "a&b"
+    end
+
+    @testset "eachattribute yields its declared element type" begin
+        # `collect` sizes its result from `eltype`, so a mismatch converts every pair — the
+        # same whole-document rebuild the materialized dict used to pay.
+        pairs = collect(XML.eachattribute(lazy_c(src)))
+        @test eltype(pairs) === Pair{SubString{String}, SubString{String}}
+        @test pairs == ["r" => "A1", "e" => "a&b"]
+    end
+
+    @testset "a String document keeps the identity path" begin
+        s = SubString("abc", 1, 3)
+        @test XML._as_substring(s) === s                    # the token view already is one
+        @test XML._as_substring("abc") == "abc"
+        measure(v) = @allocated XML._as_substring(v)        # function barrier
+        measure(s)
+        if Base.JLOptions().code_coverage == 0      # coverage counters skew @allocated
+            @test measure(s) == 0
+        end
+    end
+end
+
 # Each included suite is wrapped in a @testset so a load-time error in one file can't skip the rest.
 @testset "test_abstracttrees_ext" begin include("test_abstracttrees_ext.jl") end
 @testset "test_pugixml" begin include("test_pugixml.jl") end

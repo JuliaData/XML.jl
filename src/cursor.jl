@@ -56,7 +56,7 @@ end
     st = _CURSOR_XT.StatefulTokenizer(_CURSOR_XT.Tokenizer(d, pos))
     Cursor{S}(st, _CURSOR_XT.no_token(d), Document, 0, 0, false, false)
 end
-Base.parse(::Type{Cursor}, xml::AbstractString) = Cursor(String(xml))
+Base.parse(::Type{Cursor}, xml::AbstractString) = Cursor(xml)
 
 """
     Cursor(data::AbstractString, startpos::Integer)
@@ -200,7 +200,7 @@ function attributes(c::Cursor)
         name = raw(tok, _data(c))
         r = iterate(it)
         r === nothing && break
-        push!(attrs, name => _cursor_decode_attr(r[1], _data(c)))
+        push!(attrs, _as_substring(name) => _as_substring(_cursor_decode_attr(r[1], _data(c))))
     end
     isempty(attrs) ? nothing : Attributes(attrs)
 end

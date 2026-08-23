@@ -109,7 +109,7 @@ function attributes(n::LazyNode)
         name = raw(tok, n.data)
         result = iterate(iter)
         result === nothing && break
-        push!(attrs, name => _decode_attr(result[1], n.data))
+        push!(attrs, _as_substring(name) => _as_substring(_decode_attr(result[1], n.data)))
     end
     isempty(attrs) ? nothing : Attributes(attrs)
 end
@@ -157,9 +157,10 @@ Base.eltype(::Type{<:LazyAttrIterator}) = Pair{SubString{String}, SubString{Stri
     eachattribute(n::LazyNode)
 
 Lazy iterator yielding decoded `name => value` pairs for the attributes of `n` (an
-`Element` or `Declaration`). Iteration steps allocate nothing — no [`Attributes`](@ref)
-dict, no intermediate vector, no per-pair boxing; creating the iterator costs one small
-object — suitable for hot paths that scan every attribute.
+`Element` or `Declaration`). Over a `String` document, iteration steps allocate nothing — no
+[`Attributes`](@ref) dict, no intermediate vector, no per-pair boxing; creating the iterator
+costs one small object — suitable for hot paths that scan every attribute. Over any other
+source string type each pair copies its own bytes, since the pairs are `SubString{String}`.
 
 The iterator holds one shared cursor: every loop over the same object resumes after the
 last yielded pair, and an exhausted iterator stays exhausted — call `eachattribute`
@@ -190,7 +191,7 @@ end
     isnothing(r) && (it.active = false; return nothing)
     vtok, st = r
     it.state = st
-    ((name => _decode_attr(vtok, it.data)), nothing)
+    ((_as_substring(name) => _as_substring(_decode_attr(vtok, it.data))), nothing)
 end
 
 #-----------------------------------------------------------------------------# foreach_attr
@@ -694,7 +695,7 @@ Base.length(n::LazyNode) = length(children(n))
 
 #-----------------------------------------------------------------------------# parse / read
 Base.parse(::Type{LazyNode}, xml::AbstractString) = parse(xml, LazyNode)
-Base.parse(xml::AbstractString, ::Type{LazyNode}) = _lazynode_at(_normalize_input_eol(_drop_bom(String(xml))), Document)
+Base.parse(xml::AbstractString, ::Type{LazyNode}) = _lazynode_at(_normalize_input_eol(_drop_bom(xml)), Document)
 
 Base.read(filename::AbstractString, ::Type{LazyNode}) = parse(String(_normalize_bom(read(filename))), LazyNode)
 Base.read(io::IO, ::Type{LazyNode}) = parse(String(_normalize_bom(read(io))), LazyNode)

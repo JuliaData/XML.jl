@@ -144,6 +144,24 @@ function _rewrite_content_eol(s::AbstractString)
     String(take!(io))
 end
 
+# An attribute name or value as the `SubString{String}` that the materialized `Attributes`
+# dict and `eachattribute`'s element type are built from. When the document is a `String`
+# the token view already is one and this is the identity; any other source — a `StringView`
+# over a memory-mapped file, say — has its bytes copied here, and only its own. The generic
+# routes (`convert`, `String(::AbstractString)`, `collect(codeunits(…))`, `copyto!`) walk the
+# whole document once per attribute instead, which is quadratic in document size (#134).
+@inline _as_substring(s::SubString{String}) = s
+@inline _as_substring(s::String) = SubString(s)
+function _as_substring(s::AbstractString)
+    cu = codeunits(s)
+    n = length(cu)
+    bytes = Vector{UInt8}(undef, n)
+    @inbounds for i in 1:n
+        bytes[i] = cu[i]
+    end
+    SubString(String(bytes))
+end
+
 # The rewrite result is wrapped back into `SubString` so both paths return the same
 # concrete type: every reader's decode funnel calls this on its hot path, and a
 # `Union{SubString{String}, String}` return would heap-box the dominant clean-path
