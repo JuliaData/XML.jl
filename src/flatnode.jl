@@ -279,7 +279,7 @@ end
 
 #-----------------------------------------------------------------------------# parse / read entry points
 Base.parse(xml::AbstractString, ::Type{FlatNode}; wellformed::Symbol=:structural) =
-    _flat_parse(_drop_bom(String(xml)), Val(wellformed))
+    _flat_parse(_normalize_input_eol(_drop_bom(String(xml))), Val(wellformed))
 Base.parse(::Type{FlatNode}, xml::AbstractString; wellformed::Symbol=:structural) =
     parse(xml, FlatNode; wellformed)
 Base.read(filename::AbstractString, ::Type{FlatNode}; wellformed::Symbol=:structural) =

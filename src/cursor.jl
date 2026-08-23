@@ -45,10 +45,18 @@ aliasing-contract note on [`next!`](@ref).
 """
 function Cursor(data::S) where {S <: AbstractString}
     data = _drop_bom(data)   # a leading U+FEFF BOM char is an encoding signature, not content (§4.3.3)
-    st = _CURSOR_XT.StatefulTokenizer(_CURSOR_XT.Tokenizer(data, 1))
-    Cursor{S}(st, _CURSOR_XT.no_token(data), Document, 0, 0, false, false)
+    _cursor_at(_normalize_input_eol(data), 1)   # §2.11: line ends normalize on input, before parsing
 end
-Base.parse(::Type{Cursor}, xml::AbstractString) = Cursor(String(xml))
+
+# `d` is ALREADY §2.11-normalized: no scan, no restart. Parametric on `d`'s own type so a
+# rewritten document (always a `String`) yields `Cursor{String}` without re-dispatching
+# through the public constructor — which is what the old `return Cursor(d)` restart bought,
+# at the price of a second, provably fruitless CR scan of the whole document.
+@inline function _cursor_at(d::S, pos::Integer) where {S <: AbstractString}
+    st = _CURSOR_XT.StatefulTokenizer(_CURSOR_XT.Tokenizer(d, pos))
+    Cursor{S}(st, _CURSOR_XT.no_token(d), Document, 0, 0, false, false)
+end
+Base.parse(::Type{Cursor}, xml::AbstractString) = Cursor(xml)
 
 """
     Cursor(data::AbstractString, startpos::Integer)
@@ -60,20 +68,21 @@ The first [`next!`](@ref) lands on whatever element begins at `startpos`, at dep
 auto-stops at its subtree boundary (the depth break). LazyNode-agnostic primitive.
 """
 function Cursor(data::S, startpos::Integer) where {S <: AbstractString}
-    st = _CURSOR_XT.StatefulTokenizer(_CURSOR_XT.Tokenizer(data, startpos))
-    Cursor{S}(st, _CURSOR_XT.no_token(data), Document, 0, 0, false, false)
+    d = _normalize_input_eol(data)   # §2.11 — same input-side normalization as Cursor(data)
+    _cursor_at(d, d === data ? Int(startpos) : _translate_eol_pos(data, Int(startpos)))
 end
 
 """
     Cursor(node::LazyNode)
 
 Convenience bridge: a cursor positioned to walk `node` and its subtree — the
-inverse of the `LazyNode(c)` snapshot. Delegates to `Cursor(data, startpos)` with
-`node`'s source string and start offset; it is the only place `Cursor` mentions
+inverse of the `LazyNode(c)` snapshot. A `LazyNode`'s source string is §2.11-normalized
+by construction (every `LazyNode` entry point normalizes), so this bridge skips the CR
+scan the raw-string constructors must perform; it is the only place `Cursor` mentions
 `LazyNode`, and it is an optional, removable convenience (a consumer that tracks
 subtree start offsets directly can call the primitive `Cursor(data, startpos)`).
 """
-Cursor(node::LazyNode) = Cursor(node.data, node.token.offset + 1)
+Cursor(node::LazyNode) = _cursor_at(node.data, node.token.offset + 1)
 
 @inline _data(c::Cursor) = c.st.t.data
 # A fresh token stream positioned at the current node — mirrors LazyNode's
@@ -191,7 +200,7 @@ function attributes(c::Cursor)
         name = raw(tok, _data(c))
         r = iterate(it)
         r === nothing && break
-        push!(attrs, name => _cursor_decode_attr(r[1], _data(c)))
+        push!(attrs, _as_substring(name) => _as_substring(_cursor_decode_attr(r[1], _data(c))))
     end
     isempty(attrs) ? nothing : Attributes(attrs)
 end

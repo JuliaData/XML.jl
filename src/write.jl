@@ -1,6 +1,9 @@
 #-----------------------------------------------------------------------------# show (text/xml)
 
-# Write XML-escaped content directly to IO (single pass, no intermediate string)
+# Write XML-escaped content directly to IO (single pass, no intermediate string).
+# Literal CR is escaped as a character reference: a conforming reader normalizes literal
+# CR / CR LF in content to LF (XML 1.0 §2.11), so only the reference form survives a
+# round-trip — the character-data counterpart of the attribute rule below.
 function _write_escaped(io::IO, s::String)
     start = 1
     i = 1
@@ -12,6 +15,7 @@ function _write_escaped(io::IO, s::String)
         elseif b == UInt8('>'); "&gt;"
         elseif b == UInt8('"'); "&quot;"
         elseif b == UInt8('\''); "&apos;"
+        elseif b == UInt8('\r'); "&#13;"
         else
             i += 1
             continue

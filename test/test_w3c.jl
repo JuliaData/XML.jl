@@ -233,31 +233,12 @@ canonical_xml(n) = String(take!(canonical_xml(IOBuffer(), n)))
 # must move out of here.
 const CANON_KNOWN_FAIL = Dict{String, String}()
 let
-    eol = "line-end normalization (XML 1.0 §2.11, #129): literal CR / CR LF in content must be read as LF"
+    # Line-end normalization (§2.11, #129) landed: its 62 cases moved out of this ledger,
+    # and the cases that combined it with another gap now sit under that remaining gap.
     ent = "internal entity expansion (§4.4, #130): entities declared in the internal subset are reported unexpanded"
     att = "ATTLIST default attribute injection (§3.3.2, #131)"
     ntn = "notation declarations: Second Canonical Form prepends a DOCTYPE carrying <!NOTATION …>"
     for (reason, ids) in (
-        eol => ["valid-sa-047", "valid-sa-059", "valid-sa-092", "valid-sa-098", "valid-sa-116",
-                "ibm-valid-P01-ibm01v01.xml", "ibm-valid-P39-ibm39v01.xml", "ibm-valid-P40-ibm40v01.xml",
-                "ibm-valid-P41-ibm41v01.xml", "ibm-valid-P42-ibm42v01.xml", "ibm-valid-P44-ibm44v01.xml",
-                "ibm-valid-P45-ibm45v01.xml", "ibm-valid-P47-ibm47v01.xml", "ibm-valid-P51-ibm51v01.xml",
-                "ibm-valid-P52-ibm52v01.xml", "ibm-valid-P54-ibm54v02.xml", "ibm-valid-P54-ibm54v03.xml",
-                "ibm-valid-P55-ibm55v01.xml", "ibm-valid-P56-ibm56v02.xml", "ibm-valid-P56-ibm56v03.xml",
-                "ibm-valid-P56-ibm56v04.xml", "ibm-valid-P56-ibm56v05.xml", "ibm-valid-P56-ibm56v06.xml",
-                "ibm-valid-P56-ibm56v07.xml", "ibm-valid-P56-ibm56v09.xml", "ibm-valid-P56-ibm56v10.xml",
-                "ibm-valid-P59-ibm59v01.xml", "ibm-valid-P59-ibm59v02.xml", "ibm-valid-P60-ibm60v01.xml",
-                "ibm-valid-P60-ibm60v02.xml", "ibm-valid-P60-ibm60v03.xml", "ibm-valid-P60-ibm60v04.xml",
-                "ibm-valid-P66-ibm66v01.xml", "ibm-invalid-P39-ibm39i01.xml", "ibm-invalid-P39-ibm39i02.xml",
-                "ibm-invalid-P39-ibm39i03.xml", "ibm-invalid-P39-ibm39i04.xml", "ibm-invalid-P41-ibm41i01.xml",
-                "ibm-invalid-P41-ibm41i02.xml", "ibm-invalid-P45-ibm45i01.xml", "ibm-invalid-P51-ibm51i03.xml",
-                "ibm-invalid-P56-ibm56i01.xml", "ibm-invalid-P56-ibm56i02.xml", "ibm-invalid-P56-ibm56i05.xml",
-                "ibm-invalid-P56-ibm56i06.xml", "ibm-invalid-P56-ibm56i07.xml", "ibm-invalid-P56-ibm56i08.xml",
-                "ibm-invalid-P56-ibm56i09.xml", "ibm-invalid-P56-ibm56i10.xml", "ibm-invalid-P56-ibm56i11.xml",
-                "ibm-invalid-P56-ibm56i12.xml", "ibm-invalid-P56-ibm56i13.xml", "ibm-invalid-P56-ibm56i14.xml",
-                "ibm-invalid-P56-ibm56i15.xml", "ibm-invalid-P56-ibm56i16.xml", "ibm-invalid-P56-ibm56i17.xml",
-                "ibm-invalid-P56-ibm56i18.xml", "ibm-invalid-P59-ibm59i01.xml", "ibm-invalid-P60-ibm60i01.xml",
-                "ibm-invalid-P60-ibm60i02.xml", "ibm-invalid-P60-ibm60i03.xml", "ibm-invalid-P60-ibm60i04.xml"],
         ent => ["valid-sa-023", "valid-sa-024", "valid-sa-053", "valid-sa-066", "valid-sa-068",
                 "valid-sa-085", "valid-sa-086", "valid-sa-087", "valid-sa-088", "valid-sa-089",
                 "valid-sa-108", "valid-sa-110", "valid-sa-114", "valid-sa-115", "valid-sa-117",
@@ -265,16 +246,15 @@ let
                 "ibm-valid-P09-ibm09v01.xml", "ibm-valid-P09-ibm09v02.xml", "ibm-valid-P09-ibm09v04.xml",
                 "ibm-valid-P10-ibm10v01.xml", "ibm-valid-P10-ibm10v02.xml", "ibm-valid-P10-ibm10v03.xml",
                 "ibm-valid-P10-ibm10v04.xml", "ibm-valid-P10-ibm10v05.xml", "ibm-valid-P10-ibm10v06.xml",
-                "ibm-valid-P10-ibm10v07.xml", "ibm-valid-P10-ibm10v08.xml"],
-        att => ["valid-sa-045", "valid-sa-046", "valid-sa-058", "valid-sa-080", "valid-sa-094",
-                "valid-sa-096", "valid-sa-111", "v-sgml01"],
+                "ibm-valid-P10-ibm10v07.xml", "ibm-valid-P10-ibm10v08.xml",
+                "ibm-valid-P29-ibm29v01.xml", "ibm-valid-P43-ibm43v01.xml", "ibm-valid-P67-ibm67v01.xml"],
+        att => ["valid-sa-044", "valid-sa-045", "valid-sa-046", "valid-sa-058", "valid-sa-080",
+                "valid-sa-094", "valid-sa-096", "valid-sa-111", "v-sgml01",
+                "ibm-invalid-P56-ibm56i03.xml"],
         ntn => ["valid-sa-069", "valid-sa-076", "valid-sa-090", "valid-sa-091", "sa02",
                 "ibm-valid-P56-ibm56v08.xml", "ibm-valid-P57-ibm57v01.xml", "ibm-valid-P58-ibm58v01.xml",
                 "ibm-valid-P58-ibm58v02.xml", "ibm-valid-P82-ibm82v01.xml",
                 "ibm-invalid-P58-ibm58i01.xml", "ibm-invalid-P58-ibm58i02.xml"],
-        eol * " + " * att => ["valid-sa-044", "ibm-invalid-P56-ibm56i03.xml"],
-        eol * " + " * ent => ["ibm-valid-P29-ibm29v01.xml", "ibm-valid-P43-ibm43v01.xml",
-                              "ibm-valid-P67-ibm67v01.xml"],
     )
         for id in ids
             CANON_KNOWN_FAIL[id] = reason

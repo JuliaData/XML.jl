@@ -30,7 +30,7 @@ Base.read(io::IO, ::Type{Node}; wellformed::Symbol=:structural) = parse(String(_
 # so a UTF-16 file needs this path (like read(_, Node)) to be transcoded.
 Base.read(filename::AbstractString, ::Type{Cursor}) = Cursor(String(_normalize_bom(read(filename))))
 Base.read(io::IO, ::Type{Cursor}) = Cursor(String(_normalize_bom(read(io))))
-Base.parse(xml::AbstractString, ::Type{Cursor}) = Cursor(String(xml))
+Base.parse(xml::AbstractString, ::Type{Cursor}) = Cursor(xml)
 
 #-----------------------------------------------------------------------------# parse
 # A leading U+FEFF (BOM as a character) isn't content — drop it so a BOM'd in-memory string
@@ -46,11 +46,11 @@ _drop_bom(s::AbstractString) = startswith(s, Char(0xFEFF)) ? SubString(s, nextin
 Base.parse(::Type{Node}, xml::AbstractString; wellformed::Symbol=:structural) = parse(xml, Node; wellformed)
 
 function Base.parse(xml::AbstractString, ::Type{Node}; wellformed::Symbol=:structural)
-    _parse(_drop_bom(String(xml)), String, unescape, Val(wellformed))
+    _parse(_normalize_input_eol(_drop_bom(String(xml))), String, unescape, Val(wellformed))
 end
 
 function Base.parse(xml::AbstractString, ::Type{Node{SubString{String}}}; wellformed::Symbol=:structural)
-    _parse(_drop_bom(String(xml)), SubString{String}, identity, Val(wellformed))
+    _parse(_normalize_input_eol(_drop_bom(String(xml))), SubString{String}, identity, Val(wellformed))
 end
 
 # Convert a parser substring to the requested storage type — copy to a fresh String, or

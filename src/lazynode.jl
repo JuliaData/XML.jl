@@ -10,8 +10,10 @@ instead of building a full tree in memory.
 
 Supports the same read-only interface as `Node`: [`nodetype`](@ref), [`tag`](@ref),
 [`attributes`](@ref), [`value`](@ref), [`children`](@ref), plus integer and string indexing.
-Accessors return `SubString{String}` views into the original document, so navigating a large
-document through `LazyNode` does not duplicate its text data.
+Accessors return `SubString` views into the original document — over whatever string type the
+document was handed in as — so navigating a large document through `LazyNode` does not duplicate
+its text data. The materialized [`attributes`](@ref) dict is the one exception: its pairs are
+always `SubString{String}`, so a non-`String` document has each attribute's own bytes copied.
 
 # Performance — which reader to use
 
@@ -32,9 +34,15 @@ struct LazyNode{S <: AbstractString}
     nodetype::NodeType
 end
 
-function LazyNode(data::S, nt::NodeType) where {S <: AbstractString}
-    LazyNode{S}(data, Token(TokenKinds.TEXT, SubString(data, 1, 0)), nt)
-end
+# Public raw-string entry: §2.11 applies here, exactly as it does at `parse`/`read`. Without
+# it a hand-built `LazyNode(raw, Document)` walks un-normalized data and hands CR to the
+# application, and the `Cursor(::LazyNode)` bridge could not trust its input.
+LazyNode(data::AbstractString, nt::NodeType) = _lazynode_at(_normalize_input_eol(data), nt)
+
+# `d` is ALREADY §2.11-normalized — no scan. Parametric on `d`'s own type, so a rewritten
+# document (always a `String`) builds `LazyNode{String}`.
+@inline _lazynode_at(d::S, nt::NodeType) where {S <: AbstractString} =
+    LazyNode{S}(d, Token(TokenKinds.TEXT, SubString(d, 1, 0)), nt)
 
 nodetype(n::LazyNode) = n.nodetype
 
@@ -103,7 +111,7 @@ function attributes(n::LazyNode)
         name = raw(tok, n.data)
         result = iterate(iter)
         result === nothing && break
-        push!(attrs, name => _decode_attr(result[1], n.data))
+        push!(attrs, _as_substring(name) => _as_substring(_decode_attr(result[1], n.data)))
     end
     isempty(attrs) ? nothing : Attributes(attrs)
 end
@@ -151,9 +159,10 @@ Base.eltype(::Type{<:LazyAttrIterator}) = Pair{SubString{String}, SubString{Stri
     eachattribute(n::LazyNode)
 
 Lazy iterator yielding decoded `name => value` pairs for the attributes of `n` (an
-`Element` or `Declaration`). Iteration steps allocate nothing — no [`Attributes`](@ref)
-dict, no intermediate vector, no per-pair boxing; creating the iterator costs one small
-object — suitable for hot paths that scan every attribute.
+`Element` or `Declaration`). Over a `String` document, iteration steps allocate nothing — no
+[`Attributes`](@ref) dict, no intermediate vector, no per-pair boxing; creating the iterator
+costs one small object — suitable for hot paths that scan every attribute. Over any other
+source string type each pair copies its own bytes, since the pairs are `SubString{String}`.
 
 The iterator holds one shared cursor: every loop over the same object resumes after the
 last yielded pair, and an exhausted iterator stays exhausted — call `eachattribute`
@@ -184,7 +193,7 @@ end
     isnothing(r) && (it.active = false; return nothing)
     vtok, st = r
     it.state = st
-    ((name => _decode_attr(vtok, it.data)), nothing)
+    ((_as_substring(name) => _as_substring(_decode_attr(vtok, it.data))), nothing)
 end
 
 #-----------------------------------------------------------------------------# foreach_attr
@@ -688,7 +697,7 @@ Base.length(n::LazyNode) = length(children(n))
 
 #-----------------------------------------------------------------------------# parse / read
 Base.parse(::Type{LazyNode}, xml::AbstractString) = parse(xml, LazyNode)
-Base.parse(xml::AbstractString, ::Type{LazyNode}) = LazyNode(_drop_bom(String(xml)), Document)
+Base.parse(xml::AbstractString, ::Type{LazyNode}) = _lazynode_at(_normalize_input_eol(_drop_bom(xml)), Document)
 
 Base.read(filename::AbstractString, ::Type{LazyNode}) = parse(String(_normalize_bom(read(filename))), LazyNode)
 Base.read(io::IO, ::Type{LazyNode}) = parse(String(_normalize_bom(read(io))), LazyNode)
