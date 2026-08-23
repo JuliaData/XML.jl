@@ -10,8 +10,10 @@ instead of building a full tree in memory.
 
 Supports the same read-only interface as `Node`: [`nodetype`](@ref), [`tag`](@ref),
 [`attributes`](@ref), [`value`](@ref), [`children`](@ref), plus integer and string indexing.
-Accessors return `SubString{String}` views into the original document, so navigating a large
-document through `LazyNode` does not duplicate its text data.
+Accessors return `SubString` views into the original document — over whatever string type the
+document was handed in as — so navigating a large document through `LazyNode` does not duplicate
+its text data. The materialized [`attributes`](@ref) dict is the one exception: its pairs are
+always `SubString{String}`, so a non-`String` document has each attribute's own bytes copied.
 
 # Performance — which reader to use
 
