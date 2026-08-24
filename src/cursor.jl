@@ -45,13 +45,16 @@ aliasing-contract note on [`next!`](@ref).
 """
 function Cursor(data::S) where {S <: AbstractString}
     data = _drop_bom(data)   # a leading U+FEFF BOM char is an encoding signature, not content (§4.3.3)
-    _cursor_at(_normalize_input_eol(data), 1)   # §2.11: line ends normalize on input, before parsing
+    # §2.11 — rewritten here for a `String`-backed document, on read for any other source
+    _cursor_at(_normalize_input_eol(data), 1)
 end
 
-# `d` is ALREADY §2.11-normalized: no scan, no restart. Parametric on `d`'s own type so a
-# rewritten document (always a `String`) yields `Cursor{String}` without re-dispatching
-# through the public constructor — which is what the old `return Cursor(d)` restart bought,
-# at the price of a second, provably fruitless CR scan of the whole document.
+# `d` has had whatever §2.11 owes it at the entry: a `String`-backed document was rewritten
+# there, any other source was left for `_read_eol` to normalize value by value. Either way
+# nothing is scanned or restarted here. Parametric on `d`'s own type so a rewritten document
+# (always a `String`) yields `Cursor{String}` without re-dispatching through the public
+# constructor — which is what the old `return Cursor(d)` restart bought, at the price of a
+# second, provably fruitless CR scan of the whole document.
 @inline function _cursor_at(d::S, pos::Integer) where {S <: AbstractString}
     st = _CURSOR_XT.StatefulTokenizer(_CURSOR_XT.Tokenizer(d, pos))
     Cursor{S}(st, _CURSOR_XT.no_token(d), Document, 0, 0, false, false)
@@ -76,9 +79,10 @@ end
     Cursor(node::LazyNode)
 
 Convenience bridge: a cursor positioned to walk `node` and its subtree — the
-inverse of the `LazyNode(c)` snapshot. A `LazyNode`'s source string is §2.11-normalized
-by construction (every `LazyNode` entry point normalizes), so this bridge skips the CR
-scan the raw-string constructors must perform; it is the only place `Cursor` mentions
+inverse of the `LazyNode(c)` snapshot. Both readers treat a source the same way — a
+`String`-backed document was normalized when the `LazyNode` was built, any other source
+normalizes value by value — so the bridge hands the source straight through, with none of
+the scan the raw-string constructors owe their argument; it is the only place `Cursor` mentions
 `LazyNode`, and it is an optional, removable convenience (a consumer that tracks
 subtree start offsets directly can call the primitive `Cursor(data, startpos)`).
 """
@@ -158,7 +162,9 @@ function tag(c::Cursor)
 end
 
 # token-layer entity decode (inlined `_decode`; depends only on `unescape`, whose
-# `SubString` method returns concretely — both branches here are `SubString{String}`).
+# `SubString` method returns concretely). For a `String`-backed document `_read_eol` is the
+# identity, so both branches stay `SubString{String}`; for any other source it widens them,
+# which is the cost that source pays in place of an entry-time rewrite.
 @inline _cursor_decode(tok, data) =
     tok.has_entities ? unescape(_read_eol(raw(tok, data))) : _read_eol(raw(tok, data))
 

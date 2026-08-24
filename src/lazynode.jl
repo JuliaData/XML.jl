@@ -23,7 +23,8 @@ The trade-off is that it **re-tokenizes on every access**: one traversal is some
 `Node`, and *repeated* traversals are dramatically slower (each pass re-scans the whole document),
 whereas a `Node` tree is built once and then walked cheaply.
 
-- **Forward streaming of a large document** → [`Cursor`](@ref) — fastest, allocation-free.
+- **Forward streaming of a large document** → [`Cursor`](@ref) — fastest, and allocation-free
+  over a `String` document.
 - **Repeated or random access** → [`Node`](@ref) — builds the tree once.
 - **`LazyNode`** → low-memory, *read-once* navigation, or as a holdable snapshot of a
   [`Cursor`](@ref) position (`LazyNode(c)` / `Cursor(::LazyNode)`).
@@ -34,13 +35,15 @@ struct LazyNode{S <: AbstractString}
     nodetype::NodeType
 end
 
-# Public raw-string entry: §2.11 applies here, exactly as it does at `parse`/`read`. Without
-# it a hand-built `LazyNode(raw, Document)` walks un-normalized data and hands CR to the
-# application, and the `Cursor(::LazyNode)` bridge could not trust its input.
+# Public raw-string entry: §2.11 applies here, exactly as it does at `parse`/`read` — which
+# for a `String`-backed document means the rewrite, and for any other source means leaving it
+# to `_read_eol`. Without this a hand-built `LazyNode(raw, Document)` would be the one entry
+# that skips the rewrite its source type calls for, and hand CR to the application.
 LazyNode(data::AbstractString, nt::NodeType) = _lazynode_at(_normalize_input_eol(data), nt)
 
-# `d` is ALREADY §2.11-normalized — no scan. Parametric on `d`'s own type, so a rewritten
-# document (always a `String`) builds `LazyNode{String}`.
+# `d` has had whatever §2.11 owes it at the entry — see `_cursor_at` for the same split.
+# No scan here. Parametric on `d`'s own type, so a rewritten document (always a `String`)
+# builds `LazyNode{String}`.
 @inline _lazynode_at(d::S, nt::NodeType) where {S <: AbstractString} =
     LazyNode{S}(d, Token(TokenKinds.TEXT, SubString(d, 1, 0)), nt)
 
@@ -50,7 +53,9 @@ _lazy_pos(n::LazyNode) = n.token.offset + 1
 _lazy_tokenizer(n::LazyNode) = tokenize(n.data, _lazy_pos(n))
 # Entity-decode a TEXT/ATTR_VALUE token only when the tokenizer actually saw a `&`. When
 # `has_entities` is false the raw `SubString{String}` view is returned with no allocation
-# and no byte scan — the dominant case for spreadsheet-style data. `_decode_attr` strips
+# and no byte scan — the dominant case for spreadsheet-style data. That holds for a
+# `String`-backed document, where `_read_eol` is the identity; a source normalized on read
+# scans the span and copies it when it carries a line end. `_decode_attr` strips
 # the surrounding quotes first; the flag is read from the token, not the stripped view.
 @inline _decode(tok::Token, data) =
     tok.has_entities ? unescape(_read_eol(raw(tok, data))) : _read_eol(raw(tok, data))
@@ -70,8 +75,9 @@ function tag(n::LazyNode)
     nothing
 end
 
-# @inline: the `Union{Nothing, SubString{String}}` return only stays box-free when the
-# caller can union-split it — across a non-inlined boundary it costs 32 B per call (#105).
+# @inline: the union return (`Nothing` and, for a `String`-backed document, `SubString{String}`)
+# only stays box-free when the caller can union-split it — across a non-inlined boundary it
+# costs 32 B per call (#105).
 # Same reason on the other union-returning accessors below and in cursor.jl/flatnode.jl.
 @inline function value(n::LazyNode)
     nt = n.nodetype

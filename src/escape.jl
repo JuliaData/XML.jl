@@ -94,24 +94,28 @@ function _rewrite_attr_ws(s::AbstractString)
     String(take!(io))
 end
 
-# XML 1.0 §2.11 end-of-line normalization, applied ON INPUT at every reader's document
-# entry point (next to the BOM handling), exactly as the spec words it: "the XML processor
-# MUST behave as if it normalized all line breaks … on input, before parsing". The literal
-# pair CR LF becomes ONE LF, then each remaining literal #xD becomes LF; character
-# references (`&#13;`) are written with `&`, which the rewrite never touches, so they
-# survive to entity resolution. A CR-free document — the entire LF world — is returned
-# unchanged after one memchr-backed scan; a CR-carrying document is rewritten ONCE, and
-# every downstream span, token and zero-copy view then lives in the normalized document.
-# Normalizing per VALUE with a RUNTIME branch was measured to heap-box the union-returning
-# value accessors' clean-path return (32 B per value: any extra live branch or inlined scan
-# in those bodies overflows the caller-side union-split of their merge φ — #105/#113 class).
+# XML 1.0 §2.11 end-of-line normalization: "the XML processor MUST behave as if it
+# normalized all line breaks … on input, before parsing" — the literal pair CR LF becomes
+# ONE LF, then each remaining literal #xD becomes LF, while character references (`&#13;`)
+# are written with `&`, which no rewrite touches, so they survive to entity resolution.
 #
-# This runs for a `String`-backed document only. A document held as any other string type —
-# a `StringView` over a memory-mapped file being the case the README offers — would have to
-# be copied into the heap to be rewritten, which is the one thing the mapping exists to
-# avoid, so those sources are left alone here and normalized value by value on the way out
-# (`_read_eol` below). The choice is made by dispatch, not by a runtime test, which is why
-# the `String` path keeps its byte-identical accessor bodies.
+# How that is honoured depends on how the document is held, and the two ways are chosen by
+# DISPATCH rather than by a runtime test, which is what keeps the common path's accessor
+# bodies byte-identical:
+#
+#   - a `String`-backed document is rewritten here, once, at the entry (next to the BOM
+#     handling). A CR-free one — the entire LF world — comes back unchanged after a single
+#     memchr-backed scan; a CR-carrying one is rewritten, and every downstream span, token
+#     and zero-copy view then lives in the normalized document;
+#   - a document held as any other string type — a `StringView` over a memory-mapped file
+#     being the case the README offers — would have to be copied into the heap to be
+#     rewritten here, which is the one thing the mapping exists to avoid. It is left alone,
+#     and each value is normalized on the way out instead (`_read_eol` below).
+#
+# What was measured and rejected in between is per-value normalization behind a RUNTIME
+# branch: any extra live branch or inlined scan in the union-returning accessors overflows
+# the caller-side union-split of their merge φ and heap-boxes the clean-path return, 32 B
+# per value (#105/#113 class). A branch resolved by dispatch costs the clean path nothing.
 _normalize_input_eol(s::String) = occursin('\r', s) ? _rewrite_content_eol(s) : s
 _normalize_input_eol(s::SubString{String}) = occursin('\r', s) ? _rewrite_content_eol(s) : s
 _normalize_input_eol(s::AbstractString) = s

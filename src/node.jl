@@ -193,12 +193,12 @@ is_simple(o::Node) = o.nodetype === Element &&
     o.children[1].nodetype in (Text, CData)
 
 """
-    simple_value(node) -> Union{String, SubString{String}}
+    simple_value(node) -> Union{String, SubString}
 
 Return the textual content of a simple element (see [`is_simple`](@ref)): a `String` on
-`Node`, a `SubString{String}` on the other readers — zero-copy for entity-free content
-(entity-bearing values are decoded into a fresh string first). Errors if `node` is not
-simple.
+`Node`, and on the other readers a `SubString` over whatever string type the document was
+handed in as — zero-copy for entity-free content whose line ends need no folding (anything
+else is decoded into a fresh string first). Errors if `node` is not simple.
 """
 simple_value(o::Node) = is_simple(o) ? o.children[1].value :
     error("`simple_value` is only defined for simple nodes.")
