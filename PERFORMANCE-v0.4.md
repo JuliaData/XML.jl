@@ -60,7 +60,7 @@ Structured pull helpers keep scans cheap without hand-tracked depth: `for_each_c
 
 ### Partial reads — `LazyNode`
 
-Opening builds nothing — it costs one scan of the source for line ends, 0.21 ms on this 14 MB file — and nothing is ever cached: each visit re-tokenizes and rebuilds its small handles — iteration steps allocate nothing, and each child or attribute scan is one small resumable cursor object, elided when it never loops (Table 4 prices the full-scan case) — so a repeated look-up costs only its re-scan time, and costs repeat per visit. A traversal pays only for the bytes it actually steps over: the child iterator defers a yielded element's subtree skip until the *next sibling* is requested, so descending to a target is O(bytes before it); scanning *everything* is the worst case, priced per reader in Table 4. What still costs: *horizontal* scans pay the subtrees they step past (as any index-free forward reader must), and *repeated* look-ups pay again — those two patterns tip the scale toward `FlatNode`/`Node`.
+Opening builds nothing — for a document held as a `String` it costs one scan of the source for line ends, 0.21 ms on this 14 MB file, and for one held as anything else not even that ([Memory-mapped sources](#memory-mapped-sources)) — and nothing is ever cached: each visit re-tokenizes and rebuilds its small handles — iteration steps allocate nothing, and each child or attribute scan is one small resumable cursor object, elided when it never loops (Table 4 prices the full-scan case) — so a repeated look-up costs only its re-scan time, and costs repeat per visit. A traversal pays only for the bytes it actually steps over: the child iterator defers a yielded element's subtree skip until the *next sibling* is requested, so descending to a target is O(bytes before it); scanning *everything* is the worst case, priced per reader in Table 4. What still costs: *horizontal* scans pay the subtrees they step past (as any index-free forward reader must), and *repeated* look-ups pay again — those two patterns tip the scale toward `FlatNode`/`Node`.
 
 > [!NOTE]
 > Ask only for what you need: a `for` loop over `eachchildnode` fetches the next sibling — and pays its predecessor's deferred subtree skip — at the top of each round, so exit *from within the body* once you are done:
@@ -74,6 +74,20 @@ Opening builds nothing — it costs one scan of the source for line ends, 0.21 m
 > ```
 >
 > Move that test to the top of the body instead — `length(out) == 3 && break; push!(out, c)` — and the loop only learns it is done at round *four*, whose fetch has already paid the third child's deferred subtree skip.
+
+### Memory-mapped sources
+
+The readers keep whatever string type the document is handed in as, and a document not held as a `String` is never rewritten when it is read in — so a `StringView` over `Mmap`, the recipe for files too large to hold in memory, survives the entry whatever the file's line ends. The line-end normalization the specification requires then happens on each value as it is reported, which costs a copy only for the values that carry a line end, and only for the ones actually asked for. On the same XMark corpus, mapped instead of read, with CR LF line ends throughout — the worst case for this, since every line end is one CR to fold:
+
+| | time | allocated |
+|---|--:|--:|
+| open | **13.1 ns** | 0 |
+| open, then read 1 000 nodes | 50.8 µs | 0.1 MiB |
+| open, then read every node | 46.8 ms | 55.3 MiB |
+
+An LF file opens in the same 12.4 ns: the entry does not scan the source, so opening is O(1) in the file's size and a reader that touches a fraction of a mapped document pays for that fraction. Reading *all* of a CR LF document allocates more than a reader working from a rewritten `String` would — but as churn the collector reclaims rather than a document-sized block held for as long as any handle lives, which is the property that decides whether a file larger than memory can be read at all.[^mapped]
+
+[^mapped]: Measured 2026-08-25, same machine and settings as the rest, Julia 1.12.7; BenchmarkTools medians. Source: [`benchmarks/profile.jl`](benchmarks/profile.jl), section (5), which generates the CR LF twin of the corpus beside it.
 
 ### Full DOM — parse + walk everything
 

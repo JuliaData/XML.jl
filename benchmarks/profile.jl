@@ -179,3 +179,52 @@ row("Node",               @benchmark traverse_walk($TREE))
 row("LazyNode attr sweep",@benchmark attr_sweep($LAZY))
 println("\n(same recursive traversal for the three readers; a traversal that allocates per",
         "\n node shows it in the allocs column, not in a ratio)")
+
+#--------------------------------------------------------------# (5) MEMORY-MAPPED SOURCE
+# What a document held as something other than a `String` costs at the entry, and what a
+# partial read pays afterwards — the workload the README offers memory mapping for. The
+# corpus is mapped instead of read, and a CR LF twin is generated once beside it, because
+# a document's line ends are what decides whether the entry can hand the mapping through
+# or has to rewrite it into the heap.
+using Mmap, StringViews
+
+const FILE_CRLF = joinpath(@__DIR__, "data", "xmark_crlf.xml")
+isfile(FILE_CRLF) || write(FILE_CRLF, replace(S, "\n" => "\r\n"))
+
+mapped_open(sv) = XML.Cursor(sv)
+function mapped_read(sv, k)
+    c = XML.Cursor(sv); n = 0; i = 0
+    while XML.next!(c) !== nothing
+        v = XML.value(c)
+        v === nothing || (n += sizeof(v))
+        i += 1
+        i >= k && break
+    end
+    n
+end
+
+fine(t) = t < 1e3  ? string(round(t, digits = 1), " ns") :
+          t < 1e6  ? string(round(t / 1e3, digits = 2), " µs") :
+                     string(round(t / 1e6, digits = 2), " ms")
+# An entry that rewrites allocates the whole document on every open, so its median climbs
+# with collector pressure; the minimum is the reproducible figure and is shown beside it.
+function mrow(label, b)
+    println(rpad("  " * label, 26), lpad(fine(median(b).time), 10), " med",
+            lpad(fine(minimum(b).time), 10), " min",
+            lpad(b.allocs, 9), " allocs", lpad(mib(b), 8), " MiB")
+end
+
+println("\n=== (5) MEMORY-MAPPED SOURCE — the entry, and what a partial read pays ===")
+for (lbl, path) in (("LF", FILE), ("CR LF", FILE_CRLF))
+    open(path) do io
+        sv = StringView(Mmap.mmap(io))
+        println("  source: ", lbl, " line ends → ", typeof(mapped_open(sv)))
+        mrow("open", @benchmark mapped_open($sv))
+        if lbl == "CR LF"
+            mrow("open + 1 000 nodes", @benchmark mapped_read($sv, 1000))
+            mrow("open + every node",  @benchmark mapped_read($sv, typemax(Int)))
+        end
+    end
+end
+println("\n(the entry either hands the mapping through or rewrites the document into the",
+        "\n heap; the resulting Cursor type says which)")

@@ -283,7 +283,7 @@ doc = open("very_large.xml") do io
 end
 ```
 
-The reader keeps the string type it is handed, so the document is walked through the mapping instead of being copied into the heap, and accessors return views into the mapped bytes. Opening costs nothing whatever the file's line ends: a mapped document is not scanned or rewritten up front, and the line-end normalization the specification requires happens on each value as it is read, so a document written with CR LF or a lone CR copies only the values you actually ask for, and only those that carry a line end. `sourcetext` is the one accessor that shows the file's own bytes — it is a zero-copy view of the document the reader holds, which for a mapped file is the file itself.
+The reader keeps the string type it is handed, so the document is walked through the mapping instead of being copied into the heap, and accessors return views into the mapped bytes. Opening costs nothing whatever the file's line ends — 13 ns on a mapped 14 MB corpus, LF or CR LF alike: the document is neither scanned nor rewritten up front, and the line-end normalization the specification requires happens on each value as it is read, so a file written with CR LF or a lone CR copies only the values you actually ask for, and only those that carry a line end. `sourcetext` is the one accessor that shows the file's own bytes — it is a zero-copy view of the document the reader holds, which for a mapped file is the file itself. See [Memory-mapped sources](PERFORMANCE-v0.4.md#memory-mapped-sources) for the measured figures.
 
 <br>
 
