@@ -102,10 +102,27 @@ end
 # survive to entity resolution. A CR-free document — the entire LF world — is returned
 # unchanged after one memchr-backed scan; a CR-carrying document is rewritten ONCE, and
 # every downstream span, token and zero-copy view then lives in the normalized document.
-# Normalizing per VALUE instead was measured to heap-box the union-returning value
-# accessors' clean-path return (32 B per value: any extra live branch or inlined scan in
-# those bodies overflows the caller-side union-split of their merge φ — #105/#113 class).
-_normalize_input_eol(s::AbstractString) = occursin('\r', s) ? _rewrite_content_eol(s) : s
+# Normalizing per VALUE with a RUNTIME branch was measured to heap-box the union-returning
+# value accessors' clean-path return (32 B per value: any extra live branch or inlined scan
+# in those bodies overflows the caller-side union-split of their merge φ — #105/#113 class).
+#
+# This runs for a `String`-backed document only. A document held as any other string type —
+# a `StringView` over a memory-mapped file being the case the README offers — would have to
+# be copied into the heap to be rewritten, which is the one thing the mapping exists to
+# avoid, so those sources are left alone here and normalized value by value on the way out
+# (`_read_eol` below). The choice is made by dispatch, not by a runtime test, which is why
+# the `String` path keeps its byte-identical accessor bodies.
+_normalize_input_eol(s::String) = occursin('\r', s) ? _rewrite_content_eol(s) : s
+_normalize_input_eol(s::SubString{String}) = occursin('\r', s) ? _rewrite_content_eol(s) : s
+_normalize_input_eol(s::AbstractString) = s
+
+# §2.11 for a document that was NOT rewritten at the entry: normalize one value's own bytes
+# as it is reported. Applied to the RAW span, before entity resolution, so that a `&#13;`
+# still yields a real CR — the spec normalizes line breaks first, and references resolve
+# after. For a `String`-backed document the span is a `SubString{String}` and this is the
+# identity: it inlines away, adds no live branch, and leaves the caller's merge φ untouched.
+@inline _read_eol(s::SubString{String}) = s
+_read_eol(s::AbstractString) = occursin('\r', s) ? _rewrite_content_eol(s) : s
 
 # After the CR LF → LF rewrite, a byte position shifts left by the number of CR LF pairs
 # strictly before it (a lone CR rewrites in place). For translating caller-supplied

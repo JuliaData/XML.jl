@@ -159,7 +159,8 @@ end
 
 # token-layer entity decode (inlined `_decode`; depends only on `unescape`, whose
 # `SubString` method returns concretely — both branches here are `SubString{String}`).
-@inline _cursor_decode(tok, data) = tok.has_entities ? unescape(raw(tok, data)) : raw(tok, data)
+@inline _cursor_decode(tok, data) =
+    tok.has_entities ? unescape(_read_eol(raw(tok, data))) : _read_eol(raw(tok, data))
 
 # @inline: keeps the union return caller-splittable — see the note on `value(::LazyNode)`.
 @inline function value(c::Cursor)
@@ -168,19 +169,19 @@ end
         return _cursor_decode(c.token, _data(c))
     elseif nt === Comment
         it = _rescan(c); iterate(it)            # COMMENT_OPEN
-        return raw(iterate(it)[1], _data(c))
+        return _read_eol(raw(iterate(it)[1], _data(c)))
     elseif nt === CData
         it = _rescan(c); iterate(it)            # CDATA_OPEN
-        return raw(iterate(it)[1], _data(c))
+        return _read_eol(raw(iterate(it)[1], _data(c)))
     elseif nt === DTD
         it = _rescan(c); iterate(it)            # DOCTYPE_OPEN
-        return lstrip(raw(iterate(it)[1], _data(c)))
+        return lstrip(_read_eol(raw(iterate(it)[1], _data(c))))
     elseif nt === ProcessingInstruction
         it = _rescan(c); iterate(it)            # PI_OPEN
         r = iterate(it)
         r === nothing && return nothing
         r[1].kind === _CURSOR_XT.TokenKinds.PI_CONTENT || return nothing
-        content = lstrip(raw(r[1], _data(c)))
+        content = lstrip(_read_eol(raw(r[1], _data(c))))
         return isempty(content) ? nothing : content
     end
     nothing
@@ -268,7 +269,7 @@ end
     elseif tok.kind === _CURSOR_XT.TokenKinds.CDATA_OPEN
         r = iterate(it)
         (r === nothing || r[1].kind !== _CURSOR_XT.TokenKinds.CDATA_CONTENT) && return nothing
-        content = raw(r[1], _data(c))
+        content = _read_eol(raw(r[1], _data(c)))
         r = iterate(it)
         (r === nothing || r[1].kind !== _CURSOR_XT.TokenKinds.CDATA_CLOSE) && return nothing
         r = iterate(it)

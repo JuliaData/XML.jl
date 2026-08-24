@@ -52,7 +52,8 @@ _lazy_tokenizer(n::LazyNode) = tokenize(n.data, _lazy_pos(n))
 # `has_entities` is false the raw `SubString{String}` view is returned with no allocation
 # and no byte scan — the dominant case for spreadsheet-style data. `_decode_attr` strips
 # the surrounding quotes first; the flag is read from the token, not the stripped view.
-@inline _decode(tok::Token, data) = tok.has_entities ? unescape(raw(tok, data)) : raw(tok, data)
+@inline _decode(tok::Token, data) =
+    tok.has_entities ? unescape(_read_eol(raw(tok, data))) : _read_eol(raw(tok, data))
 @inline function _decode_attr(tok::Token, data)
     v = _normalize_attr_ws(attr_value(tok, data))
     tok.has_entities ? unescape(v) : v
@@ -79,22 +80,22 @@ end
     elseif nt === Comment
         iter = _lazy_tokenizer(n)
         iterate(iter)  # COMMENT_OPEN
-        return raw(iterate(iter)[1], n.data)
+        return _read_eol(raw(iterate(iter)[1], n.data))
     elseif nt === CData
         iter = _lazy_tokenizer(n)
         iterate(iter)  # CDATA_OPEN
-        return raw(iterate(iter)[1], n.data)
+        return _read_eol(raw(iterate(iter)[1], n.data))
     elseif nt === DTD
         iter = _lazy_tokenizer(n)
         iterate(iter)  # DOCTYPE_OPEN
-        return lstrip(raw(iterate(iter)[1], n.data))
+        return lstrip(_read_eol(raw(iterate(iter)[1], n.data)))
     elseif nt === ProcessingInstruction
         iter = _lazy_tokenizer(n)
         iterate(iter)  # PI_OPEN
         result = iterate(iter)
         result === nothing && return nothing
         result[1].kind === TokenKinds.PI_CONTENT || return nothing
-        content = lstrip(raw(result[1], n.data))
+        content = lstrip(_read_eol(raw(result[1], n.data)))
         return isempty(content) ? nothing : content
     end
     nothing
@@ -381,6 +382,12 @@ end
 
 Return the original source text of the node as a `SubString`, with no parsing, escaping,
 or reformatting.  This is the zero-copy counterpart of [`write`](@ref) for lazy nodes.
+
+Being zero-copy, it reports the bytes of the document the reader actually holds. A `String`
+document whose lines end in CR is normalized when it is read in, so its source text is the
+normalized one; a document held as any other string type — a view over a memory-mapped file,
+say — is never rewritten, so its source text is the file's own bytes, line ends included.
+Reported *values* are normalized either way.
 """
 function sourcetext(n::LazyNode)
     nt = n.nodetype
@@ -678,7 +685,7 @@ end
     elseif k === TokenKinds.CDATA_OPEN
         r = iterate(iter)
         (isnothing(r) || r[1].kind !== TokenKinds.CDATA_CONTENT) && return nothing
-        content = raw(r[1], n.data)
+        content = _read_eol(raw(r[1], n.data))
         r = iterate(iter)
         (isnothing(r) || r[1].kind !== TokenKinds.CDATA_CLOSE) && return nothing
         r = iterate(iter)

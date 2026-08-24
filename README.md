@@ -283,7 +283,7 @@ doc = open("very_large.xml") do io
 end
 ```
 
-The reader keeps the string type it is handed, so the document is walked through the mapping instead of being copied into the heap, and accessors return views into the mapped bytes. Plan for one exception: a document whose lines end in CR LF or in a lone CR is normalized on input, and that rewrite materializes the whole document as a `String` — the very thing the mapping avoids. Mapping pays off on documents whose lines end in LF.
+The reader keeps the string type it is handed, so the document is walked through the mapping instead of being copied into the heap, and accessors return views into the mapped bytes. Opening costs nothing whatever the file's line ends: a mapped document is not scanned or rewritten up front, and the line-end normalization the specification requires happens on each value as it is read, so a document written with CR LF or a lone CR copies only the values you actually ask for, and only those that carry a line end. `sourcetext` is the one accessor that shows the file's own bytes — it is a zero-copy view of the document the reader holds, which for a mapped file is the file itself.
 
 <br>
 

@@ -4146,6 +4146,55 @@ Base.thisind(w::WrappedSource, i::Int) = thisind(w.s, i)
             @test measure(s) == 0
         end
     end
+
+    @testset "line ends normalize on read, whatever the value-producing accessor" begin
+        # A document not backed by a String is not rewritten at its entry, so each value is
+        # normalized as it is reported (XML 1.0 §2.11). This walks the whole matrix rather
+        # than a written-out list — every node kind that carries a value, through both lazy
+        # readers, from both a String and a non-String source — so a kind added later, or an
+        # accessor left unwired, fails here instead of quietly returning raw CRs.
+        crlf = "<?xml version=\"1.0\"?>\r\n<?pi a\r\nb?>\r\n<!--c\r\nd-->\r\n" *
+               "<r>t\r\nu<![CDATA[x\r\ny]]></r>"
+        seen = Set{XML.NodeType}()
+        function assert_clean(v, kind)
+            v === nothing && return
+            push!(seen, kind)
+            @test !occursin('\r', v)
+        end
+        function walk_lazy(n)
+            assert_clean(value(n), nodetype(n))
+            for c in children(n)
+                walk_lazy(c)
+            end
+        end
+        for src in (crlf, WrappedSource(crlf))
+            cur = Cursor(src)
+            while next!(cur) !== nothing
+                assert_clean(value(cur), nodetype(cur))
+            end
+            walk_lazy(parse(src, LazyNode))
+        end
+        # guard the guard: the probe document has to reach the value-bearing kinds
+        @test Text in seen && Comment in seen && CData in seen && ProcessingInstruction in seen
+
+        # `simple_value` / `is_simple_value` reach the token stream by their own path
+        simple = "<a>p\r\nq</a>"
+        for src in (simple, WrappedSource(simple))
+            el = only(elements(parse(src, LazyNode)))
+            @test is_simple_value(el) == "p\nq"
+            @test simple_value(el) == "p\nq"
+            cur = Cursor(src); next!(cur)
+            @test is_simple_value(cur) == "p\nq"
+        end
+
+        # §2.11 normalizes before entity resolution, so a reference still yields a real CR
+        ref = "<a>x&#13;y\r\nz</a>"
+        for src in (ref, WrappedSource(ref))
+            @test value(only(children(only(elements(parse(src, LazyNode)))))) == "x\ry\nz"
+            cur = Cursor(src); next!(cur); next!(cur)
+            @test value(cur) == "x\ry\nz"
+        end
+    end
 end
 
 # Each included suite is wrapped in a @testset so a load-time error in one file can't skip the rest.

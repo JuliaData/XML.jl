@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **A memory-mapped document is no longer copied into the heap when its lines end in CR**: the line-end normalization the specification requires used to rewrite the whole document at the entry, whatever string type it was held as — so mapping a file written on Windows asked for as much heap as the file, which is what mapping exists to avoid. A `String` document is still normalized once when it is read in; a document held as any other string type is left alone, and each value is normalized as it is reported, before entity resolution, so a `&#13;` still yields a real CR. On a 59 MiB mapped document with CR LF line ends, opening goes from 127 ms and 59.9 MiB to 12 ns and nothing, and opening then reading a thousand nodes from 113 ms to 0.055 ms. Documents held as a `String` — the common case — are unaffected in time and in allocation count alike, the normalization being selected by dispatch rather than by a run-time test. `sourcetext` reports the bytes of the document the reader holds, so a mapped document shows the file's own line ends where a rewritten `String` document shows normalized ones.
+
 ### Added
 
 - **`XML.escape` and `XML.unescape` are now public API** ([#125](https://github.com/JuliaData/XML.jl/issues/125)): declared `public` on Julia 1.11+ (a no-op on 1.10, which has no such notion) and covered by semver, for downstream code that assembles XML strings itself, as XLSX.jl does. They stay unexported — the bare names are too generic to bring into scope with `using XML`. `escape` handles all five predefined entities, so it is safe for quoted attribute values as well as text content.
