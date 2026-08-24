@@ -4154,6 +4154,7 @@ Base.thisind(w::WrappedSource, i::Int) = thisind(w.s, i)
         # readers, from both a String and a non-String source — so a kind added later, or an
         # accessor left unwired, fails here instead of quietly returning raw CRs.
         crlf = "<?xml version=\"1.0\"?>\r\n<?pi a\r\nb?>\r\n<!--c\r\nd-->\r\n" *
+               "<!DOCTYPE r [\r\n<!ELEMENT r ANY>\r\n]>\r\n" *
                "<r>t\r\nu<![CDATA[x\r\ny]]></r>"
         seen = Set{XML.NodeType}()
         function assert_clean(v, kind)
@@ -4167,7 +4168,7 @@ Base.thisind(w::WrappedSource, i::Int) = thisind(w.s, i)
                 walk_lazy(c)
             end
         end
-        for src in (crlf, WrappedSource(crlf))
+        for src in (crlf, SubString(crlf, 1, lastindex(crlf)), WrappedSource(crlf))
             cur = Cursor(src)
             while next!(cur) !== nothing
                 assert_clean(value(cur), nodetype(cur))
@@ -4175,11 +4176,12 @@ Base.thisind(w::WrappedSource, i::Int) = thisind(w.s, i)
             walk_lazy(parse(src, LazyNode))
         end
         # guard the guard: the probe document has to reach the value-bearing kinds
-        @test Text in seen && Comment in seen && CData in seen && ProcessingInstruction in seen
+        @test Text in seen && Comment in seen && CData in seen &&
+              ProcessingInstruction in seen && DTD in seen
 
         # `simple_value` / `is_simple_value` reach the token stream by their own path
         simple = "<a>p\r\nq</a>"
-        for src in (simple, WrappedSource(simple))
+        for src in (simple, SubString(simple, 1, lastindex(simple)), WrappedSource(simple))
             el = only(elements(parse(src, LazyNode)))
             @test is_simple_value(el) == "p\nq"
             @test simple_value(el) == "p\nq"
@@ -4187,9 +4189,21 @@ Base.thisind(w::WrappedSource, i::Int) = thisind(w.s, i)
             @test is_simple_value(cur) == "p\nq"
         end
 
+        # Attribute values reach §3.3.3 with their line ends still literal when the document
+        # was not rewritten at the entry, so that pass is what folds them — and it has to fold
+        # a CR LF pair to ONE space, the two rules composing as the specification orders them.
+        attrs = "<a crlf=\"p\r\nq\" lone=\"p\rq\" lf=\"p\nq\" tab=\"p\tq\"/>"
+        for src in (attrs, SubString(attrs, 1, lastindex(attrs)), WrappedSource(attrs))
+            a = attributes(only(elements(parse(src, LazyNode))))
+            for key in ("crlf", "lone", "lf", "tab")
+                @test a[key] == "p q"
+                @test ncodeunits(a[key]) == 3        # one space, not two
+            end
+        end
+
         # §2.11 normalizes before entity resolution, so a reference still yields a real CR
         ref = "<a>x&#13;y\r\nz</a>"
-        for src in (ref, WrappedSource(ref))
+        for src in (ref, SubString(ref, 1, lastindex(ref)), WrappedSource(ref))
             @test value(only(children(only(elements(parse(src, LazyNode)))))) == "x\ry\nz"
             cur = Cursor(src); next!(cur); next!(cur)
             @test value(cur) == "x\ry\nz"
