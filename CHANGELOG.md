@@ -19,7 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The lazy readers no longer copy the document at the entry** ([#134](https://github.com/JuliaData/XML.jl/issues/134)): `parse(str, LazyNode)` and `parse(str, Cursor)` converted their argument to a `String` — 59 MiB for a 59 MiB document — and now take it as given, keeping its type. That copy was masking a second cost: over a non-`String` source, `attributes` walked the whole document once per attribute, 109 ms for 2,000 elements where it now takes 1.4 ms.
 
-- **A memory-mapped document is no longer copied into the heap when its lines end in CR** ([#135](https://github.com/JuliaData/XML.jl/issues/135)): the entry rewrote it whatever string type held it, so mapping a Windows-written file asked for as much heap as the file. Only a `String` document is rewritten now; any other source has each value normalized as it is read. Opening the mapped 14 MB corpus goes from 51.6 ms and 13.8 MiB to 13 ns and nothing. `sourcetext` reports the bytes of the document the reader holds, so a mapped document shows the file's own line ends.
+- **A memory-mapped document is no longer copied into the heap when its lines end in CR** ([#135](https://github.com/JuliaData/XML.jl/issues/135)): the entry rewrote it whatever string type held it, so mapping a Windows-written file asked for as much heap as the file. Only a `String` document is rewritten now; any other source has each value normalized as it is read. Opening the mapped 14 MB corpus goes from 51.6 ms and 13.8 MiB to 12 ns and no copy. `sourcetext` reports the bytes of the document the reader holds, so a mapped document shows the file's own line ends.
 
 ## [0.4.6] - 2026-08-17
 

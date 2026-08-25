@@ -77,15 +77,15 @@ Opening builds nothing — for a document held as a `String` it costs one scan o
 
 ### Memory-mapped sources
 
-The readers keep whatever string type the document is handed in as, and a document not held as a `String` is never rewritten when it is read in — so a `StringView` over `Mmap`, the recipe for files too large to hold in memory, survives the entry whatever the file's line ends. The line-end normalization the specification requires then happens on each value as it is reported, which costs a copy only for the values that carry a line end, and only for the ones actually asked for. On the same XMark corpus, mapped instead of read, with CR LF line ends throughout — the worst case for this, since every line end is one CR to fold:
+The readers keep whatever string type the document arrives as, and a document not held as a `String` is never rewritten when it is read in — so a `StringView` over `Mmap`, the recipe for files too large to hold in memory, reaches the reader intact whatever the file's line ends. The line-end normalization the specification requires then happens on each value as it is reported, which costs a copy only for the values that carry a line end, and only for the ones actually asked for. On the same XMark corpus, mapped instead of read, with CR LF line ends throughout — the worst case for this, since every line end is one CR to fold:
 
 | | time | allocated |
 |---|--:|--:|
-| open | **13.1 ns** | 0 |
-| open, then read 1 000 nodes | 50.8 µs | 0.1 MiB |
-| open, then read every node | 46.8 ms | 55.3 MiB |
+| open | **11.9 ns** | 176 B |
+| open, then read 1 000 nodes | 43.8 µs | 38 KiB |
+| open, then read every node | 40.6 ms | 36.3 MiB |
 
-An LF file opens in the same 12.4 ns: the entry does not scan the source, so opening is O(1) in the file's size and a reader that touches a fraction of a mapped document pays for that fraction. Reading *all* of a CR LF document allocates more than a reader working from a rewritten `String` would — but as churn the collector reclaims rather than a document-sized block held for as long as any handle lives, which is the property that decides whether a file larger than memory can be read at all.[^mapped]
+An LF file opens in the same 11.7 ns: the entry does not scan the source, so opening is O(1) in the file's size and a reader that touches a fraction of a mapped document costs only that fraction. Reading *all* of a CR LF document allocates more than a reader working from a rewritten `String` would. These are short-lived strings, reclaimed by the garbage collector as the reader moves on, where the rewrite holds one document-sized block for as long as any handle into it lives. For a file larger than memory, that difference decides whether it can be read at all.[^mapped]
 
 [^mapped]: Measured 2026-08-25, same machine and settings as the rest, Julia 1.12.7; BenchmarkTools medians. Source: [`benchmarks/profile.jl`](benchmarks/profile.jl), section (5), which generates the CR LF twin of the corpus beside it.
 

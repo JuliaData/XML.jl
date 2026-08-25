@@ -217,3 +217,20 @@ measure_node_build_allocs(xml) = Base.@allocations parse(xml, Node)
         @test measure_node_build_allocs(churn_xml) <= 4500
     end
 end
+
+# Line-end rewrite — the sizing contract: the output is bounded by its source (a CR LF pair
+# loses a byte, a lone CR keeps its own), so one buffer is allocated at that bound and shrunk
+# to what was written, rather than grown one write at a time. A short value costs three
+# objects on 1.12 and two on 1.10; a growable-stream round trip costs four on both, so a
+# ceiling of three separates the two shapes at every supported version.
+measure_eol_rewrite(s) = Base.@allocations XML._rewrite_content_eol(s)
+
+@testset "Line-end rewrite: one buffer, sized on the source" begin
+    v = "        \r\n"
+    @test XML._rewrite_content_eol(v) == "        \n"
+    @test XML._rewrite_content_eol("a\rb\r\nc") == "a\nb\nc"
+    measure_eol_rewrite(v)   # warm-up
+    if _NO_COVERAGE
+        @test measure_eol_rewrite(v) <= 3
+    end
+end

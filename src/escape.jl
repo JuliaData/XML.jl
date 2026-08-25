@@ -147,22 +147,31 @@ function _translate_eol_pos(s::AbstractString, pos::Int)
     pos - shift
 end
 
+# The rewritten value is never longer than its source — a CR LF pair loses a byte, a lone CR
+# keeps its own — so the buffer is allocated once at that bound and shrunk to what was
+# written, rather than grown one write at a time through an `IOBuffer` sized on a length that
+# is not available until the walk ends. `StringVector` allocates in the layout `String` wraps
+# without a copy; a plain `Vector{UInt8}` is copied again on conversion. 96 B per call against
+# 160 for a ten-byte value.
 function _rewrite_content_eol(s::AbstractString)
     cu = codeunits(s)
-    io = IOBuffer(sizehint = ncodeunits(s))
     n = length(cu)
+    out = Base.StringVector(n)
+    i = 1
     j = 1
     @inbounds while j <= n
         b = cu[j]
         if b == 0x0D
-            Base.write(io, 0x0A)
+            out[i] = 0x0A
             j < n && cu[j + 1] == 0x0A && (j += 1)
         else
-            Base.write(io, b)
+            out[i] = b
         end
+        i += 1
         j += 1
     end
-    String(take!(io))
+    i == n + 1 || resize!(out, i - 1)
+    String(out)
 end
 
 # An attribute name or value as the `SubString{String}` that the materialized `Attributes`
