@@ -108,7 +108,7 @@ end
 #     memchr-backed scan; a CR-carrying one is rewritten, and every downstream span, token
 #     and zero-copy view then lives in the normalized document;
 #   - a document held as any other string type — a `StringView` over a memory-mapped file
-#     being the case the README offers — would have to be copied into the heap to be
+#     being the case the README documents — would have to be copied into the heap to be
 #     rewritten here, which is the one thing the mapping exists to avoid. It is left alone,
 #     and each value is normalized on the way out instead (`_read_eol` below).
 #
