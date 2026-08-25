@@ -49,11 +49,11 @@ function Cursor(data::S) where {S <: AbstractString}
     _cursor_at(_normalize_input_eol(data), 1)
 end
 
-# `d` has had whatever §2.11 owes it at the entry: a `String`-backed document was rewritten
+# `d` has had whatever §2.11 requires of it at the entry: a `String`-backed document was rewritten
 # there, any other source was left for `_read_eol` to normalize value by value. Either way
 # nothing is scanned or restarted here. Parametric on `d`'s own type so a rewritten document
 # (always a `String`) yields `Cursor{String}` without re-dispatching through the public
-# constructor — which is what the old `return Cursor(d)` restart bought, at the price of a
+# constructor — the old `return Cursor(d)` restart did the same re-dispatch, and cost a
 # second, provably fruitless CR scan of the whole document.
 @inline function _cursor_at(d::S, pos::Integer) where {S <: AbstractString}
     st = _CURSOR_XT.StatefulTokenizer(_CURSOR_XT.Tokenizer(d, pos))
@@ -164,7 +164,7 @@ end
 # token-layer entity decode (inlined `_decode`; depends only on `unescape`, whose
 # `SubString` method returns concretely). For a `String`-backed document `_read_eol` is the
 # identity, so both branches stay `SubString{String}`; for any other source it widens them,
-# which is the cost that source pays in place of an entry-time rewrite.
+# which is what that source costs instead of an entry-time rewrite.
 @inline _cursor_decode(tok, data) =
     tok.has_entities ? unescape(_read_eol(raw(tok, data))) : _read_eol(raw(tok, data))
 

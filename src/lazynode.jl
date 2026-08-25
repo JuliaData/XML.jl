@@ -38,10 +38,10 @@ end
 # Public raw-string entry: §2.11 applies here, exactly as it does at `parse`/`read` — which
 # for a `String`-backed document means the rewrite, and for any other source means leaving it
 # to `_read_eol`. Without this a hand-built `LazyNode(raw, Document)` would be the one entry
-# that skips the rewrite its source type calls for, and hand CR to the application.
+# that skips the rewrite its source type requires, and return CR to the application.
 LazyNode(data::AbstractString, nt::NodeType) = _lazynode_at(_normalize_input_eol(data), nt)
 
-# `d` has had whatever §2.11 owes it at the entry — see `_cursor_at` for the same split.
+# `d` has had whatever §2.11 requires of it at the entry — see `_cursor_at` for the same split.
 # No scan here. Parametric on `d`'s own type, so a rewritten document (always a `String`)
 # builds `LazyNode{String}`.
 @inline _lazynode_at(d::S, nt::NodeType) where {S <: AbstractString} =

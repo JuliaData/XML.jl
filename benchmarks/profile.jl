@@ -184,8 +184,8 @@ println("\n(same recursive traversal for the three readers; a traversal that all
 # What a document held as something other than a `String` costs at the entry, and what a
 # partial read pays afterwards — the workload the README offers memory mapping for. The
 # corpus is mapped instead of read, and a CR LF twin is generated once beside it, because
-# a document's line ends are what decides whether the entry can hand the mapping through
-# or has to rewrite it into the heap.
+# a document's line ends determine whether the entry passes the mapping through or
+# rewrites it into the heap.
 using Mmap, StringViews
 
 const FILE_CRLF = joinpath(@__DIR__, "data", "xmark_crlf.xml")

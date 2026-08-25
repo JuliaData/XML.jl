@@ -73,7 +73,7 @@ Opening builds nothing — for a document held as a `String` it costs one scan o
 > end
 > ```
 >
-> Move that test to the top of the body instead — `length(out) == 3 && break; push!(out, c)` — and the loop only learns it is done at round *four*, whose fetch has already paid the third child's deferred subtree skip.
+> Move that test to the top of the body instead — `length(out) == 3 && break; push!(out, c)` — and the loop only breaks at round *four*, whose fetch has already performed the third child's deferred subtree skip.
 
 ### Memory-mapped sources
 
