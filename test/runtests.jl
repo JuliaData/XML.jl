@@ -662,8 +662,71 @@ end
     end
 end
 
+@testset "Spec 4.4: Internal General Entity Declarations" begin
+    # The table the readers will consult. `markup` is the bit that decides how inclusion can be
+    # implemented: without a `<` in any reachable replacement text every reference is a text
+    # substitution; with one, inclusion has to produce structure (§4.4.2).
+    ents(x) = XML._internal_entities(x)
+
+    @testset "a document that declares none costs nothing" begin
+        @test ents("<a>x</a>") === nothing
+        @test ents("<?xml version=\"1.0\"?><!-- c --><a/>") === nothing
+        @test ents("<!DOCTYPE a [<!ELEMENT a EMPTY>]><a/>") === nothing
+        @test ents("<!DOCTYPE a SYSTEM \"a.dtd\"><a/>") === nothing
+    end
+
+    @testset "declarations are read, the first binding each name (§4.2)" begin
+        e = ents("<!DOCTYPE a [<!ENTITY e \"ev\">]><a>&e;</a>")
+        @test e.values == Dict("e" => "ev")
+        # valid-sa-086 declares `e` twice; the suite's canonical reference expects the first
+        e = ents("<!DOCTYPE d [<!ENTITY e \"\"><!ENTITY e \"<foo>\">]><d>&e;</d>")
+        @test e.values == Dict("e" => "")
+        @test e.markup == false
+    end
+
+    @testset "character references resolve into replacement text, general ones do not (§4.5)" begin
+        # valid-sa-024 builds its markup from `&#60;`, so the text already carries a `<`
+        @test ents("<!DOCTYPE d [<!ENTITY e \"&#60;foo></foo>\">]><d>&e;</d>").values["e"] == "<foo></foo>"
+        # `&lt;` is a reference like any other: bypassed here, and never markup
+        e = ents("<!DOCTYPE d [<!ENTITY e \"&lt;not a tag\">]><d>&e;</d>")
+        @test e.values["e"] == "&lt;not a tag"
+        @test e.markup == false
+    end
+
+    @testset "markup is detected through nesting" begin
+        @test ents("<!DOCTYPE d [<!ENTITY e \"<e/>\">]><d>&e;</d>").markup
+        @test ents("<!DOCTYPE d [<!ENTITY e \"&#60;e/>\">]><d>&e;</d>").markup
+        @test ents("<!DOCTYPE d [<!ENTITY a \"&b;\"><!ENTITY b \"<x/>\">]><d>&a;</d>").markup
+        @test ents("<!DOCTYPE d [<!ENTITY a \"&b;\"><!ENTITY b \"plain\">]><d>&a;</d>").markup == false
+    end
+
+    @testset "WFC: No Recursion is refused at every level" begin
+        for w in (:lenient, :structural, :strict)
+            @test_throws ErrorException ents("<!DOCTYPE d [<!ENTITY a \"&a;\">]><d>&a;</d>")
+            @test_throws ErrorException ents("<!DOCTYPE d [<!ENTITY a \"&b;\"><!ENTITY b \"&a;\">]><d>&a;</d>")
+        end
+    end
+
+    @testset "the subset is read as markup, not scanned for text" begin
+        # a declaration commented out is not a declaration
+        @test ents("<!DOCTYPE d [<!-- <!ENTITY trap \"x\"> --><!ENTITY e \"v\">]><d/>").values == Dict("e" => "v")
+        # other declaration kinds are stepped over
+        @test ents("<!DOCTYPE d [<!ELEMENT d (#PCDATA)><!ENTITY e \"v\"><!ATTLIST d a CDATA #IMPLIED>]><d/>").values == Dict("e" => "v")
+        # parameter entities are not general entities
+        @test ents("<!DOCTYPE d [<!ENTITY % p \"<foo>\"><!ENTITY e \"ok\">]><d/>").values == Dict("e" => "ok")
+    end
+
+    @testset "§5.1 cutoff: declarations after an unread parameter entity are not used" begin
+        e = ents("<!DOCTYPE d [<!ENTITY e1 \"a\">%ext;<!ENTITY e2 \"b\">]><d/>")
+        @test e.values == Dict("e1" => "a")
+        # one the subset itself declares is read, so the cutoff does not apply
+        e = ents("<!DOCTYPE d [<!ENTITY % p \"\">%p;<!ENTITY e2 \"b\">]><d/>")
+        @test haskey(e.values, "e2")
+    end
+end
+
 #==============================================================================#
-#                  NAMESPACES (Colon in Tag and Attribute Names)                #
+#                  NAMESPACES (Colon in Tag and Attribute Names)               #
 #==============================================================================#
 @testset "Namespaces" begin
     @testset "namespaced element" begin
@@ -2355,7 +2418,7 @@ end
 end
 
 #==============================================================================#
-#                    SHOW (text/xml MIME) ROUNDTRIP                             #
+#                    SHOW (text/xml MIME) ROUNDTRIP                            #
 #==============================================================================#
 @testset "text/xml MIME output" begin
     doc = Document(
