@@ -39,7 +39,7 @@ end
 # for a `String`-backed document means the rewrite, and for any other source means leaving it
 # to `_read_eol`. Without this a hand-built `LazyNode(raw, Document)` would be the one entry
 # that skips the rewrite its source type requires, and return CR to the application.
-LazyNode(data::AbstractString, nt::NodeType) = _lazynode_at(_normalize_input_eol(data), nt)
+LazyNode(data::AbstractString, nt::NodeType) = _lazynode_at(_expand_entities(_normalize_input_eol(data)), nt)
 
 # `d` arrives with §2.11 already applied — see `_cursor_at` for the same split.
 # No scan here. Parametric on `d`'s own type, so a rewritten document (always a `String`)
@@ -710,7 +710,7 @@ Base.length(n::LazyNode) = length(children(n))
 
 #-----------------------------------------------------------------------------# parse / read
 Base.parse(::Type{LazyNode}, xml::AbstractString) = parse(xml, LazyNode)
-Base.parse(xml::AbstractString, ::Type{LazyNode}) = _lazynode_at(_normalize_input_eol(_drop_bom(xml)), Document)
+Base.parse(xml::AbstractString, ::Type{LazyNode}) = _lazynode_at(_expand_entities(_normalize_input_eol(_drop_bom(xml))), Document)
 
 Base.read(filename::AbstractString, ::Type{LazyNode}) = parse(String(_normalize_bom(read(filename))), LazyNode)
 Base.read(io::IO, ::Type{LazyNode}) = parse(String(_normalize_bom(read(io))), LazyNode)

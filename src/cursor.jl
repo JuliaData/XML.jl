@@ -46,7 +46,7 @@ aliasing-contract note on [`next!`](@ref).
 function Cursor(data::S) where {S <: AbstractString}
     data = _drop_bom(data)   # a leading U+FEFF BOM char is an encoding signature, not content (§4.3.3)
     # §2.11 — rewritten here for a `String`-backed document, on read for any other source
-    _cursor_at(_normalize_input_eol(data), 1)
+    _cursor_at(_expand_entities(_normalize_input_eol(data)), 1)
 end
 
 # `d` arrives with whatever §2.11 requires of it already applied: a `String`-backed document

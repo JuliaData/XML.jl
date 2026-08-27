@@ -46,11 +46,11 @@ _drop_bom(s::AbstractString) = startswith(s, Char(0xFEFF)) ? SubString(s, nextin
 Base.parse(::Type{Node}, xml::AbstractString; wellformed::Symbol=:structural) = parse(xml, Node; wellformed)
 
 function Base.parse(xml::AbstractString, ::Type{Node}; wellformed::Symbol=:structural)
-    _parse(_normalize_input_eol(_drop_bom(String(xml))), String, unescape, Val(wellformed))
+    _parse(_expand_entities(_normalize_input_eol(_drop_bom(String(xml)))), String, unescape, Val(wellformed))
 end
 
 function Base.parse(xml::AbstractString, ::Type{Node{SubString{String}}}; wellformed::Symbol=:structural)
-    _parse(_normalize_input_eol(_drop_bom(String(xml))), SubString{String}, identity, Val(wellformed))
+    _parse(_expand_entities(_normalize_input_eol(_drop_bom(String(xml)))), SubString{String}, identity, Val(wellformed))
 end
 
 # Convert a parser substring to the requested storage type — copy to a fresh String, or

@@ -188,7 +188,28 @@ const _MAX_ENTITY_EXPANSION = 64 * 1024 * 1024   # bytes an expanded document ma
     (b >= UInt8('0') && b <= UInt8('9')) || b == UInt8('_') || b == UInt8(':') ||
     b == UInt8('.') || b == UInt8('-') || b == UInt8('#')
 
-function _expand_refs!(io::IOBuffer, s::AbstractString, ents::InternalEntities, depth::Int)
+# §4.4.5 Included in Literal: when the reference stands in an attribute value, the quotation
+# marks of the replacement text "are not recognized as delimiters". A pass that writes into the
+# document has to say so: a quote is written back as a character reference, which the parser
+# decodes to the quote it stood for. `<` is left alone on purpose — it is illegal in an attribute
+# value (§3.1), and leaving it lets the parser report that rather than this pass hiding it.
+@inline function _write_literal(io::IOBuffer, c::AbstractChar, literal::Bool)
+    if literal && (c == '"' || c == '\'')
+        Base.write(io, c == '"' ? "&#34;" : "&#39;")
+    else
+        Base.write(io, c)
+    end
+end
+
+function _write_span!(io::IOBuffer, s::AbstractString, literal::Bool)
+    literal || return Base.write(io, s)
+    for c in s
+        _write_literal(io, c, true)
+    end
+end
+
+function _expand_refs!(io::IOBuffer, s::AbstractString, ents::InternalEntities, depth::Int,
+                       literal::Bool = false)
     depth > _MAX_ENTITY_DEPTH &&
         error("entity expansion exceeded $(_MAX_ENTITY_DEPTH) levels of nesting")
     i = firstindex(s)
@@ -196,10 +217,10 @@ function _expand_refs!(io::IOBuffer, s::AbstractString, ents::InternalEntities, 
     while i <= stop
         amp = findnext('&', s, i)
         if amp === nothing
-            Base.write(io, SubString(s, i))
+            _write_span!(io, SubString(s, i), literal)
             break
         end
-        amp > i && Base.write(io, SubString(s, i, prevind(s, amp)))
+        amp > i && _write_span!(io, SubString(s, i, prevind(s, amp)), literal)
         j = nextind(s, amp)
         while j <= stop && _is_name_byte(codeunit(s, j))
             j = nextind(s, j)
@@ -212,7 +233,7 @@ function _expand_refs!(io::IOBuffer, s::AbstractString, ents::InternalEntities, 
         name = SubString(s, nextind(s, amp), prevind(s, j))
         rep = get(ents.values, name, nothing)
         rep === nothing ? Base.write(io, SubString(s, amp, j)) :
-                          _expand_refs!(io, rep, ents, depth + 1)
+                          _expand_refs!(io, rep, ents, depth + 1, literal)
         io.size > _MAX_ENTITY_EXPANSION &&
             error("entity expansion exceeded $(_MAX_ENTITY_EXPANSION) bytes")
         i = nextind(s, j)
@@ -268,7 +289,16 @@ function _expand_entities(s::String)
         _references_declared(span, ents) || continue
         start = tok.offset + 1
         Base.write(out, SubString(s, pos, prevind(s, start)))
-        _expand_refs!(out, span, ents, 1)
+        if tok.kind === XMLTokenizer.TokenKinds.ATTR_VALUE
+            # the span carries its delimiters; only what they enclose is expanded, in literal
+            q = span[firstindex(span)]
+            Base.write(out, q)
+            _expand_refs!(out, SubString(span, nextind(span, firstindex(span)), prevind(span, lastindex(span))),
+                          ents, 1, true)
+            Base.write(out, q)
+        else
+            _expand_refs!(out, span, ents, 1)
+        end
         pos = start + tok.ncodeunits
         rewrote = true
     end
