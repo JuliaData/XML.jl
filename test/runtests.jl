@@ -1617,6 +1617,18 @@ end
 #                        DTD PARSING (parse_dtd)                               #
 #==============================================================================#
 @testset "DTD Parsing (parse_dtd)" begin
+    @testset "a subset holding non-ASCII is read by character, not by byte" begin
+        # the readers walk the subset by index; stepping with `pos + 1` lands inside a character
+        # as soon as one is not ASCII, and indexing there throws
+        @test parse_dtd("doc [<!ENTITY e \"日本\">]").entities[1].value == "日本"
+        @test parse_dtd("doc [<!-- é --><!ENTITY e \"v\">]").entities[1].value == "v"
+        @test parse_dtd("doc [<!ELEMENT données EMPTY>]").elements[1].name == "données"
+        ad = parse_dtd("doc [<!ATTLIST données a CDATA \"é\">]").attributes[1]
+        @test (ad.element, ad.name, ad.default) == ("données", "a", "\"é\"")
+        # an unterminated quote must not step past the end while doing so
+        @test parse_dtd("doc [<!ENTITY e \"oups").entities[1].value == "oups"
+    end
+
     @testset "simple DTD with entities" begin
         path = joinpath(@__DIR__, "data", "simple_dtd.xml")
         isfile(path) || return
