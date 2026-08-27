@@ -675,6 +675,36 @@ end
         @test ents("<!DOCTYPE a SYSTEM \"a.dtd\"><a/>") === nothing
     end
 
+    @testset "the byte probe never misses a DOCTYPE the tokenizer finds" begin
+        # `_has_doctype` decides whether reading the DOCTYPE is worth it, by scanning bytes
+        # rather than producing tokens, and its two errors do not cost the same: a false
+        # positive wastes a prolog walk, a false negative leaves entities unexpanded with
+        # nothing to show for it. So the assertion is one-sided, and it runs over every
+        # fixture on disk — the W3C suite, the libxml2/expat/pugixml cases, this package's own.
+        tokenizer_says(s) = try XML._doctype_body(s) !== nothing catch; nothing end
+        files = String[]
+        for (dir, _, fs) in walkdir(joinpath(@__DIR__, "data")), f in fs
+            endswith(f, ".xml") && push!(files, joinpath(dir, f))
+        end
+        @test length(files) > 100          # the suite is present; a lower count means it moved
+        checked = 0
+        missed = String[]                  # probe said no, tokenizer found one: never allowed
+        wasted = 0                         # probe said yes, tokenizer found none: only a cost
+        for f in files
+            s = try read(f, String) catch; continue end
+            isvalid(s) || continue         # UTF-16 fixtures are out of scope here
+            t = tokenizer_says(s)
+            t === nothing && continue
+            checked += 1
+            p = XML._has_doctype(s)
+            !p && t && push!(missed, basename(f))
+            p && !t && (wasted += 1)
+        end
+        @test isempty(missed)
+        @test checked > 100
+        @test wasted < checked ÷ 10        # the probe is a filter, not a coin toss
+    end
+
     @testset "declarations are read, the first binding each name (§4.2)" begin
         e = ents("<!DOCTYPE a [<!ENTITY e \"ev\">]><a>&e;</a>")
         @test e.values == Dict("e" => "ev")

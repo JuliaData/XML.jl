@@ -28,6 +28,47 @@ const _CHARREF_RE = r"&#(?:[0-9]+|[xX][0-9a-fA-F]+);"
 
 _resolve_charrefs(v::AbstractString) = occursin('&', v) ? replace(v, _CHARREF_RE => _unescape_entity) : v
 
+# Whether the prolog may hold a DOCTYPE, decided without producing a token. Before the DOCTYPE
+# or the root element a prolog admits only white space, the XML declaration, comments and
+# processing instructions (§2.8), so three forms and a byte search over each settle it.
+#
+# The answer only decides whether `_doctype_body` is worth running, and the two costs are not
+# symmetric: saying yes wrongly wastes a prolog walk, saying no wrongly leaves entities
+# unexpanded with nothing to show for it. So `false` is returned only on positive knowledge —
+# the root element was reached — and anything unrecognised defers to the tokenizer. A
+# differential test pins the pair over every fixture on disk.
+@inline function _has_doctype(s::AbstractString)
+    n = ncodeunits(s)
+    i = 1
+    startswith(s, '﻿') && (i = nextind(s, 1))
+    @inbounds while i <= n
+        b = codeunit(s, i)
+        if b == UInt8(' ') || b == UInt8('\n') || b == UInt8('\t') || b == UInt8('\r')
+            i += 1
+            continue
+        end
+        b == UInt8('<') || return true               # not a prolog we recognise: let it decide
+        i + 1 > n && return false
+        c = codeunit(s, i + 1)
+        if c == UInt8('?')                           # the XML declaration, or a PI
+            j = findnext("?>", s, i)
+            j === nothing && return false
+            i = last(j) + 1
+        elseif c == UInt8('!')
+            if i + 3 <= n && codeunit(s, i + 2) == UInt8('-') && codeunit(s, i + 3) == UInt8('-')
+                j = findnext("-->", s, i)            # a comment
+                j === nothing && return false
+                i = last(j) + 1
+            else
+                return true                          # `<!DOCTYPE`, or something only the tokenizer reads
+            end
+        else
+            return false                             # the root element: the prolog is over
+        end
+    end
+    false
+end
+
 # The prolog is walked, not the document: a DOCTYPE precedes the root element, so tokenizing
 # stops at the first open tag. A document without one costs that walk and nothing more.
 function _doctype_body(xml::AbstractString)
@@ -116,6 +157,7 @@ The general entities the document's internal subset declares, or `nothing` when 
 none — the case that must cost nothing beyond the prolog walk.
 """
 function _internal_entities(xml::AbstractString)
+    _has_doctype(xml) || return nothing
     body = _doctype_body(xml)
     body === nothing && return nothing
     values = _subset_entities(body)
