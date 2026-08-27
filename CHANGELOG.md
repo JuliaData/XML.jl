@@ -55,7 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Views are span-native end to end**: tokens carry `(offset, ncodeunits)` byte spans,
   and every view — `raw`, the tag/attribute/PI accessors, `FlatNode`'s span→view
   helpers — is rebuilt by direct field construction, with no `prevind`/`nextind` walks.
-  Sound because every span edge lands on an ASCII byte or EOF, hence a UTF-8 character
+  Sound because every span edge falls on an ASCII byte or EOF, hence a UTF-8 character
   boundary; `--check-bounds=yes` builds (as in `Pkg.test`) compile the checked
   reconstruction instead, selected at load time. On the 14 MB corpus: lex 37.4 → 23.4 ms,
   `FlatNode` extract 6.6 → 3.1 ms, and two headlines flip — `FlatNode` out-builds libxml2
@@ -186,7 +186,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`==`/`isequal`/`hash` are structural for every tree reader, cross-reader included** —
   same decoded nodetype/tag/attributes (order-insensitive)/value/children (in document
   order), recursively. `Node` already compared structurally; `LazyNode` (previously the
-  default egal fallback) now matches it, the new `FlatNode` ships with these semantics
+  default egal fallback) now matches it, the new `FlatNode` has these semantics
   from the start, and `Node == LazyNode == FlatNode` holds for equal content (#83).
 
 - **Search-based `Node` navigation raises an error on indistinguishable occurrences**:

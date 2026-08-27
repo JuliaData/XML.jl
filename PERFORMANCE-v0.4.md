@@ -16,7 +16,7 @@ The implementation hits that bound:
 - delimiter scans use `findnext`, which for `String` calls the C library's [`memchr`](https://man7.org/linux/man-pages/man3/memchr.3.html) — a hand-vectorized (SIMD) byte search, so the hot scan runs at memory speed rather than as a byte-at-a-time Julia loop;
 - whether a byte may appear in an XML name is answered by a single load from a **256-entry lookup table** instead of a chain of range comparisons.
 
-The one departure from pure finite-state scanning is the DOCTYPE body: its internal subset `[…]` may itself contain `>`, so a bracket-depth counter decides which `>` actually closes the DOCTYPE.
+The one departure from pure finite-state scanning is the DOCTYPE body: its internal subset `[…]` may itself contain `>`, so a bracket-depth counter determines which `>` actually closes the DOCTYPE.
 
 ### Level 2 — nesting is visibly pushdown
 
@@ -24,11 +24,11 @@ Balanced `<a>…</a>` isn't regular — matching open to close needs a stack. XM
 So `_parse` is a single-pass **[visibly pushdown automaton](https://en.wikipedia.org/wiki/Nested_word#Automata)** (VPA): **O(n) time, stack depth = nesting depth** (building the output tree is a second, separable O(n) cost — the one `Cursor` skips entirely, and the one Table 3 prices).\
 Drive the same traversal event-by-event and you have the `Cursor` streaming API — pure Julia: no [FFI](https://en.wikipedia.org/wiki/Foreign_function_interface) call per event, unlike a libxml2-backed reader (EzXML's `StreamReader`), where every pulled event crosses the Julia↔C boundary.
 
-One theoretical fine print: a textbook VPA has a *finite* stack alphabet, while checking that `</a>` really closes `<a>` pushes the tag *name* — drawn from an unbounded set of names — so the parser is formally a VPA over an unbounded stack alphabet. A nuance of classification only: each stack entry holds a tag name, the close-tag comparison is O(name length) and already inside the O(n), and every guarantee above survives.
+One theoretical fine print: a textbook VPA has a *finite* stack alphabet, while checking that `</a>` really closes `<a>` pushes the tag *name* — drawn from an unbounded set of names — so the parser is formally a VPA over an unbounded stack alphabet. A nuance of classification only: each stack entry holds a tag name, the close-tag comparison is O(name length) and already inside the O(n), and every guarantee above holds.
 
 ### Julia-level constant factors
 
-The well-formedness level is a type parameter (`Val{W}`), so `:strict`/`:structural` checks are [dead-code-eliminated](https://en.wikipedia.org/wiki/Dead-code_elimination) when inactive (confirmed in the LLVM); `Node{S}` is parametric, so `parse(s, Node{SubString{String}})` — a supported method, exercised by the test suite and by the benchmarks behind the zero-copy row below — keeps **zero-copy views** while `parse(s, Node)` owns `String`s; a `has_entities` flag skips entity decoding when a token holds no `&`; and tokens are native byte spans — every span edge the scanner produces lands on an ASCII byte, provably a UTF-8 character boundary, so token views are rebuilt by direct field construction with no index walking.
+The well-formedness level is a type parameter (`Val{W}`), so `:strict`/`:structural` checks are [dead-code-eliminated](https://en.wikipedia.org/wiki/Dead-code_elimination) when inactive (confirmed in the LLVM); `Node{S}` is parametric, so `parse(s, Node{SubString{String}})` — a supported method, exercised by the test suite and by the benchmarks behind the zero-copy row below — keeps **zero-copy views** while `parse(s, Node)` owns `String`s; a `has_entities` flag skips entity decoding when a token holds no `&`; and tokens are native byte spans — every span edge the scanner produces falls on an ASCII byte, provably a UTF-8 character boundary, so token views are rebuilt by direct field construction with no index walking.
 
 ## By access pattern
 
@@ -47,7 +47,7 @@ Performance isn't one number — it splits by *what you do with the document*. 1
 ### Stream — events, no tree
 
 `Cursor` pulls in pure Julia — a full pass, decoded reads included, leaves the allocator
-untouched; EzXML's `StreamReader` is libxml2's reader, paying FFI per event:
+untouched; EzXML's `StreamReader` is libxml2's reader, at one FFI call per event:
 
 | Stream | time (incl. GC) | memory |
 |---|--:|--:|
@@ -60,16 +60,16 @@ Structured pull helpers keep scans cheap without hand-tracked depth: `for_each_c
 
 ### Partial reads — `LazyNode`
 
-Opening builds nothing — for a document held as a `String` it costs one scan of the source for line ends, 0.21 ms on this 14 MB file, and for one held as anything else not even that ([Memory-mapped sources](#memory-mapped-sources)) — and nothing is ever cached: each visit re-tokenizes and rebuilds its small handles — iteration steps allocate nothing, and each child or attribute scan is one small resumable cursor object, elided when it never loops (Table 4 prices the full-scan case) — so a repeated look-up costs only its re-scan time, and costs repeat per visit. A traversal pays only for the bytes it actually steps over: the child iterator defers a yielded element's subtree skip until the *next sibling* is requested, so descending to a target is O(bytes before it); scanning *everything* is the worst case, priced per reader in Table 4. What still costs: *horizontal* scans pay the subtrees they step past (as any index-free forward reader must), and *repeated* look-ups pay again — those two patterns tip the scale toward `FlatNode`/`Node`.
+Opening builds nothing — for a document held as a `String` it costs one scan of the source for line ends, 0.21 ms on this 14 MB file, and for one held as anything else not even that ([Memory-mapped sources](#memory-mapped-sources)) — and nothing is ever cached: each visit re-tokenizes and rebuilds its small handles — iteration steps allocate nothing, and each child or attribute scan is one small resumable cursor object, elided when it never loops (Table 4 prices the full-scan case) — so a repeated look-up costs only its re-scan time, and costs repeat per visit. A traversal costs only the bytes it actually steps over: the child iterator defers a yielded element's subtree skip until the *next sibling* is requested, so descending to a target is O(bytes before it); scanning *everything* is the worst case, priced per reader in Table 4. What still costs: *horizontal* scans cost the subtrees they step past (as any index-free forward reader must), and *repeated* look-ups cost again — those two patterns tip the scale toward `FlatNode`/`Node`.
 
 > [!NOTE]
-> Ask only for what you need: a `for` loop over `eachchildnode` fetches the next sibling — and pays its predecessor's deferred subtree skip — at the top of each round, so exit *from within the body* once you are done:
+> Ask only for what you need: a `for` loop over `eachchildnode` fetches the next sibling — and runs its predecessor's deferred subtree skip — at the top of each round, so exit *from within the body* once you are done:
 >
 > ```julia
 > out = LazyNode[]                  # goal: keep the first three children
 > for c in eachchildnode(parent)
 >     push!(out, c)
->     length(out) == 3 && break     # decided in the body — no fourth fetch
+>     length(out) == 3 && break     # the break is in the body — no fourth fetch
 > end
 > ```
 >
@@ -85,7 +85,7 @@ The readers keep whatever string type the document arrives as, and a document no
 | open, then read 1 000 nodes | 43.8 µs | 38 KiB |
 | open, then read every node | 40.6 ms | 36.3 MiB |
 
-An LF file opens in the same 11.7 ns: the entry does not scan the source, so opening is O(1) in the file's size and a reader that touches a fraction of a mapped document costs only that fraction. Reading *all* of a CR LF document allocates more than a reader working from a rewritten `String` would. These are short-lived strings, reclaimed by the garbage collector as the reader moves on, where the rewrite holds one document-sized block for as long as any handle into it lives. For a file larger than memory, that difference decides whether it can be read at all.[^mapped]
+An LF file opens in the same 11.7 ns: the entry does not scan the source, so opening is O(1) in the file's size and a reader that touches a fraction of a mapped document costs only that fraction. Reading *all* of a CR LF document allocates more than a reader working from a rewritten `String` would. These are short-lived strings, reclaimed by the garbage collector as the reader moves on, where the rewrite holds one document-sized block for as long as any handle into it lives. For a file larger than memory, that difference determines whether it can be read at all.[^mapped]
 
 [^mapped]: Measured 2026-08-25, same machine and settings as the rest, Julia 1.12.7; BenchmarkTools medians. Source: [`benchmarks/profile.jl`](benchmarks/profile.jl), section (5), which generates the CR LF twin of the corpus beside it.
 
@@ -114,7 +114,7 @@ _Table 2 — full-DOM extraction (parse + pull every tag/text), cross-library._[
 
 _Table 3 — the XML.jl pipeline, decomposed (`String` variant)._[^profile]
 
-The lexer is allocation-free; **the whole libxml2 gap is *materialising* the native tree, not scanning it** — and the GC column shows where that cost lives: the allocation-free lex cannot trigger a collection, so every garbage-collector pause inside a parse lands in the build, the toll of 882 K fresh objects.
+The lexer is allocation-free; **the whole libxml2 gap is *materialising* the native tree, not scanning it** — and the GC column shows where that cost lives: the allocation-free lex cannot trigger a collection, so every garbage-collector pause inside a parse falls in the build, the toll of 882 K fresh objects.
 
 Traversal of a pre-built tree stays off the allocator where it counts — iteration *steps*
 are free for all three readers, and the allocation column is measured, not assumed. `Node`
@@ -130,7 +130,7 @@ node — its resumable child cursor, elided by the compiler wherever a container
 
 _Table 4 — whole-tree traversal per reader: one child iterator and a tag + value read per
 visited node (the spreadsheet hot-loop shape). `LazyNode` re-tokenizes everything it steps
-over — pay-per-visit by design; see the partial-reads section for when that trade wins._[^profile]
+over — a cost per visit by design; see the partial-reads section for when that trade wins._[^profile]
 
 ### `FlatNode` (v0.4.2, experimental)
 
@@ -142,7 +142,7 @@ The asymptotics change only in the [external-memory model](https://en.wikipedia.
 
 Concretely, a `_FlatRec` is 40 bytes — ten `Int32`-sized fields (kind, three tree links, tag span, value span, attribute range; 32-bit throughout because the 2 GiB source bound lets every offset and index fit an `Int32`, halving the store) — so a 64–128-byte cache line carries one to three records.
 
-And the scan is [*cache-oblivious*](https://en.wikipedia.org/wiki/Cache-oblivious_algorithm) ([Frigo et al. 1999](https://en.wikipedia.org/wiki/Cache-oblivious_algorithm)): sequential access achieves Θ(n/B) for *every* B simultaneously, so neither the code nor the analysis needs the actual line size — the bound holds at each level of the cache hierarchy at once, hardware prefetchers included.
+And the scan is [*cache-oblivious*](https://en.wikipedia.org/wiki/Cache-oblivious_algorithm) ([Frigo et al. 1999](https://en.wikipedia.org/wiki/Cache-oblivious_algorithm)): sequential access is Θ(n/B) for *every* B simultaneously, so neither the code nor the analysis needs the actual line size — the bound holds at each level of the cache hierarchy at once, hardware prefetchers included.
 
 Measured on the same XMark document:
 
