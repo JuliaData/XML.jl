@@ -171,20 +171,24 @@ end
 # its own bounds. Both are refused at every `wellformed` level: an unbounded expansion is a
 # termination hazard, not a conformance question.
 const _MAX_ENTITY_DEPTH = 40
-const _MAX_ENTITY_EXPANSION = 10 * 1024 * 1024   # bytes produced from one reported value
+const _MAX_ENTITY_EXPANSION = 64 * 1024 * 1024   # bytes an expanded document may reach
 
-# A reference is recognised once, in the text as it stands, and dispatched on what it names: a
-# character reference or one of the five predefined entities decodes to its character, a declared
-# general entity is INCLUDED with its own references expanded in turn (§4.4.2), and anything else
-# is copied through — today's graceful degradation for an undeclared name. Resolving the
-# predefined ones in an earlier separate pass would be wrong: it manufactures `&` bytes that the
-# later pass would read as references nobody wrote.
+# A reference to a declared general entity is replaced by its replacement text, and that text's
+# own references with it (§4.4.2). Everything else is copied through untouched — a character
+# reference, one of the five predefined entities, an undeclared name: the parser reads those
+# afterwards, from the document this pass writes. §4.5 bypasses references when the declaration
+# is read, so bypassing them again here is what makes `&amp;` in a replacement text arrive at the
+# parser as `&amp;` and reach the application as `&`.
+#
+# Unlike the line-end rewrite, whose output is bounded by its source, an expansion's length is
+# not known until it ends — amplification is the point of the bounds above. A growable buffer is
+# therefore the right shape here, where a sized one was right there.
 @inline _is_name_byte(b::UInt8) =
     (b >= UInt8('a') && b <= UInt8('z')) || (b >= UInt8('A') && b <= UInt8('Z')) ||
     (b >= UInt8('0') && b <= UInt8('9')) || b == UInt8('_') || b == UInt8(':') ||
     b == UInt8('.') || b == UInt8('-') || b == UInt8('#')
 
-function _expand_into!(io::IOBuffer, s::AbstractString, ents::InternalEntities, depth::Int)
+function _expand_refs!(io::IOBuffer, s::AbstractString, ents::InternalEntities, depth::Int)
     depth > _MAX_ENTITY_DEPTH &&
         error("entity expansion exceeded $(_MAX_ENTITY_DEPTH) levels of nesting")
     i = firstindex(s)
@@ -196,23 +200,19 @@ function _expand_into!(io::IOBuffer, s::AbstractString, ents::InternalEntities, 
             break
         end
         amp > i && Base.write(io, SubString(s, i, prevind(s, amp)))
-        # the name runs while its bytes can belong to one; a stray `&` ends the scan at once
         j = nextind(s, amp)
         while j <= stop && _is_name_byte(codeunit(s, j))
             j = nextind(s, j)
         end
         if j > stop || codeunit(s, j) != UInt8(';') || j == nextind(s, amp)
-            Base.write(io, '&')                         # not a reference: a literal ampersand
+            Base.write(io, '&')                      # not a reference: a literal ampersand
             i = nextind(s, amp)
             continue
         end
         name = SubString(s, nextind(s, amp), prevind(s, j))
         rep = get(ents.values, name, nothing)
-        if rep === nothing
-            Base.write(io, _unescape_entity(SubString(s, amp, j)))
-        else
-            _expand_into!(io, rep, ents, depth + 1)
-        end
+        rep === nothing ? Base.write(io, SubString(s, amp, j)) :
+                          _expand_refs!(io, rep, ents, depth + 1)
         io.size > _MAX_ENTITY_EXPANSION &&
             error("entity expansion exceeded $(_MAX_ENTITY_EXPANSION) bytes")
         i = nextind(s, j)
@@ -220,19 +220,59 @@ function _expand_into!(io::IOBuffer, s::AbstractString, ents::InternalEntities, 
     io
 end
 
-# The two decode strategies a reader can carry. The choice is made once, at the document entry,
-# and reaches the value accessors as a type — not as a field they test — so a document with no
-# internal general entities runs the same code it runs today. `NoEntities` is zero-size, so it
-# also leaves the readers' layout untouched.
-struct NoEntities end
-
-struct WithEntities
-    ents::InternalEntities
+# Whether a span holds a reference to a name the subset declares — the test that decides whether
+# it is rewritten at all, so that a document declaring entities it never uses is copied verbatim.
+function _references_declared(s::AbstractString, ents::InternalEntities)
+    i = firstindex(s)
+    stop = lastindex(s)
+    while (amp = findnext('&', s, i)) !== nothing
+        j = nextind(s, amp)
+        while j <= stop && _is_name_byte(codeunit(s, j))
+            j = nextind(s, j)
+        end
+        j <= stop && codeunit(s, j) == UInt8(';') &&
+            haskey(ents.values, SubString(s, nextind(s, amp), prevind(s, j))) && return true
+        i = nextind(s, amp)
+    end
+    false
 end
 
-@inline (::NoEntities)(x::AbstractString) = unescape(x)
+"""
+    _expand_entities(src) -> src or an expanded copy
 
-function (d::WithEntities)(x::AbstractString)
-    occursin('&', x) || return x
-    String(take!(_expand_into!(IOBuffer(), x, d.ents, 1)))
+XML 1.0 §4.4.2 includes a general entity's replacement text "as though it were part of the
+document at the location the reference was recognized" — so a reference whose replacement text
+carries markup produces STRUCTURE, not a text node holding `<`. Expanding before the parse is
+what makes that follow: the parser reads the expanded document and builds the nodes itself.
+
+Only content and attribute values are rewritten. A reference inside a comment, a CDATA section,
+a processing instruction or the internal subset is not a reference (§4.4.2 recognises them in
+content and in attribute values), so those spans are copied byte for byte.
+
+Dispatched on the source type: a document held as anything but a `String` is returned untouched,
+which keeps the memory-mapped recipe intact — it costs nothing, and its references stay literal.
+"""
+_expand_entities(s::AbstractString) = s
+
+function _expand_entities(s::String)
+    ents = _internal_entities(s)
+    (ents === nothing || isempty(ents)) && return s
+    out = IOBuffer(sizehint = ncodeunits(s))
+    pos = 1                                          # 1-based byte position of the next byte to copy
+    rewrote = false
+    for tok in XMLTokenizer.tokenize(s, 1)
+        (tok.kind === XMLTokenizer.TokenKinds.TEXT ||
+         tok.kind === XMLTokenizer.TokenKinds.ATTR_VALUE) || continue
+        tok.has_entities || continue
+        span = XMLTokenizer.raw(tok, s)
+        _references_declared(span, ents) || continue
+        start = tok.offset + 1
+        Base.write(out, SubString(s, pos, prevind(s, start)))
+        _expand_refs!(out, span, ents, 1)
+        pos = start + tok.ncodeunits
+        rewrote = true
+    end
+    rewrote || return s
+    pos <= ncodeunits(s) && Base.write(out, SubString(s, pos))
+    String(take!(out))
 end

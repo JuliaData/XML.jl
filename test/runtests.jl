@@ -746,45 +746,66 @@ end
         @test ents("<!DOCTYPE d [<!ENTITY % p \"<foo>\"><!ENTITY e \"ok\">]><d/>").values == Dict("e" => "ok")
     end
 
-    @testset "inclusion resolves references in one pass (§4.4.2)" begin
-        dec(sub) = XML.WithEntities(XML._internal_entities("<!DOCTYPE d [" * sub * "]><d/>"))
-        d = dec("<!ENTITY e \"ev\"><!ENTITY n \"&e;&e;\"><!ENTITY lt2 \"&lt;\">")
-        @test d("plain") == "plain"
-        @test d("a&e;b") == "aevb"
-        @test d("&n;") == "evev"                 # a reference inside replacement text expands too
-        @test d("&lt2;") == "<"                  # …including a predefined one
-        @test d("x&#65;y") == "xAy"
-        # the predefined entities cannot be resolved in an earlier pass: that would manufacture
-        # `&` bytes the general pass would then read as references nobody wrote
-        @test d("&amp;&e;") == "&ev"
-        @test d("&amp;e;") == "&e;"
-        # an undeclared name keeps today's behaviour, and a bare `&` is not a reference
-        @test d("&unknown;") == "&unknown;"
-        @test d("a & b") == "a & b"
-        @test d("&e") == "&e"
-        @test d("&;") == "&;"
+    @testset "references are included before the parse (§4.4.2)" begin
+        # Inclusion happens on the document, not on each reported value: replacement text
+        # carrying markup then produces structure, because the parser reads what this wrote.
+        exp(x) = XML._expand_entities(x)
+        doc(sub, body) = "<!DOCTYPE d [" * sub * "]><d>" * body * "</d>"
+
+        @test exp("<a>texte &amp; suite</a>") == "<a>texte &amp; suite</a>"   # nothing declared
+        @test exp(doc("<!ENTITY e \"ev\">", "&e;")) == doc("<!ENTITY e \"ev\">", "ev")
+        @test exp(doc("<!ENTITY e \"<e/>\">", "&e;")) == doc("<!ENTITY e \"<e/>\">", "<e/>")
+        @test exp(doc("<!ENTITY a \"&b;\"><!ENTITY b \"B\">", "&a;")) ==
+              doc("<!ENTITY a \"&b;\"><!ENTITY b \"B\">", "B")
+        # valid-sa-024 builds its element from a character reference in the declaration
+        @test occursin("<d><foo></foo></d>", exp(doc("<!ENTITY e \"&#60;foo></foo>\">", "&e;")))
+        # valid-sa-086: the first declaration binds (§4.2)
+        @test exp(doc("<!ENTITY e \"\"><!ENTITY e \"<foo>\">", "&e;")) ==
+              doc("<!ENTITY e \"\"><!ENTITY e \"<foo>\">", "")
+        # §4.5 bypasses references when the declaration is read, so `&amp;` reaches the parser
+        # as `&amp;` and the application as `&` — resolving it here would corrupt that chain
+        @test exp(doc("<!ENTITY e \"a&amp;b\">", "&e;")) == doc("<!ENTITY e \"a&amp;b\">", "a&amp;b")
+        # attribute values are rewritten too
+        @test occursin("x=\"ev\"", exp("<!DOCTYPE a [<!ENTITY e \"ev\">]><a x=\"&e;\"/>"))
+    end
+
+    @testset "a reference is only a reference in content and attribute values" begin
+        exp(x) = XML._expand_entities(x)
+        for body in ("<!--&e;-->", "<![CDATA[&e;]]>", "<?pi &e;?>")
+            src = "<!DOCTYPE d [<!ENTITY e \"X\">]><d>" * body * "</d>"
+            @test exp(src) == src
+        end
+        # nor inside the subset: §4.5 bypasses it there, the table resolves it instead
+        @test exp("<!DOCTYPE d [<!ENTITY e \"X\"><!ENTITY f \"&e;\">]><d>&f;</d>") ==
+              "<!DOCTYPE d [<!ENTITY e \"X\"><!ENTITY f \"&e;\">]><d>X</d>"
+    end
+
+    @testset "a document that needs no rewrite is returned as it stands" begin
+        exp(x) = XML._expand_entities(x)
+        for src in ("<a>plain</a>",
+                    "<!DOCTYPE d [<!ELEMENT d EMPTY>]><d/>",              # declarations, no entity
+                    "<!DOCTYPE d [<!ENTITY e \"X\">]><d>no use</d>",      # declared, never referenced
+                    "<!DOCTYPE d [<!ENTITY e \"X\">]><d>&other;</d>")     # only undeclared names
+            @test exp(src) === src                                        # the same object, not a copy
+        end
+        # a source held as anything but a String keeps the memory-mapped recipe: untouched
+        sub = SubString("<!DOCTYPE d [<!ENTITY e \"X\">]><d>&e;</d>", 1)
+        @test XML._expand_entities(sub) === sub
     end
 
     @testset "expansion is bounded, at every wellformed level" begin
         # the billion-laughs shape has no cycle, so WFC: No Recursion does not catch it —
         # ten entities each naming the previous one ten times reach 10^10 bytes at depth ten
-        laughs = "<!ENTITY a0 \"aaaaaaaaaa\">" *
+        laughs = "<!ENTITY a0 \"" * repeat("a", 1000) * "\">" *
                  join(["<!ENTITY a$i \"" * repeat("&a$(i-1);", 10) * "\">" for i in 1:9])
-        d = XML.WithEntities(XML._internal_entities("<!DOCTYPE d [" * laughs * "]><d/>"))
-        @test_throws ErrorException d("&a9;")
+        @test_throws ErrorException XML._expand_entities("<!DOCTYPE d [" * laughs * "]><d>&a9;</d>")
         # nesting alone is bounded too, without amplification
         deep = join(["<!ENTITY b$i \"&b$(i-1);\">" for i in 1:60])
-        d2 = XML.WithEntities(XML._internal_entities("<!DOCTYPE d [<!ENTITY b0 \"x\">" * deep * "]><d/>"))
-        @test_throws ErrorException d2("&b60;")
+        @test_throws ErrorException XML._expand_entities(
+            "<!DOCTYPE d [<!ENTITY b0 \"x\">" * deep * "]><d>&b60;</d>")
         # and a modest nesting is not
-        @test XML.WithEntities(XML._internal_entities(
-            "<!DOCTYPE d [<!ENTITY c0 \"x\"><!ENTITY c1 \"&c0;&c0;\"><!ENTITY c2 \"&c1;&c1;\">]><d/>"))("&c2;") == "xxxx"
-    end
-
-    @testset "the strategy is a type, not a field to test" begin
-        @test sizeof(XML.NoEntities()) == 0        # readers carrying it keep today's layout
-        @test XML.NoEntities()("a&amp;b") == "a&b"
-        @test XML.NoEntities()("plain") == "plain"
+        @test occursin("<d>xxxx</d>", XML._expand_entities(
+            "<!DOCTYPE d [<!ENTITY c0 \"x\"><!ENTITY c1 \"&c0;&c0;\"><!ENTITY c2 \"&c1;&c1;\">]><d>&c2;</d>"))
     end
 
     @testset "§5.1 cutoff: declarations after an unread parameter entity are not used" begin
