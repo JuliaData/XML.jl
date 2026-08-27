@@ -45,13 +45,15 @@ aliasing-contract note on [`next!`](@ref).
 """
 function Cursor(data::S) where {S <: AbstractString}
     data = _drop_bom(data)   # a leading U+FEFF BOM char is an encoding signature, not content (§4.3.3)
-    _cursor_at(_normalize_input_eol(data), 1)   # §2.11: line ends normalize on input, before parsing
+    # §2.11 — rewritten here for a `String`-backed document, on read for any other source
+    _cursor_at(_normalize_input_eol(data), 1)
 end
 
-# `d` is ALREADY §2.11-normalized: no scan, no restart. Parametric on `d`'s own type so a
-# rewritten document (always a `String`) yields `Cursor{String}` without re-dispatching
-# through the public constructor — which is what the old `return Cursor(d)` restart bought,
-# at the price of a second, provably fruitless CR scan of the whole document.
+# `d` arrives with whatever §2.11 requires of it already applied: a `String`-backed document
+# is rewritten at the entry, any other source is left for `_read_eol` to normalize value by
+# value. Nothing here scans or restarts. `Cursor{S}` is built directly, on `d`'s own type,
+# rather than through the public constructor: that constructor runs the entry normalization,
+# which on a document already normalized is a scan for a CR the entry has removed.
 @inline function _cursor_at(d::S, pos::Integer) where {S <: AbstractString}
     st = _CURSOR_XT.StatefulTokenizer(_CURSOR_XT.Tokenizer(d, pos))
     Cursor{S}(st, _CURSOR_XT.no_token(d), Document, 0, 0, false, false)
@@ -63,7 +65,7 @@ Base.parse(::Type{Cursor}, xml::AbstractString) = Cursor(xml)
 
 A cursor whose token stream starts at byte position `startpos` in `data` instead
 of the document start — for walking a subtree whose start offset is already known.
-The first [`next!`](@ref) lands on whatever element begins at `startpos`, at depth
+The first [`next!`](@ref) reaches whatever element begins at `startpos`, at depth
 1, so [`for_each_child`](@ref) then iterates that element's immediate children and
 auto-stops at its subtree boundary (the depth break). LazyNode-agnostic primitive.
 """
@@ -76,9 +78,10 @@ end
     Cursor(node::LazyNode)
 
 Convenience bridge: a cursor positioned to walk `node` and its subtree — the
-inverse of the `LazyNode(c)` snapshot. A `LazyNode`'s source string is §2.11-normalized
-by construction (every `LazyNode` entry point normalizes), so this bridge skips the CR
-scan the raw-string constructors must perform; it is the only place `Cursor` mentions
+inverse of the `LazyNode(c)` snapshot. Both readers treat a source the same way — a
+`String`-backed document is normalized when the `LazyNode` is built, any other source
+normalizes value by value — so the bridge passes the source straight through, without the
+scan the raw-string constructors run on their argument; it is the only place `Cursor` mentions
 `LazyNode`, and it is an optional, removable convenience (a consumer that tracks
 subtree start offsets directly can call the primitive `Cursor(data, startpos)`).
 """
@@ -158,8 +161,11 @@ function tag(c::Cursor)
 end
 
 # token-layer entity decode (inlined `_decode`; depends only on `unescape`, whose
-# `SubString` method returns concretely — both branches here are `SubString{String}`).
-@inline _cursor_decode(tok, data) = tok.has_entities ? unescape(raw(tok, data)) : raw(tok, data)
+# `SubString` method returns concretely). For a `String`-backed document `_read_eol` is the
+# identity, so both branches stay `SubString{String}`; for any other source it widens them,
+# which is what that source costs instead of an entry-time rewrite.
+@inline _cursor_decode(tok, data) =
+    tok.has_entities ? unescape(_read_eol(raw(tok, data))) : _read_eol(raw(tok, data))
 
 # @inline: keeps the union return caller-splittable — see the note on `value(::LazyNode)`.
 @inline function value(c::Cursor)
@@ -168,19 +174,19 @@ end
         return _cursor_decode(c.token, _data(c))
     elseif nt === Comment
         it = _rescan(c); iterate(it)            # COMMENT_OPEN
-        return raw(iterate(it)[1], _data(c))
+        return _read_eol(raw(iterate(it)[1], _data(c)))
     elseif nt === CData
         it = _rescan(c); iterate(it)            # CDATA_OPEN
-        return raw(iterate(it)[1], _data(c))
+        return _read_eol(raw(iterate(it)[1], _data(c)))
     elseif nt === DTD
         it = _rescan(c); iterate(it)            # DOCTYPE_OPEN
-        return lstrip(raw(iterate(it)[1], _data(c)))
+        return lstrip(_read_eol(raw(iterate(it)[1], _data(c))))
     elseif nt === ProcessingInstruction
         it = _rescan(c); iterate(it)            # PI_OPEN
         r = iterate(it)
         r === nothing && return nothing
         r[1].kind === _CURSOR_XT.TokenKinds.PI_CONTENT || return nothing
-        content = lstrip(raw(r[1], _data(c)))
+        content = lstrip(_read_eol(raw(r[1], _data(c))))
         return isempty(content) ? nothing : content
     end
     nothing
@@ -268,7 +274,7 @@ end
     elseif tok.kind === _CURSOR_XT.TokenKinds.CDATA_OPEN
         r = iterate(it)
         (r === nothing || r[1].kind !== _CURSOR_XT.TokenKinds.CDATA_CONTENT) && return nothing
-        content = raw(r[1], _data(c))
+        content = _read_eol(raw(r[1], _data(c)))
         r = iterate(it)
         (r === nothing || r[1].kind !== _CURSOR_XT.TokenKinds.CDATA_CLOSE) && return nothing
         r = iterate(it)

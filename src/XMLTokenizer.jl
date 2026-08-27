@@ -46,9 +46,9 @@ end
 #-----------------------------------------------------------------------# Token
 # A token is a (kind, has_entities, byte-range) triple. It stores only the *range* into
 # the source — `offset` (0-based byte offset) and `ncodeunits` (byte length), mirroring
-# the internal fields of the `SubString` it used to hold. Dropping the SubString's string
-# reference makes `Token` an ISBITS type, so the `(Token, TokenizerState)` tuple returned
-# by `iterate` no longer heap-allocates per token (previously the dominant parse cost).
+# the internal fields of a `SubString`. Holding no string reference makes `Token` an ISBITS
+# type, so the `(Token, TokenizerState)` tuple returned by `iterate` does not heap-allocate
+# per token — a per-token allocation there would dominate the parse cost.
 # Recover the text with `raw(token, data)`, passing the original source string.
 #
 # `has_entities` records whether the raw bytes contain a `&`. It is set by the readers for
@@ -120,7 +120,7 @@ end
 end
 
 # Emit-side helpers. Scan positions are `data`-relative; token spans are root-relative
-# (matching what the flattening `SubString(data, i, j)` emit sites used to store), and
+# (root-relative is what a `SubString` over a `SubString` stores in its own offset), and
 # `_data_offset` bridges the two. `make_token` covers the data-relative byte range
 # [start, stop); `_span_view` is the same range as a view, for the bounded entity scan
 # on text and attribute values.

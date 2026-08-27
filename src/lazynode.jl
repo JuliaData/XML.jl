@@ -23,7 +23,8 @@ The trade-off is that it **re-tokenizes on every access**: one traversal is some
 `Node`, and *repeated* traversals are dramatically slower (each pass re-scans the whole document),
 whereas a `Node` tree is built once and then walked cheaply.
 
-- **Forward streaming of a large document** → [`Cursor`](@ref) — fastest, allocation-free.
+- **Forward streaming of a large document** → [`Cursor`](@ref) — fastest, and allocation-free
+  over a `String` document.
 - **Repeated or random access** → [`Node`](@ref) — builds the tree once.
 - **`LazyNode`** → low-memory, *read-once* navigation, or as a holdable snapshot of a
   [`Cursor`](@ref) position (`LazyNode(c)` / `Cursor(::LazyNode)`).
@@ -34,13 +35,15 @@ struct LazyNode{S <: AbstractString}
     nodetype::NodeType
 end
 
-# Public raw-string entry: §2.11 applies here, exactly as it does at `parse`/`read`. Without
-# it a hand-built `LazyNode(raw, Document)` walks un-normalized data and hands CR to the
-# application, and the `Cursor(::LazyNode)` bridge could not trust its input.
+# Public raw-string entry: §2.11 applies here, exactly as it does at `parse`/`read` — which
+# for a `String`-backed document means the rewrite, and for any other source means leaving it
+# to `_read_eol`. Without this a hand-built `LazyNode(raw, Document)` would be the one entry
+# that skips the rewrite its source type requires, and return CR to the application.
 LazyNode(data::AbstractString, nt::NodeType) = _lazynode_at(_normalize_input_eol(data), nt)
 
-# `d` is ALREADY §2.11-normalized — no scan. Parametric on `d`'s own type, so a rewritten
-# document (always a `String`) builds `LazyNode{String}`.
+# `d` arrives with §2.11 already applied — see `_cursor_at` for the same split.
+# No scan here. Parametric on `d`'s own type, so a rewritten document (always a `String`)
+# builds `LazyNode{String}`.
 @inline _lazynode_at(d::S, nt::NodeType) where {S <: AbstractString} =
     LazyNode{S}(d, Token(TokenKinds.TEXT, SubString(d, 1, 0)), nt)
 
@@ -50,9 +53,12 @@ _lazy_pos(n::LazyNode) = n.token.offset + 1
 _lazy_tokenizer(n::LazyNode) = tokenize(n.data, _lazy_pos(n))
 # Entity-decode a TEXT/ATTR_VALUE token only when the tokenizer actually saw a `&`. When
 # `has_entities` is false the raw `SubString{String}` view is returned with no allocation
-# and no byte scan — the dominant case for spreadsheet-style data. `_decode_attr` strips
+# and no byte scan — the dominant case for spreadsheet-style data. That holds for a
+# `String`-backed document, where `_read_eol` is the identity; a source normalized on read
+# scans the span and copies it when it carries a line end. `_decode_attr` strips
 # the surrounding quotes first; the flag is read from the token, not the stripped view.
-@inline _decode(tok::Token, data) = tok.has_entities ? unescape(raw(tok, data)) : raw(tok, data)
+@inline _decode(tok::Token, data) =
+    tok.has_entities ? unescape(_read_eol(raw(tok, data))) : _read_eol(raw(tok, data))
 @inline function _decode_attr(tok::Token, data)
     v = _normalize_attr_ws(attr_value(tok, data))
     tok.has_entities ? unescape(v) : v
@@ -69,8 +75,9 @@ function tag(n::LazyNode)
     nothing
 end
 
-# @inline: the `Union{Nothing, SubString{String}}` return only stays box-free when the
-# caller can union-split it — across a non-inlined boundary it costs 32 B per call (#105).
+# @inline: the union return (`Nothing` and, for a `String`-backed document, `SubString{String}`)
+# only stays box-free when the caller can union-split it — across a non-inlined boundary it
+# costs 32 B per call (#105).
 # Same reason on the other union-returning accessors below and in cursor.jl/flatnode.jl.
 @inline function value(n::LazyNode)
     nt = n.nodetype
@@ -79,22 +86,22 @@ end
     elseif nt === Comment
         iter = _lazy_tokenizer(n)
         iterate(iter)  # COMMENT_OPEN
-        return raw(iterate(iter)[1], n.data)
+        return _read_eol(raw(iterate(iter)[1], n.data))
     elseif nt === CData
         iter = _lazy_tokenizer(n)
         iterate(iter)  # CDATA_OPEN
-        return raw(iterate(iter)[1], n.data)
+        return _read_eol(raw(iterate(iter)[1], n.data))
     elseif nt === DTD
         iter = _lazy_tokenizer(n)
         iterate(iter)  # DOCTYPE_OPEN
-        return lstrip(raw(iterate(iter)[1], n.data))
+        return lstrip(_read_eol(raw(iterate(iter)[1], n.data)))
     elseif nt === ProcessingInstruction
         iter = _lazy_tokenizer(n)
         iterate(iter)  # PI_OPEN
         result = iterate(iter)
         result === nothing && return nothing
         result[1].kind === TokenKinds.PI_CONTENT || return nothing
-        content = lstrip(raw(result[1], n.data))
+        content = lstrip(_read_eol(raw(result[1], n.data)))
         return isempty(content) ? nothing : content
     end
     nothing
@@ -381,6 +388,12 @@ end
 
 Return the original source text of the node as a `SubString`, with no parsing, escaping,
 or reformatting.  This is the zero-copy counterpart of [`write`](@ref) for lazy nodes.
+
+Being zero-copy, it reports the bytes of the document the reader actually holds. A `String`
+document whose lines end in CR is normalized when it is read in, so its source text is the
+normalized one; a document held as any other string type — a view over a memory-mapped file,
+say — is never rewritten, so its source text is the file's own bytes, line ends included.
+Reported *values* are normalized either way.
 """
 function sourcetext(n::LazyNode)
     nt = n.nodetype
@@ -503,7 +516,7 @@ end
 #-----------------------------------------------------------------------------# eachchildnode
 # Iterator state: a yielded element's subtree is NOT skipped at yield time — the skip is
 # recorded as pending and performed only when the next sibling is requested, so a
-# traversal that stops early never pays for subtrees nobody asked to step past.
+# traversal that stops early costs nothing for subtrees nobody asked to step past.
 const _CI_READY   = 0x00
 const _CI_PENDING = 0x01  # an element was yielded; its unskipped subtree lies ahead
 const _CI_DONE    = 0x02
@@ -581,7 +594,7 @@ end
 
 # The passed iteration state is ignored — the cursor lives in the iterator's own fields
 # (the resumption contract above). The yielded tuple is built at a SINGLE site — an
-# unboxed union return survives only one construction path (the same rule the span→view
+# union return stays unboxed through one construction path only (the same rule the span→view
 # helpers pin down) — and the chain must inline into the caller's loop: across a
 # non-inlined boundary the union boxes per step.
 @inline Base.iterate(ci::LazyChildIterator, _ = nothing) = _ci_next(ci)
@@ -678,7 +691,7 @@ end
     elseif k === TokenKinds.CDATA_OPEN
         r = iterate(iter)
         (isnothing(r) || r[1].kind !== TokenKinds.CDATA_CONTENT) && return nothing
-        content = raw(r[1], n.data)
+        content = _read_eol(raw(r[1], n.data))
         r = iterate(iter)
         (isnothing(r) || r[1].kind !== TokenKinds.CDATA_CLOSE) && return nothing
         r = iterate(iter)

@@ -1450,7 +1450,7 @@ end
 
     @testset "example.kml" begin
         # example.kml is a valid KML sample with CDATA sections; the invalid
-        # lowercase <![CData[ spelling it used to use is still rejected as malformed.
+        # lowercase <![CData[ spelling is rejected as malformed.
         path = joinpath(@__DIR__, "data", "example.kml")
         isfile(path) || return
         @test nodetype(read(path, Node)) == Document
@@ -1626,7 +1626,7 @@ end
         # complex_dtd.xml uses parameter entity references (%text;) which parse_dtd does not
         # expand, so we just verify parsing the fixture works. It is an XML declaration plus an
         # internal-subset DOCTYPE with no root element, i.e. not a well-formed document — read it
-        # with :lenient, since the default :structural now requires a root element (§2.1).
+        # with :lenient, since the default :structural requires a root element (§2.1).
         path = joinpath(@__DIR__, "data", "complex_dtd.xml")
         isfile(path) || return
         doc = read(path, Node; wellformed=:lenient)
@@ -1812,9 +1812,9 @@ end
     end
 
     @testset "truncated construct whose open token lands at EOF" begin
-        # The open token consumes through end-of-input, so the body reader never ran: the Node
-        # parser silently accepted these, and the lazy readers' value() indexed `nothing` (an
-        # opaque MethodError). Each now raises a clear "unterminated ..." error.
+        # The open token consumes through end-of-input, so the body reader never runs. Each of
+        # these raises a clear "unterminated ..." error — unguarded, the Node parser accepts
+        # them silently and the lazy readers' value() indexes `nothing`, an opaque MethodError.
         @test_throws Exception parse("<!--", Node)
         @test_throws Exception parse("<![CDATA[", Node)
         @test_throws Exception parse("<?pi", Node)
@@ -1828,8 +1828,8 @@ end
     end
 
     @testset "unterminated quoted string in a DOCTYPE uses the tokenizer error convention" begin
-        # skip_quoted threw a bare ErrorException with no position; it now uses err(msg, pos)
-        # like every other tokenizer error (ArgumentError with position context).
+        # skip_quoted raises through err(msg, pos) like every other tokenizer error: an
+        # ArgumentError carrying position context, not a bare ErrorException.
         @test_throws ArgumentError parse("<!DOCTYPE r SYSTEM \"abc", Node; wellformed=:lenient)
         @test_throws "tokenizer error at position" parse("<!DOCTYPE r SYSTEM \"abc", Node; wellformed=:lenient)
     end
@@ -3193,7 +3193,7 @@ end
 
     @testset "attribute-value normalization (XML 1.0 §3.3.3)" begin
         # Literal white space (#x9 #xA #xD) in attribute values reads as spaces — the CRLF
-        # pair as ONE space — while white space written as character references survives.
+        # pair as ONE space — while white space written as character references is kept.
         # Normalization happens on the raw slice, before entity resolution, uniformly
         # across the four readers.
         # by-key indexing throughout — exercises every reader's getindex
@@ -3278,7 +3278,7 @@ end
     @testset "line-end normalization (XML 1.0 §2.11)" begin
         # Literal CR and the CRLF pair in content read as LF — in character data, CDATA
         # sections, PI data, comments, and the DOCTYPE value — while CR written as a
-        # character reference (&#13;) survives. Normalization happens ON INPUT at every
+        # character reference (&#13;) is preserved. Normalization happens ON INPUT at every
         # document entry point, before parsing (hence before entity resolution), uniformly
         # across the four readers (#129).
         function content_by_reader(xml)
@@ -3384,7 +3384,7 @@ end
             @test all(v -> !occursin('\r', v), cursor_values(Cursor(crlf)))
 
             # start offsets are translated into the normalized copy, so a subtree cursor
-            # opened on the raw string still lands on the right element
+            # opened on the raw string still reaches the right element
             apos = findfirst("<a>", crlf).start
             @test any(==("x\ny"), cursor_values(Cursor(crlf, apos)))
 
@@ -3898,7 +3898,7 @@ end
 
         @testset "splice idiom from the docstring" begin
             # excise <a …>…</a> — preceded by "é", followed by "œ": the documented
-            # prevind/nextind splice must survive both multibyte boundaries
+            # prevind/nextind splice must hold across both multibyte boundaries
             a = first(c for c in children(doc[1]) if nodetype(c) == Element)
             span = sourcespan(a)
             stripped = xml[1:prevind(xml, first(span))] * "<c/>" * xml[nextind(xml, last(span)):end]
@@ -4129,8 +4129,8 @@ Base.thisind(w::WrappedSource, i::Int) = thisind(w.s, i)
     end
 
     @testset "eachattribute yields its declared element type" begin
-        # `collect` sizes its result from `eltype`, so a mismatch converts every pair — the
-        # same whole-document rebuild the materialized dict used to pay.
+        # `collect` sizes its result from `eltype`, so a declared type that does not
+        # match the yielded pairs converts every one of them, copying views into strings.
         pairs = collect(XML.eachattribute(lazy_c(src)))
         @test eltype(pairs) === Pair{SubString{String}, SubString{String}}
         @test pairs == ["r" => "A1", "e" => "a&b"]
@@ -4144,6 +4144,69 @@ Base.thisind(w::WrappedSource, i::Int) = thisind(w.s, i)
         measure(s)
         if Base.JLOptions().code_coverage == 0      # coverage counters skew @allocated
             @test measure(s) == 0
+        end
+    end
+
+    @testset "line ends normalize on read, whatever the value-producing accessor" begin
+        # A document not backed by a String is not rewritten at its entry, so each value is
+        # normalized as it is reported (XML 1.0 §2.11). This walks the whole matrix rather
+        # than a written-out list — every node kind that carries a value, through both lazy
+        # readers, from both a String and a non-String source — so a kind added later, or an
+        # accessor left unwired, fails here instead of quietly returning raw CRs.
+        crlf = "<?xml version=\"1.0\"?>\r\n<?pi a\r\nb?>\r\n<!--c\r\nd-->\r\n" *
+               "<!DOCTYPE r [\r\n<!ELEMENT r ANY>\r\n]>\r\n" *
+               "<r>t\r\nu<![CDATA[x\r\ny]]></r>"
+        seen = Set{XML.NodeType}()
+        function assert_clean(v, kind)
+            v === nothing && return
+            push!(seen, kind)
+            @test !occursin('\r', v)
+        end
+        function walk_lazy(n)
+            assert_clean(value(n), nodetype(n))
+            for c in children(n)
+                walk_lazy(c)
+            end
+        end
+        for src in (crlf, SubString(crlf, 1, lastindex(crlf)), WrappedSource(crlf))
+            cur = Cursor(src)
+            while next!(cur) !== nothing
+                assert_clean(value(cur), nodetype(cur))
+            end
+            walk_lazy(parse(src, LazyNode))
+        end
+        # guard the guard: the probe document has to reach the value-bearing kinds
+        @test Text in seen && Comment in seen && CData in seen &&
+              ProcessingInstruction in seen && DTD in seen
+
+        # `simple_value` / `is_simple_value` reach the token stream by their own path
+        simple = "<a>p\r\nq</a>"
+        for src in (simple, SubString(simple, 1, lastindex(simple)), WrappedSource(simple))
+            el = only(elements(parse(src, LazyNode)))
+            @test is_simple_value(el) == "p\nq"
+            @test simple_value(el) == "p\nq"
+            cur = Cursor(src); next!(cur)
+            @test is_simple_value(cur) == "p\nq"
+        end
+
+        # Attribute values reach §3.3.3 with their line ends still literal when the document
+        # was not rewritten at the entry, so that pass is what folds them — and it has to fold
+        # a CR LF pair to ONE space, the two rules composing as the specification orders them.
+        attrs = "<a crlf=\"p\r\nq\" lone=\"p\rq\" lf=\"p\nq\" tab=\"p\tq\"/>"
+        for src in (attrs, SubString(attrs, 1, lastindex(attrs)), WrappedSource(attrs))
+            a = attributes(only(elements(parse(src, LazyNode))))
+            for key in ("crlf", "lone", "lf", "tab")
+                @test a[key] == "p q"
+                @test ncodeunits(a[key]) == 3        # one space, not two
+            end
+        end
+
+        # §2.11 normalizes before entity resolution, so a reference still yields a real CR
+        ref = "<a>x&#13;y\r\nz</a>"
+        for src in (ref, SubString(ref, 1, lastindex(ref)), WrappedSource(ref))
+            @test value(only(children(only(elements(parse(src, LazyNode)))))) == "x\ry\nz"
+            cur = Cursor(src); next!(cur); next!(cur)
+            @test value(cur) == "x\ry\nz"
         end
     end
 end

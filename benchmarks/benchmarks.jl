@@ -59,7 +59,7 @@ const SSNode = Node{SubString{String}}
 # unreachable from outside and its per-cell C residue is small (~50 MiB per sample at ~14
 # samples); it is left to the between-cell GC.gc() in @add_benchmark — a per-sample
 # collection would reset the young generation inside the cell and hide the GC cost the
-# allocation-heavy conversion pays in real use.
+# allocation-heavy conversion incurs in real use.
 @add_benchmark "Parse (medium)" "EzXML" (d[] = EzXML.parsexml($medium_xml)) setup=(d = Ref{Any}(nothing)) teardown=(d[] === nothing || finalize(d[]); d[] = nothing)
 @add_benchmark "Parse (medium)" "LightXML" (d[] = LightXML.parse_string($medium_xml)) setup=(d = Ref{Any}(nothing)) teardown=(d[] === nothing || LightXML.free(d[]); d[] = nothing)
 @add_benchmark "Parse (medium)" "XMLDict" XMLDict.xml_dict($medium_xml)

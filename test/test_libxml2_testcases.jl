@@ -285,7 +285,7 @@ end
     end
 
     @testset "att3: attribute with character references" begin
-        # libxml2 test/att3 — the referenced newline (&#10;) survives as a newline while
+        # libxml2 test/att3 — the referenced newline (&#10;) is preserved as a newline while
         # the literal spaces stay spaces: the discriminating case of §3.3.3
         xml = """<select onclick="aaaa&#10;      bbbb&#160;">f&#160;oo</select>"""
         doc = parse(xml, Node)
@@ -1029,7 +1029,7 @@ end
 
 #==============================================================================#
 #                    ROUNDTRIP: PARSE → WRITE → PARSE                          #
-#   Tests that libxml2-style documents survive roundtrip processing            #
+#   Tests that libxml2-style documents are unchanged by a roundtrip            #
 #==============================================================================#
 @testset "Roundtrip" begin
     @testset "roundtrip: namespaced document" begin
@@ -1114,14 +1114,14 @@ end
 
     @testset "errors/extra-content: content after root element" begin
         # libxml2 test/errors/extra-content.xml — trailing text after the root is ill-formed.
-        # Default (:structural) rejects it; :lenient keeps the old accept-as-trailing-Text behavior.
+        # Default (:structural) rejects it; :lenient accepts the trailing text as a Text node.
         @test_throws Exception parse("<d/>x", Node)
         @test nodetype(parse("<d/>x", Node; wellformed = :lenient)) == Document
     end
 
     @testset "errors/invalid-start-tag-1: text-only document" begin
         # libxml2 test/errors/invalid-start-tag-1.xml — a bare-text document has no root element.
-        # Default (:structural) rejects it; :lenient keeps the old accept-as-Text behavior.
+        # Default (:structural) rejects it; :lenient accepts the bare text as a Text node.
         @test_throws Exception parse("x", Node)
         @test nodetype(parse("x", Node; wellformed = :lenient)) == Document
     end
@@ -1133,7 +1133,7 @@ end
 
     @testset "errors/doctype1: malformed DOCTYPE" begin
         # libxml2 test/errors/doctype1.xml — "<!DOCTYPE doc>[]>": the stray "]>" is top-level text.
-        # Default (:structural) rejects it; :lenient keeps the old parse-DOCTYPE-and-text behavior.
+        # Default (:structural) rejects it; :lenient parses the DOCTYPE and keeps the stray text.
         @test_throws Exception parse("<!DOCTYPE doc>[]>\n<doc/>", Node)
         @test nodetype(parse("<!DOCTYPE doc>[]>\n<doc/>", Node; wellformed = :lenient)) == Document
     end

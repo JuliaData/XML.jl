@@ -408,7 +408,7 @@ end
 end
 
 @testset "multibyte immediately before a delimiter" begin
-    # The span's end boundary lands right after a 2-/3-/4-byte character in every reader
+    # The span's end boundary falls right after a 2-/3-/4-byte character in every reader
     # that stops on an ASCII sentinel ('<', quotes, '-->', ']]>', '?>', '>').
     xml = "<!--déjà-->"
     @test raw(collect(tokenize(xml))[2], xml) == "déjà"
@@ -558,7 +558,7 @@ end
 end
 
 @testset "show method" begin
-    # Token no longer stores its text, so `show` prints kind + byte range, not the content.
+    # Token stores a byte range, not its text, so `show` prints kind + range, not the content.
     tok = first(tokenize("hello"))   # TEXT token spanning the whole input → "@0+5"
     buf = IOBuffer()
     show(buf, tok)

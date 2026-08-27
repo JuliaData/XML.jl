@@ -229,12 +229,12 @@ canonical_xml(n) = String(take!(canonical_xml(IOBuffer(), n)))
 
 # Ledger of the reference pairs whose canonical form XML.jl does not reproduce yet,
 # keyed by the conformance feature that closes them and its tracker issue. Every entry
-# runs as @test_broken: when a feature lands, its cases error as unexpected passes and
+# runs as @test_broken: implementing a feature makes its cases error as unexpected passes and
 # must move out of here.
 const CANON_KNOWN_FAIL = Dict{String, String}()
 let
-    # Line-end normalization (§2.11, #129) landed: its 62 cases moved out of this ledger,
-    # and the cases that combined it with another gap now sit under that remaining gap.
+    # Line-end normalization (§2.11) is implemented, so its cases are absent from this
+    # ledger; a case that combined it with another gap is listed under that remaining gap.
     ent = "internal entity expansion (§4.4, #130): entities declared in the internal subset are reported unexpanded"
     att = "ATTLIST default attribute injection (§3.3.2, #131)"
     ntn = "notation declarations: Second Canonical Form prepends a DOCTYPE carrying <!NOTATION …>"
@@ -276,7 +276,7 @@ canon_tests = filter(t -> !isempty(t.output), xml10_tests)
         doc = read(t.uri, Node; wellformed = :strict)
         ok = canonical_xml(doc) == String(read(t.output))
         if haskey(CANON_KNOWN_FAIL, t.id)
-            @test_broken ok  # ledgered gap: flips to an unexpected pass when its feature lands
+            @test_broken ok  # ledgered gap: flips to an unexpected pass once its feature is implemented
             n_known += 1
         else
             ok || push!(regressions, t.id)

@@ -9,15 +9,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **`XML.escape` and `XML.unescape` are now public API** ([#125](https://github.com/JuliaData/XML.jl/issues/125)): declared `public` on Julia 1.11+ (a no-op on 1.10, which has no such notion) and covered by semver, for downstream code that assembles XML strings itself, as XLSX.jl does. They stay unexported — the bare names are too generic to bring into scope with `using XML`. `escape` handles all five predefined entities, so it is safe for quoted attribute values as well as text content.
+- **`XML.escape` and `XML.unescape` are now public API** ([#125](https://github.com/JuliaData/XML.jl/issues/125)): declared `public` on Julia 1.11+ and covered by semver, for downstream code that assembles XML strings itself. They stay unexported — the bare names are too generic for `using XML`.
 
-- **The W3C conformance testset now byte-compares parsed values against the suite's canonical `out/` references** ([#94](https://github.com/JuliaData/XML.jl/issues/94)): a test-side canonical-XML writer (James Clark's form, as shipped in the suite) renders each parse result for comparison with the expected output — 262 reference pairs in scope, 147 byte-identical, and the 115 others ledgered as `@test_broken` under the conformance feature that closes them (line-end normalization §2.11, internal entity expansion §4.4, ATTLIST default injection §3.3.2, notation declarations). The pugixml- and libexpat-ported processing-instruction testsets now also assert the upstream-expected target/data values instead of node counts.
+- **The W3C conformance testset now byte-compares parsed values against the suite's canonical `out/` references** ([#94](https://github.com/JuliaData/XML.jl/issues/94)): 262 reference pairs in scope, 147 byte-identical, the other 115 ledgered as `@test_broken` under the conformance feature that closes each. The ported processing-instruction testsets assert upstream-expected values rather than node counts.
 
 ### Fixed
 
-- **Line ends are now normalized per XML 1.0 §2.11** (all four readers): literal CR LF and lone CR read as LF — in character data, CDATA sections, processing-instruction data, comments, attribute values, and the DOCTYPE value — while CR written as a character reference (`&#13;`) still reads as a real CR. Previously the raw bytes came through, so CRLF documents read differently in XML.jl than in conforming parsers. The normalization happens once on input at every document entry point, exactly as the spec words it ("behave as if it normalized all line breaks … on input, before parsing"): a CR-free document passes through untouched after one scan, and a CR-carrying document is rewritten once, so `sourcetext` and source spans then refer to the normalized document. On write, a CR in text content is now escaped as `&#13;`, so values round-trip exactly. This turned 62 of the ledgered W3C canonical-reference gaps green ([#129](https://github.com/JuliaData/XML.jl/issues/129)).
+- **Line ends are now normalized per XML 1.0 §2.11** (all four readers): literal CR LF and lone CR read as LF — in character data, CDATA sections, processing-instruction data, comments, attribute values and the DOCTYPE value — while CR written as `&#13;` still reads as a real CR. Previously the raw bytes came through, so CR LF documents read differently in XML.jl than in conforming parsers. On write, a CR in text content is escaped as `&#13;`, so values round-trip exactly. This turned 62 of the ledgered W3C canonical-reference gaps green ([#129](https://github.com/JuliaData/XML.jl/issues/129)).
 
-- **The lazy readers no longer copy the document at the entry** ([#134](https://github.com/JuliaData/XML.jl/issues/134)): `parse(str, LazyNode)` and `parse(str, Cursor)` converted their argument to a `String`, so the memory-mapped recipe in the README allocated the file it exists to avoid holding — 59 MiB for a 59 MiB document. They now hand the argument through, and the readers keep its type. That copy was also masking a second cost: the materialized `attributes` dict and `eachattribute`'s element type are `SubString{String}`, and converting a token view from any other source walked the whole document once per attribute — sweeping the attributes of 2,000 elements over a view-backed node took 109 ms, and now takes 1.4 ms. Documents held as a `String` — the common case — are unaffected, in time and in allocation count alike.
+- **The lazy readers no longer copy the document at the entry** ([#134](https://github.com/JuliaData/XML.jl/issues/134)): `parse(str, LazyNode)` and `parse(str, Cursor)` converted their argument to a `String` — 59 MiB for a 59 MiB document — and now take it as given, keeping its type. That copy was masking a second cost: over a non-`String` source, `attributes` walked the whole document once per attribute, 109 ms for 2,000 elements where it now takes 1.4 ms.
+
+- **A memory-mapped document is no longer copied into the heap when its lines end in CR** ([#135](https://github.com/JuliaData/XML.jl/issues/135)): the entry rewrote it whatever string type held it, so mapping a Windows-written file asked for as much heap as the file. Only a `String` document is rewritten now; any other source has each value normalized as it is read. Opening the mapped 14 MB corpus goes from 51.6 ms and 13.8 MiB to 12 ns and no copy. `sourcetext` reports the bytes of the document the reader holds, so a mapped document shows the file's own line ends.
 
 ## [0.4.6] - 2026-08-17
 
@@ -53,13 +55,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Views are span-native end to end**: tokens carry `(offset, ncodeunits)` byte spans,
   and every view — `raw`, the tag/attribute/PI accessors, `FlatNode`'s span→view
   helpers — is rebuilt by direct field construction, with no `prevind`/`nextind` walks.
-  Sound because every span edge lands on an ASCII byte or EOF, hence a UTF-8 character
+  Sound because every span edge falls on an ASCII byte or EOF, hence a UTF-8 character
   boundary; `--check-bounds=yes` builds (as in `Pkg.test`) compile the checked
   reconstruction instead, selected at load time. On the 14 MB corpus: lex 37.4 → 23.4 ms,
-  `FlatNode` extract 6.6 → 3.1 ms, and two headlines flip — `FlatNode` out-builds libxml2
-  (~1.7×) and out-extracts `Node`'s direct field reads — while pure-Julia streaming widens
-  its lead over EzXML's `StreamReader` to ~2.5×. Allocations unchanged throughout
-  (#109, #111, #113).
+  `FlatNode` extract 6.6 → 3.1 ms, and two orderings reverse — `FlatNode` builds ~1.7×
+  faster than libxml2 and extracts faster than `Node`'s direct field reads — while
+  pure-Julia streaming is ~2.5× faster than EzXML's `StreamReader`. Allocations
+  unchanged throughout (#109, #111, #113).
 
 - **Measurement upkeep**: every timing in PERFORMANCE-v0.4.md and the README is a
   BenchmarkTools `@benchmark` median (`benchmarks/flatnode_bench.jl` rewritten
@@ -184,7 +186,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`==`/`isequal`/`hash` are structural for every tree reader, cross-reader included** —
   same decoded nodetype/tag/attributes (order-insensitive)/value/children (in document
   order), recursively. `Node` already compared structurally; `LazyNode` (previously the
-  default egal fallback) now matches it, the new `FlatNode` ships with these semantics
+  default egal fallback) now matches it, the new `FlatNode` has these semantics
   from the start, and `Node == LazyNode == FlatNode` holds for equal content (#83).
 
 - **Search-based `Node` navigation raises an error on indistinguishable occurrences**:

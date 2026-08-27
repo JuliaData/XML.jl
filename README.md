@@ -40,20 +40,20 @@ elements(catalog)[2]  # second <book> element
 
 # Choosing a reader
 
-XML.jl ships four readers behind one set of accessors (`nodetype`, `tag`, `attributes`,
+XML.jl provides four readers behind one set of accessors (`nodetype`, `tag`, `attributes`,
 `value`, `children`, `eachelement`, …). Pick by what you do with the document:
 
 | Reader | DOM materialized? | Revisit a node | Mutable | GC cost |
 |---|---|---|---|---|
 | `Cursor` | no (nothing) | impossible (forward-only) | — | ~0 |
-| `LazyNode` | virtual | re-decode per visit (pay-per-traversal) | no | ~0 |
-| `FlatNode` *(experimental)* | yes, compact (columnar) | O(1), paid once | no | ~0 |
-| `Node` | yes, objects | O(1), paid once | **yes** | high |
+| `LazyNode` | virtual | re-decode per visit | no | ~0 |
+| `FlatNode` *(experimental)* | yes, compact (columnar) | O(1), built once | no | ~0 |
+| `Node` | yes, objects | O(1), built once | **yes** | high |
 
 Rules of thumb:
 
 - one forward pass → `Cursor` (fastest scan, ~zero allocation)
-- extract a little from a large document → `LazyNode` (opening is one scan of the source, then you pay per node touched)
+- extract a little from a large document → `LazyNode` (opening is one scan of the source, then a cost per node touched)
 - read-heavy full document, repeated traversals → `FlatNode` (the random-access read API of `Node` at almost none of its GC cost: fastest build and walk, O(1) revisits)
 - build or edit documents → `Node`
 
@@ -253,7 +253,7 @@ doc = read("file.xml", LazyNode)
 
 `LazyNode` supports the same read-only interface as `Node`: `nodetype`, `tag`, `attributes`, `value`, `children`, `is_simple`, `simple_value`, plus integer and string indexing.
 
-`LazyNode` is for *partial* reads only: opening is a no-op wrapper (sub-microsecond whatever the file size), a traversal pays only for the bytes it steps over — descending to a target is O(bytes before it) — and nothing is cached, so repeated visits pay again. Unbeatable for descents and kilobyte-scale documents; for whole-tree walks (133 ms vs ~30/~74 ms build+walk on the 14 MB corpus below) and repeated queries, build `FlatNode` or `Node` instead — see [Performance by access pattern](#performance-by-access-pattern).
+`LazyNode` is for *partial* reads only: opening is a no-op wrapper (sub-microsecond whatever the file size), a traversal costs only the bytes it steps over — descending to a target is O(bytes before it) — and nothing is cached, so repeated visits cost again. Unbeatable for descents and kilobyte-scale documents; for whole-tree walks (133 ms vs ~30/~74 ms build+walk on the 14 MB corpus below) and repeated queries, build `FlatNode` or `Node` instead — see [Performance by access pattern](#performance-by-access-pattern).
 
 For streaming and high-throughput workloads, several extra accessors avoid materializing intermediate collections:
 
@@ -272,7 +272,7 @@ XML.write(n; normalize=true) # re-parse + pretty-print, collapses source whitesp
 
 ### Memory-mapped files
 
-Memory mapping is optional — `LazyNode`'s laziness is about *node materialization*, and it pays off on in-memory strings just as well. For files too large to read into heap memory, combine it with a `StringView` over `Mmap`:
+Memory mapping is optional — `LazyNode`'s laziness is about *node materialization*, and it is just as useful on in-memory strings. For files too large to read into heap memory, combine it with a `StringView` over `Mmap`:
 
 ```julia
 using XML, Mmap, StringViews
@@ -283,7 +283,7 @@ doc = open("very_large.xml") do io
 end
 ```
 
-The reader keeps the string type it is handed, so the document is walked through the mapping instead of being copied into the heap, and accessors return views into the mapped bytes. Plan for one exception: a document whose lines end in CR LF or in a lone CR is normalized on input, and that rewrite materializes the whole document as a `String` — the very thing the mapping avoids. Mapping pays off on documents whose lines end in LF.
+The reader keeps the string type it is given, so the document is walked through the mapping instead of being copied into the heap, and accessors return views into the mapped bytes. Opening costs nothing whatever the file's line ends — 12 ns on a mapped 14 MB corpus, LF or CR LF alike: the document is neither scanned nor rewritten up front, and the line-end normalization the specification requires happens on each value as it is read, so a file written with CR LF or a lone CR copies only the values you actually ask for, and only those that carry a line end. `sourcetext` is the one accessor that shows the file's own bytes — it is a zero-copy view of the document the reader holds, which for a mapped file is the file itself. See [Memory-mapped sources](PERFORMANCE-v0.4.md#memory-mapped-sources) for the measured figures.
 
 <br>
 
@@ -345,7 +345,7 @@ One number cannot rank the readers — cost depends on what you do with the docu
 | `Node` | 70.7 ms | 3.46 ms | 3.7 ms | 71.6 MiB |
 | EzXML (libxml2) | 46.6 ms | — | — | — |
 
-Reading the table: `Cursor`'s walk *is* its parse — one tokenizing scan, nothing retained. `LazyNode` materializes nothing, so its open is one allocation-free scan of the source for line ends (a document whose lines end in CR LF or in a lone CR is also rewritten once, into a normalized copy) — after that it pays per node visited, which still makes it the pick for touching a *fraction* of a large document, and (as the walk column shows) the wrong tool for visiting all of it. `FlatNode` builds ~2.6× faster than `Node`, holds ~23% less memory, and its `parent`/`depth` are O(1) where `Node` searches from the root; whole-tree walks are close (`Node`'s exact-size children vectors keep its locality sharp), and pure value extraction is close too, flat store slightly ahead (3.1 vs 3.7 ms — a per-value `SubString` view costs two integer stores). `FlatNode` out-builds even libxml2 (~1.7×), and `Node`'s gap to the C library is materialization, not scanning (see [PERFORMANCE-v0.4.md](PERFORMANCE-v0.4.md)).
+Reading the table: `Cursor`'s walk *is* its parse — one tokenizing scan, nothing retained. `LazyNode` materializes nothing, so its open is one allocation-free scan of the source for line ends (a document whose lines end in CR LF or in a lone CR is also rewritten once, into a normalized copy) — after that it costs per node visited, which still makes it the pick for touching a *fraction* of a large document, and (as the walk column shows) the wrong tool for visiting all of it. `FlatNode` builds ~2.6× faster than `Node`, holds ~23% less memory, and its `parent`/`depth` are O(1) where `Node` searches from the root; whole-tree walks are close (`Node`'s exact-size children vectors keep its locality sharp), and pure value extraction is close too, flat store slightly faster (3.1 vs 3.7 ms — a per-value `SubString` view costs two integer stores). `FlatNode` builds ~1.7× faster than even libxml2, and `Node`'s gap to the C library is materialization, not scanning (see [PERFORMANCE-v0.4.md](PERFORMANCE-v0.4.md)).
 
 _Measured 2026-08-04 (the `LazyNode` walk: 2026-08-12; the `LazyNode` open: 2026-08-21, Julia 1.12.7), Apple M5 (single-threaded), Julia 1.12.6, EzXML 1.2.3; BenchmarkTools medians._
 

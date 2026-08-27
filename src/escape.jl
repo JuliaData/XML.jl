@@ -94,18 +94,40 @@ function _rewrite_attr_ws(s::AbstractString)
     String(take!(io))
 end
 
-# XML 1.0 §2.11 end-of-line normalization, applied ON INPUT at every reader's document
-# entry point (next to the BOM handling), exactly as the spec words it: "the XML processor
-# MUST behave as if it normalized all line breaks … on input, before parsing". The literal
-# pair CR LF becomes ONE LF, then each remaining literal #xD becomes LF; character
-# references (`&#13;`) are written with `&`, which the rewrite never touches, so they
-# survive to entity resolution. A CR-free document — the entire LF world — is returned
-# unchanged after one memchr-backed scan; a CR-carrying document is rewritten ONCE, and
-# every downstream span, token and zero-copy view then lives in the normalized document.
-# Normalizing per VALUE instead was measured to heap-box the union-returning value
-# accessors' clean-path return (32 B per value: any extra live branch or inlined scan in
-# those bodies overflows the caller-side union-split of their merge φ — #105/#113 class).
-_normalize_input_eol(s::AbstractString) = occursin('\r', s) ? _rewrite_content_eol(s) : s
+# XML 1.0 §2.11 end-of-line normalization: "the XML processor MUST behave as if it
+# normalized all line breaks … on input, before parsing" — the literal pair CR LF becomes
+# ONE LF, then each remaining literal #xD becomes LF, while character references (`&#13;`)
+# are written with `&`, which no rewrite touches, so they reach entity resolution intact.
+#
+# How that is honoured depends on how the document is held, and the two ways are chosen by
+# DISPATCH rather than by a runtime test, which is what keeps the common path's accessor
+# bodies byte-identical:
+#
+#   - a `String`-backed document is rewritten here, once, at the entry (next to the BOM
+#     handling). A CR-free one — the entire LF world — comes back unchanged after a single
+#     memchr-backed scan; a CR-carrying one is rewritten, and every downstream span, token
+#     and zero-copy view then lives in the normalized document;
+#   - a document held as any other string type — a `StringView` over a memory-mapped file
+#     being the case the README documents — would have to be copied into the heap to be
+#     rewritten here, which is the one thing the mapping exists to avoid. It is left alone,
+#     and each value is normalized on the way out instead (`_read_eol` below).
+#
+# Collapsing the two into one accessor that tests at runtime which normalization a
+# value needs is not an option: any extra live branch or inlined scan in the
+# union-returning accessors overflows the caller-side union-split of their merge φ and
+# heap-boxes the clean-path return, 32 B per value (#105/#113 class). A branch resolved
+# by dispatch costs the clean path nothing.
+_normalize_input_eol(s::String) = occursin('\r', s) ? _rewrite_content_eol(s) : s
+_normalize_input_eol(s::SubString{String}) = occursin('\r', s) ? _rewrite_content_eol(s) : s
+_normalize_input_eol(s::AbstractString) = s
+
+# §2.11 for a document that was NOT rewritten at the entry: normalize one value's own bytes
+# as it is reported. Applied to the RAW span, before entity resolution, so that a `&#13;`
+# still yields a real CR — the spec normalizes line breaks first, and references resolve
+# after. For a `String`-backed document the span is a `SubString{String}` and this is the
+# identity: it inlines away, adds no live branch, and leaves the caller's merge φ untouched.
+@inline _read_eol(s::SubString{String}) = s
+_read_eol(s::AbstractString) = occursin('\r', s) ? _rewrite_content_eol(s) : s
 
 # After the CR LF → LF rewrite, a byte position shifts left by the number of CR LF pairs
 # strictly before it (a lone CR rewrites in place). For translating caller-supplied
@@ -126,22 +148,31 @@ function _translate_eol_pos(s::AbstractString, pos::Int)
     pos - shift
 end
 
+# The rewritten value is never longer than its source — a CR LF pair loses a byte, a lone CR
+# keeps its own — so the buffer is allocated once at that bound and shrunk to what was
+# written. Knowing the bound is what makes a growable stream unnecessary on a path that runs
+# once per value carrying a line end. `StringVector` allocates in the layout `String` wraps
+# without a copy; a plain `Vector{UInt8}` is copied again on conversion. 96 B per call for a
+# ten-byte value.
 function _rewrite_content_eol(s::AbstractString)
     cu = codeunits(s)
-    io = IOBuffer(sizehint = ncodeunits(s))
     n = length(cu)
+    out = Base.StringVector(n)
+    i = 1
     j = 1
     @inbounds while j <= n
         b = cu[j]
         if b == 0x0D
-            Base.write(io, 0x0A)
+            out[i] = 0x0A
             j < n && cu[j + 1] == 0x0A && (j += 1)
         else
-            Base.write(io, b)
+            out[i] = b
         end
+        i += 1
         j += 1
     end
-    String(take!(io))
+    i == n + 1 || resize!(out, i - 1)
+    String(out)
 end
 
 # An attribute name or value as the `SubString{String}` that the materialized `Attributes`
