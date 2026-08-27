@@ -164,3 +164,75 @@ function _internal_entities(xml::AbstractString)
     values === nothing && return nothing
     InternalEntities(values, _check_and_scan(values))
 end
+
+#-----------------------------------------------------------------------------# inclusion (§4.4.2)
+# Nested declarations amplify without any cycle — ten entities each naming the previous one ten
+# times reach 10^10 bytes at depth ten — so WFC: No Recursion is not enough and expansion carries
+# its own bounds. Both are refused at every `wellformed` level: an unbounded expansion is a
+# termination hazard, not a conformance question.
+const _MAX_ENTITY_DEPTH = 40
+const _MAX_ENTITY_EXPANSION = 10 * 1024 * 1024   # bytes produced from one reported value
+
+# A reference is recognised once, in the text as it stands, and dispatched on what it names: a
+# character reference or one of the five predefined entities decodes to its character, a declared
+# general entity is INCLUDED with its own references expanded in turn (§4.4.2), and anything else
+# is copied through — today's graceful degradation for an undeclared name. Resolving the
+# predefined ones in an earlier separate pass would be wrong: it manufactures `&` bytes that the
+# later pass would read as references nobody wrote.
+@inline _is_name_byte(b::UInt8) =
+    (b >= UInt8('a') && b <= UInt8('z')) || (b >= UInt8('A') && b <= UInt8('Z')) ||
+    (b >= UInt8('0') && b <= UInt8('9')) || b == UInt8('_') || b == UInt8(':') ||
+    b == UInt8('.') || b == UInt8('-') || b == UInt8('#')
+
+function _expand_into!(io::IOBuffer, s::AbstractString, ents::InternalEntities, depth::Int)
+    depth > _MAX_ENTITY_DEPTH &&
+        error("entity expansion exceeded $(_MAX_ENTITY_DEPTH) levels of nesting")
+    i = firstindex(s)
+    stop = lastindex(s)
+    while i <= stop
+        amp = findnext('&', s, i)
+        if amp === nothing
+            Base.write(io, SubString(s, i))
+            break
+        end
+        amp > i && Base.write(io, SubString(s, i, prevind(s, amp)))
+        # the name runs while its bytes can belong to one; a stray `&` ends the scan at once
+        j = nextind(s, amp)
+        while j <= stop && _is_name_byte(codeunit(s, j))
+            j = nextind(s, j)
+        end
+        if j > stop || codeunit(s, j) != UInt8(';') || j == nextind(s, amp)
+            Base.write(io, '&')                         # not a reference: a literal ampersand
+            i = nextind(s, amp)
+            continue
+        end
+        name = SubString(s, nextind(s, amp), prevind(s, j))
+        rep = get(ents.values, name, nothing)
+        if rep === nothing
+            Base.write(io, _unescape_entity(SubString(s, amp, j)))
+        else
+            _expand_into!(io, rep, ents, depth + 1)
+        end
+        io.size > _MAX_ENTITY_EXPANSION &&
+            error("entity expansion exceeded $(_MAX_ENTITY_EXPANSION) bytes")
+        i = nextind(s, j)
+    end
+    io
+end
+
+# The two decode strategies a reader can carry. The choice is made once, at the document entry,
+# and reaches the value accessors as a type — not as a field they test — so a document with no
+# internal general entities runs the same code it runs today. `NoEntities` is zero-size, so it
+# also leaves the readers' layout untouched.
+struct NoEntities end
+
+struct WithEntities
+    ents::InternalEntities
+end
+
+@inline (::NoEntities)(x::AbstractString) = unescape(x)
+
+function (d::WithEntities)(x::AbstractString)
+    occursin('&', x) || return x
+    String(take!(_expand_into!(IOBuffer(), x, d.ents, 1)))
+end

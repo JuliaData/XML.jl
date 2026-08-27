@@ -746,6 +746,47 @@ end
         @test ents("<!DOCTYPE d [<!ENTITY % p \"<foo>\"><!ENTITY e \"ok\">]><d/>").values == Dict("e" => "ok")
     end
 
+    @testset "inclusion resolves references in one pass (§4.4.2)" begin
+        dec(sub) = XML.WithEntities(XML._internal_entities("<!DOCTYPE d [" * sub * "]><d/>"))
+        d = dec("<!ENTITY e \"ev\"><!ENTITY n \"&e;&e;\"><!ENTITY lt2 \"&lt;\">")
+        @test d("plain") == "plain"
+        @test d("a&e;b") == "aevb"
+        @test d("&n;") == "evev"                 # a reference inside replacement text expands too
+        @test d("&lt2;") == "<"                  # …including a predefined one
+        @test d("x&#65;y") == "xAy"
+        # the predefined entities cannot be resolved in an earlier pass: that would manufacture
+        # `&` bytes the general pass would then read as references nobody wrote
+        @test d("&amp;&e;") == "&ev"
+        @test d("&amp;e;") == "&e;"
+        # an undeclared name keeps today's behaviour, and a bare `&` is not a reference
+        @test d("&unknown;") == "&unknown;"
+        @test d("a & b") == "a & b"
+        @test d("&e") == "&e"
+        @test d("&;") == "&;"
+    end
+
+    @testset "expansion is bounded, at every wellformed level" begin
+        # the billion-laughs shape has no cycle, so WFC: No Recursion does not catch it —
+        # ten entities each naming the previous one ten times reach 10^10 bytes at depth ten
+        laughs = "<!ENTITY a0 \"aaaaaaaaaa\">" *
+                 join(["<!ENTITY a$i \"" * repeat("&a$(i-1);", 10) * "\">" for i in 1:9])
+        d = XML.WithEntities(XML._internal_entities("<!DOCTYPE d [" * laughs * "]><d/>"))
+        @test_throws ErrorException d("&a9;")
+        # nesting alone is bounded too, without amplification
+        deep = join(["<!ENTITY b$i \"&b$(i-1);\">" for i in 1:60])
+        d2 = XML.WithEntities(XML._internal_entities("<!DOCTYPE d [<!ENTITY b0 \"x\">" * deep * "]><d/>"))
+        @test_throws ErrorException d2("&b60;")
+        # and a modest nesting is not
+        @test XML.WithEntities(XML._internal_entities(
+            "<!DOCTYPE d [<!ENTITY c0 \"x\"><!ENTITY c1 \"&c0;&c0;\"><!ENTITY c2 \"&c1;&c1;\">]><d/>"))("&c2;") == "xxxx"
+    end
+
+    @testset "the strategy is a type, not a field to test" begin
+        @test sizeof(XML.NoEntities()) == 0        # readers carrying it keep today's layout
+        @test XML.NoEntities()("a&amp;b") == "a&b"
+        @test XML.NoEntities()("plain") == "plain"
+    end
+
     @testset "§5.1 cutoff: declarations after an unread parameter entity are not used" begin
         e = ents("<!DOCTYPE d [<!ENTITY e1 \"a\">%ext;<!ENTITY e2 \"b\">]><d/>")
         @test e.values == Dict("e1" => "a")
