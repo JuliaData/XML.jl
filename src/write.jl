@@ -2,7 +2,7 @@
 
 # Write XML-escaped content directly to IO (single pass, no intermediate string).
 # Literal CR is escaped as a character reference: a conforming reader normalizes literal
-# CR / CR LF in content to LF (XML 1.0 §2.11), so only the reference form survives a
+# CR / CR LF in content to LF (XML 1.0 §2.11), so only the reference form comes back from a
 # round-trip — the character-data counterpart of the attribute rule below.
 function _write_escaped(io::IO, s::String)
     start = 1
@@ -39,7 +39,7 @@ end
 
 # Attribute values additionally escape literal #x9/#xA/#xD as character references: a
 # conforming reader normalizes literal white space in attribute values to spaces
-# (XML 1.0 §3.3.3), so only the reference form survives a round-trip.
+# (XML 1.0 §3.3.3), so only the reference form comes back from a round-trip.
 function _write_attr_escaped(io::IO, s::String)
     start = 1
     i = 1

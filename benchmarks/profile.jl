@@ -214,7 +214,7 @@ function mrow(label, b)
             lpad(b.allocs, 9), " allocs", lpad(mib(b), 8), " MiB")
 end
 
-println("\n=== (5) MEMORY-MAPPED SOURCE — the entry, and what a partial read pays ===")
+println("\n=== (5) MEMORY-MAPPED SOURCE — the entry, and what a partial read costs ===")
 for (lbl, path) in (("LF", FILE), ("CR LF", FILE_CRLF))
     open(path) do io
         sv = StringView(Mmap.mmap(io))

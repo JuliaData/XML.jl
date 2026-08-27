@@ -52,7 +52,7 @@ using Test
     end
 
     @testset "UTF-8 element names" begin
-        # Non-ASCII characters in element names are supported (previously @test_broken).
+        # Non-ASCII characters are legal in element names (§2.3 Name), and are read verbatim.
         doc = parse("<données/>", Node)
         @test tag(children(doc)[1]) == "données"
     end

@@ -198,7 +198,7 @@ using Test
     #                        Unicode / CJK Content                             #
     #==========================================================================#
     @testset "Unicode element names (CJK)" begin
-        # CJK characters in element names are supported (previously @test_broken).
+        # CJK characters are legal in element names (§2.3 Name), and are read verbatim.
         doc = parse("<汉语>世界</汉语>", Node)
         el = children(doc)[1]
         @test tag(el) == "汉语"

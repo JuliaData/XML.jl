@@ -49,12 +49,11 @@ function Cursor(data::S) where {S <: AbstractString}
     _cursor_at(_normalize_input_eol(data), 1)
 end
 
-# `d` has had whatever §2.11 requires of it at the entry: a `String`-backed document was rewritten
-# there, any other source was left for `_read_eol` to normalize value by value. Either way
-# nothing is scanned or restarted here. Parametric on `d`'s own type so a rewritten document
-# (always a `String`) yields `Cursor{String}` without re-dispatching through the public
-# constructor — the old `return Cursor(d)` restart did the same re-dispatch, and cost a
-# second, provably fruitless CR scan of the whole document.
+# `d` arrives with whatever §2.11 requires of it already applied: a `String`-backed document
+# is rewritten at the entry, any other source is left for `_read_eol` to normalize value by
+# value. Nothing here scans or restarts. `Cursor{S}` is built directly, on `d`'s own type,
+# rather than through the public constructor: that constructor runs the entry normalization,
+# which on a document already normalized is a scan for a CR the entry has removed.
 @inline function _cursor_at(d::S, pos::Integer) where {S <: AbstractString}
     st = _CURSOR_XT.StatefulTokenizer(_CURSOR_XT.Tokenizer(d, pos))
     Cursor{S}(st, _CURSOR_XT.no_token(d), Document, 0, 0, false, false)
@@ -66,7 +65,7 @@ Base.parse(::Type{Cursor}, xml::AbstractString) = Cursor(xml)
 
 A cursor whose token stream starts at byte position `startpos` in `data` instead
 of the document start — for walking a subtree whose start offset is already known.
-The first [`next!`](@ref) lands on whatever element begins at `startpos`, at depth
+The first [`next!`](@ref) reaches whatever element begins at `startpos`, at depth
 1, so [`for_each_child`](@ref) then iterates that element's immediate children and
 auto-stops at its subtree boundary (the depth break). LazyNode-agnostic primitive.
 """
@@ -80,9 +79,9 @@ end
 
 Convenience bridge: a cursor positioned to walk `node` and its subtree — the
 inverse of the `LazyNode(c)` snapshot. Both readers treat a source the same way — a
-`String`-backed document was normalized when the `LazyNode` was built, any other source
-normalizes value by value — so the bridge hands the source straight through, with none of
-the scan the raw-string constructors owe their argument; it is the only place `Cursor` mentions
+`String`-backed document is normalized when the `LazyNode` is built, any other source
+normalizes value by value — so the bridge passes the source straight through, without the
+scan the raw-string constructors run on their argument; it is the only place `Cursor` mentions
 `LazyNode`, and it is an optional, removable convenience (a consumer that tracks
 subtree start offsets directly can call the primitive `Cursor(data, startpos)`).
 """

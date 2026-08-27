@@ -1,4 +1,4 @@
-# Decoded read surface — allocation guards. A union-typed return that survives a
+# Decoded read surface — allocation guards. A union-typed return that crosses a
 # non-inlined call boundary heap-boxes every call (32 B); in per-cell hot loops
 # (spreadsheet-style attribute sweeps) that box dominates the accessor's real work
 # (#98, #104, #105). Every guard measures inside a function barrier — the call, not the
@@ -206,7 +206,7 @@ end
 # parse-wide stacks, sliced out exact-size at each closing tag (no per-element vector
 # churn). 400 one-attribute one-text elements cost ~4.0 K allocations today; a churn
 # regression re-adds at least two vectors per element (≥ +800), so the ceiling sits
-# between the two and survives version-to-version noise.
+# between the two, wide enough for version-to-version noise.
 measure_node_build_allocs(xml) = Base.@allocations parse(xml, Node)
 
 @testset "Node build: scratch-stack allocation ceiling" begin
@@ -220,9 +220,9 @@ end
 
 # Line-end rewrite — the sizing contract: the output is bounded by its source (a CR LF pair
 # loses a byte, a lone CR keeps its own), so one buffer is allocated at that bound and shrunk
-# to what was written, rather than grown one write at a time. A short value costs three
-# objects on 1.12 and two on 1.10; a growable-stream round trip costs four on both, so a
-# ceiling of three separates the two shapes at every supported version.
+# to what was written. A short value costs three objects on 1.12 and two on 1.10; the
+# same rewrite through a growable stream costs four on both, so a ceiling of three
+# separates the two shapes at every supported version.
 measure_eol_rewrite(s) = Base.@allocations XML._rewrite_content_eol(s)
 
 @testset "Line-end rewrite: one buffer, sized on the source" begin

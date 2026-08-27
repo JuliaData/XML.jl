@@ -31,7 +31,7 @@ end
     FlatNode
 
 Read-only handle into a [`FlatStore`](@ref) — XML.jl's fourth reader, alongside `Node`
-(mutable DOM), `LazyNode` (pay-per-traversal) and `Cursor` (pull streaming): the
+(mutable DOM), `LazyNode` (decodes on each traversal) and `Cursor` (pull streaming): the
 random-access read API of `Node` at almost none of its GC cost.
 
 !!! warning "Experimental"
@@ -107,7 +107,7 @@ end
 
 # Token-stream → FlatStore builder: the same single visibly-pushdown pass as `_parse`
 # (see parse.jl), with the same well-formedness checks at the same token points — gated by
-# `Val{W}` so :lenient pays nothing — but appending isbits records instead of heap nodes.
+# `Val{W}` so :lenient costs nothing — but appending isbits records instead of heap nodes.
 function _flat_parse(xml::String, ::Val{W}) where {W}
     ncodeunits(xml) <= typemax(Int32) ||
         error("FlatNode stores byte offsets as Int32: source is larger than 2 GiB. Use `parse(xml, Node)`.")
@@ -484,7 +484,7 @@ is_simple(n::FlatNode) = (r = _rec(n);
 
 # Both bodies below are `value(::FlatNode)` hand-applied to the child record, and the
 # duplication is DELIBERATE — do not factor it into a shared helper. Through any extra
-# call depth (the old `value(FlatNode(store, first_child))` route, or a shared helper —
+# call depth (a `value(FlatNode(store, first_child))` route, or a shared helper —
 # measured with a definition-site `@inline` and with a callsite `@inline`), the
 # `@inbounds` chain stops reaching the noshift constructor's own `@boundscheck` (elision
 # crosses one level, into inlined callees only): the constructor then inlines *with* its

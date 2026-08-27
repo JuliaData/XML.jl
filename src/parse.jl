@@ -39,7 +39,7 @@ Base.parse(xml::AbstractString, ::Type{Cursor}) = Cursor(xml)
 _drop_bom(s::String)::String = startswith(s, '\ufeff') ? s[nextind(s, 1):end] : s
 
 # Generic (type-preserving) form so a leading U+FEFF is also dropped inside the type-parametric
-# Cursor constructor (SubString today, StringView when mmap lands), not only on the String
+# Cursor constructor (a `SubString`, or a `StringView` over a mapped file), not only on the String
 # parse(_, Node)/LazyNode paths — keeping all three readers consistent on a BOM'd string.
 _drop_bom(s::AbstractString) = startswith(s, Char(0xFEFF)) ? SubString(s, nextind(s, firstindex(s))) : s
 
@@ -122,7 +122,7 @@ _is_xml_char(cp::Integer) =
 
 # `:strict` only: reject a raw character outside the XML §2.2 Char range (e.g. NUL / C0 controls).
 # Without this, a literal illegal character passes while its &#...; reference form is rejected — a
-# reference-vs-raw asymmetry. DCE'd off the :strict path, so :lenient/:structural pay nothing.
+# reference-vs-raw asymmetry. DCE'd off the :strict path, so :lenient/:structural cost nothing.
 function _check_chars_strict(s::AbstractString)
     for c in s
         _is_xml_char(UInt32(c)) ||
@@ -132,7 +132,7 @@ end
 
 # `:strict` only: reject any numeric character reference whose code point is outside the XML Char
 # range. Gated + DCE'd off the :strict path, and only called when a token actually carries
-# entities, so :lenient/:structural pay nothing.
+# entities, so :lenient/:structural cost nothing.
 function _check_charrefs_strict(s::AbstractString)
     for m in eachmatch(r"&#([xX]?)([0-9a-fA-F]+);", s)
         cp = tryparse(UInt32, m[2]; base = isempty(m[1]) ? 10 : 16)

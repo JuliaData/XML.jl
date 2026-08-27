@@ -97,7 +97,7 @@ end
 # XML 1.0 §2.11 end-of-line normalization: "the XML processor MUST behave as if it
 # normalized all line breaks … on input, before parsing" — the literal pair CR LF becomes
 # ONE LF, then each remaining literal #xD becomes LF, while character references (`&#13;`)
-# are written with `&`, which no rewrite touches, so they survive to entity resolution.
+# are written with `&`, which no rewrite touches, so they reach entity resolution intact.
 #
 # How that is honoured depends on how the document is held, and the two ways are chosen by
 # DISPATCH rather than by a runtime test, which is what keeps the common path's accessor
@@ -112,10 +112,11 @@ end
 #     rewritten here, which is the one thing the mapping exists to avoid. It is left alone,
 #     and each value is normalized on the way out instead (`_read_eol` below).
 #
-# What was measured and rejected in between is per-value normalization behind a RUNTIME
-# branch: any extra live branch or inlined scan in the union-returning accessors overflows
-# the caller-side union-split of their merge φ and heap-boxes the clean-path return, 32 B
-# per value (#105/#113 class). A branch resolved by dispatch costs the clean path nothing.
+# Collapsing the two into one accessor that tests at runtime which normalization a
+# value needs is not an option: any extra live branch or inlined scan in the
+# union-returning accessors overflows the caller-side union-split of their merge φ and
+# heap-boxes the clean-path return, 32 B per value (#105/#113 class). A branch resolved
+# by dispatch costs the clean path nothing.
 _normalize_input_eol(s::String) = occursin('\r', s) ? _rewrite_content_eol(s) : s
 _normalize_input_eol(s::SubString{String}) = occursin('\r', s) ? _rewrite_content_eol(s) : s
 _normalize_input_eol(s::AbstractString) = s
@@ -149,10 +150,10 @@ end
 
 # The rewritten value is never longer than its source — a CR LF pair loses a byte, a lone CR
 # keeps its own — so the buffer is allocated once at that bound and shrunk to what was
-# written, rather than grown one write at a time through an `IOBuffer` sized on a length that
-# is not available until the walk ends. `StringVector` allocates in the layout `String` wraps
-# without a copy; a plain `Vector{UInt8}` is copied again on conversion. 96 B per call against
-# 160 for a ten-byte value.
+# written. Knowing the bound is what makes a growable stream unnecessary on a path that runs
+# once per value carrying a line end. `StringVector` allocates in the layout `String` wraps
+# without a copy; a plain `Vector{UInt8}` is copied again on conversion. 96 B per call for a
+# ten-byte value.
 function _rewrite_content_eol(s::AbstractString)
     cu = codeunits(s)
     n = length(cu)

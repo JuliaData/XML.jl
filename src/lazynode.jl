@@ -41,7 +41,7 @@ end
 # that skips the rewrite its source type requires, and return CR to the application.
 LazyNode(data::AbstractString, nt::NodeType) = _lazynode_at(_normalize_input_eol(data), nt)
 
-# `d` has had whatever §2.11 requires of it at the entry — see `_cursor_at` for the same split.
+# `d` arrives with §2.11 already applied — see `_cursor_at` for the same split.
 # No scan here. Parametric on `d`'s own type, so a rewritten document (always a `String`)
 # builds `LazyNode{String}`.
 @inline _lazynode_at(d::S, nt::NodeType) where {S <: AbstractString} =
@@ -516,7 +516,7 @@ end
 #-----------------------------------------------------------------------------# eachchildnode
 # Iterator state: a yielded element's subtree is NOT skipped at yield time — the skip is
 # recorded as pending and performed only when the next sibling is requested, so a
-# traversal that stops early never pays for subtrees nobody asked to step past.
+# traversal that stops early costs nothing for subtrees nobody asked to step past.
 const _CI_READY   = 0x00
 const _CI_PENDING = 0x01  # an element was yielded; its unskipped subtree lies ahead
 const _CI_DONE    = 0x02
@@ -594,7 +594,7 @@ end
 
 # The passed iteration state is ignored — the cursor lives in the iterator's own fields
 # (the resumption contract above). The yielded tuple is built at a SINGLE site — an
-# unboxed union return survives only one construction path (the same rule the span→view
+# union return stays unboxed through one construction path only (the same rule the span→view
 # helpers pin down) — and the chain must inline into the caller's loop: across a
 # non-inlined boundary the union boxes per step.
 @inline Base.iterate(ci::LazyChildIterator, _ = nothing) = _ci_next(ci)

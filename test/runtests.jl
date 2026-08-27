@@ -1450,7 +1450,7 @@ end
 
     @testset "example.kml" begin
         # example.kml is a valid KML sample with CDATA sections; the invalid
-        # lowercase <![CData[ spelling it used to use is still rejected as malformed.
+        # lowercase <![CData[ spelling is rejected as malformed.
         path = joinpath(@__DIR__, "data", "example.kml")
         isfile(path) || return
         @test nodetype(read(path, Node)) == Document
@@ -1626,7 +1626,7 @@ end
         # complex_dtd.xml uses parameter entity references (%text;) which parse_dtd does not
         # expand, so we just verify parsing the fixture works. It is an XML declaration plus an
         # internal-subset DOCTYPE with no root element, i.e. not a well-formed document — read it
-        # with :lenient, since the default :structural now requires a root element (§2.1).
+        # with :lenient, since the default :structural requires a root element (§2.1).
         path = joinpath(@__DIR__, "data", "complex_dtd.xml")
         isfile(path) || return
         doc = read(path, Node; wellformed=:lenient)
@@ -1812,9 +1812,9 @@ end
     end
 
     @testset "truncated construct whose open token lands at EOF" begin
-        # The open token consumes through end-of-input, so the body reader never ran: the Node
-        # parser silently accepted these, and the lazy readers' value() indexed `nothing` (an
-        # opaque MethodError). Each now raises a clear "unterminated ..." error.
+        # The open token consumes through end-of-input, so the body reader never runs. Each of
+        # these raises a clear "unterminated ..." error — unguarded, the Node parser accepts
+        # them silently and the lazy readers' value() indexes `nothing`, an opaque MethodError.
         @test_throws Exception parse("<!--", Node)
         @test_throws Exception parse("<![CDATA[", Node)
         @test_throws Exception parse("<?pi", Node)
@@ -1828,8 +1828,8 @@ end
     end
 
     @testset "unterminated quoted string in a DOCTYPE uses the tokenizer error convention" begin
-        # skip_quoted threw a bare ErrorException with no position; it now uses err(msg, pos)
-        # like every other tokenizer error (ArgumentError with position context).
+        # skip_quoted raises through err(msg, pos) like every other tokenizer error: an
+        # ArgumentError carrying position context, not a bare ErrorException.
         @test_throws ArgumentError parse("<!DOCTYPE r SYSTEM \"abc", Node; wellformed=:lenient)
         @test_throws "tokenizer error at position" parse("<!DOCTYPE r SYSTEM \"abc", Node; wellformed=:lenient)
     end
@@ -3193,7 +3193,7 @@ end
 
     @testset "attribute-value normalization (XML 1.0 §3.3.3)" begin
         # Literal white space (#x9 #xA #xD) in attribute values reads as spaces — the CRLF
-        # pair as ONE space — while white space written as character references survives.
+        # pair as ONE space — while white space written as character references is kept.
         # Normalization happens on the raw slice, before entity resolution, uniformly
         # across the four readers.
         # by-key indexing throughout — exercises every reader's getindex
@@ -3278,7 +3278,7 @@ end
     @testset "line-end normalization (XML 1.0 §2.11)" begin
         # Literal CR and the CRLF pair in content read as LF — in character data, CDATA
         # sections, PI data, comments, and the DOCTYPE value — while CR written as a
-        # character reference (&#13;) survives. Normalization happens ON INPUT at every
+        # character reference (&#13;) is preserved. Normalization happens ON INPUT at every
         # document entry point, before parsing (hence before entity resolution), uniformly
         # across the four readers (#129).
         function content_by_reader(xml)
@@ -3384,7 +3384,7 @@ end
             @test all(v -> !occursin('\r', v), cursor_values(Cursor(crlf)))
 
             # start offsets are translated into the normalized copy, so a subtree cursor
-            # opened on the raw string still lands on the right element
+            # opened on the raw string still reaches the right element
             apos = findfirst("<a>", crlf).start
             @test any(==("x\ny"), cursor_values(Cursor(crlf, apos)))
 
@@ -3898,7 +3898,7 @@ end
 
         @testset "splice idiom from the docstring" begin
             # excise <a …>…</a> — preceded by "é", followed by "œ": the documented
-            # prevind/nextind splice must survive both multibyte boundaries
+            # prevind/nextind splice must hold across both multibyte boundaries
             a = first(c for c in children(doc[1]) if nodetype(c) == Element)
             span = sourcespan(a)
             stripped = xml[1:prevind(xml, first(span))] * "<c/>" * xml[nextind(xml, last(span)):end]
@@ -4129,8 +4129,8 @@ Base.thisind(w::WrappedSource, i::Int) = thisind(w.s, i)
     end
 
     @testset "eachattribute yields its declared element type" begin
-        # `collect` sizes its result from `eltype`, so a mismatch converts every pair — the
-        # same whole-document rebuild the materialized dict used to pay.
+        # `collect` sizes its result from `eltype`, so a declared type that does not
+        # match the yielded pairs converts every one of them, copying views into strings.
         pairs = collect(XML.eachattribute(lazy_c(src)))
         @test eltype(pairs) === Pair{SubString{String}, SubString{String}}
         @test pairs == ["r" => "A1", "e" => "a&b"]
