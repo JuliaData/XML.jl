@@ -58,10 +58,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Sound because every span edge falls on an ASCII byte or EOF, hence a UTF-8 character
   boundary; `--check-bounds=yes` builds (as in `Pkg.test`) compile the checked
   reconstruction instead, selected at load time. On the 14 MB corpus: lex 37.4 → 23.4 ms,
-  `FlatNode` extract 6.6 → 3.1 ms, and two headlines flip — `FlatNode` out-builds libxml2
-  (~1.7×) and out-extracts `Node`'s direct field reads — while pure-Julia streaming widens
-  its lead over EzXML's `StreamReader` to ~2.5×. Allocations unchanged throughout
-  (#109, #111, #113).
+  `FlatNode` extract 6.6 → 3.1 ms, and two orderings reverse — `FlatNode` builds ~1.7×
+  faster than libxml2 and extracts faster than `Node`'s direct field reads — while
+  pure-Julia streaming is ~2.5× faster than EzXML's `StreamReader`. Allocations
+  unchanged throughout (#109, #111, #113).
 
 - **Measurement upkeep**: every timing in PERFORMANCE-v0.4.md and the README is a
   BenchmarkTools `@benchmark` median (`benchmarks/flatnode_bench.jl` rewritten

@@ -4,7 +4,7 @@ The headline cross-library figures live in the [README](README.md#benchmarks). T
 
 ## The theory behind "optimal"
 
-XML parsing splits into two language-theory levels, and v0.4 hits the **asymptotic lower bound** of each — the sense in which the lexer and parser are "optimal". The gap to a C library like [libxml2](https://en.wikipedia.org/wiki/Libxml2) is constant-factor (C tuning, a leaner non-Julia-heap tree), not asymptotic — and only on the pointer-tree `Node` build; `FlatNode` out-builds libxml2 (Table 5), and at streaming XML.jl is ~2.5× *faster* (Table 1).
+XML parsing splits into two language-theory levels, and v0.4 hits the **asymptotic lower bound** of each — the sense in which the lexer and parser are "optimal". The gap to a C library like [libxml2](https://en.wikipedia.org/wiki/Libxml2) is constant-factor (C tuning, a leaner non-Julia-heap tree), not asymptotic — and only on the pointer-tree `Node` build; `FlatNode` builds faster than libxml2 (Table 5), and at streaming XML.jl is ~2.5× *faster* (Table 1).
 
 ### Level 1 — lexing is finite-state
 
@@ -91,7 +91,7 @@ An LF file opens in the same 11.7 ns: the entry does not scan the source, so ope
 
 ### Full DOM — parse + walk everything
 
-libxml2 wins the build; XML.jl materialises an 882 K-node Julia tree, EzXML a leaner C one:
+libxml2 is fastest to build; XML.jl materialises an 882 K-node Julia tree, EzXML a leaner C one:
 
 | Full DOM extract | time (incl. GC) | memory |
 |---|--:|--:|
@@ -130,7 +130,7 @@ node — its resumable child cursor, elided by the compiler wherever a container
 
 _Table 4 — whole-tree traversal per reader: one child iterator and a tag + value read per
 visited node (the spreadsheet hot-loop shape). `LazyNode` re-tokenizes everything it steps
-over — a cost per visit by design; see the partial-reads section for when that trade wins._[^profile]
+over — a cost per visit by design; see the partial-reads section for the access patterns it suits._[^profile]
 
 ### `FlatNode` (v0.4.2, experimental)
 
@@ -154,11 +154,11 @@ Measured on the same XMark document:
 
 _Table 5 — per-reader full-DOM comparison; *build* is the whole `parse` call, and *DOM size* is the **retained** live tree (`Base.summarysize`), not allocations._[^flatbench]
 
-Build allocations: 42.2 MiB (`FlatNode`) vs 99.8 MiB (`Node`), and the *build* ranking puts `FlatNode` ahead of libxml2 itself (~1.7× faster; `Node` sits ~1.5× behind the C library). The GC cells say why `FlatNode` builds so cheaply: its build allocates a handful of arrays instead of 882 K objects, so its median GC share is ~0.1 ms where `Node`'s is ~23 ms. Access on the finished stores: whole-tree walks are close (2.97 vs 3.46 ms — exact-size children vectors keep `Node`'s locality sharp), `parent`/`depth` stay O(1) index hops on `FlatNode` where `Node` must search down from the root, and pure value extraction is close too, flat store slightly ahead (3.1 vs 3.7 ms — a per-value `SubString` view costs two integer stores).
+Build allocations: 42.2 MiB (`FlatNode`) vs 99.8 MiB (`Node`), and on the *build* `FlatNode` is ~1.7× faster than libxml2 itself, `Node` ~1.5× slower than the C library. The GC cells say why `FlatNode` builds so cheaply: its build allocates a handful of arrays instead of 882 K objects, so its median GC share is ~0.1 ms where `Node`'s is ~23 ms. Access on the finished stores: whole-tree walks are close (2.97 vs 3.46 ms — exact-size children vectors keep `Node`'s locality sharp), `parent`/`depth` stay O(1) index hops on `FlatNode` where `Node` must search down from the root, and pure value extraction is close too, flat store slightly faster (3.1 vs 3.7 ms — a per-value `SubString` view costs two integer stores).
 
 ### Choosing
 
-Stream / low-memory / read-only full-DOM / repeated traversal → **XML.jl**; `FlatNode` out-builds the libxml2 binder (~1.7×: 27.2 vs 46.6 ms), and the C library's one win is the one-shot *`Node`* build-and-extract (~1.3× end-to-end, Table 2) — either way, pure Julia, no C dependency. Against its own past, v0.4 is **~7× faster and ~14× leaner than 0.3.9** (530 → 79 ms and ~1.4 GiB → 100 MiB on this file, Table 2) — see [`benchmarks/profile.jl`](benchmarks/profile.jl), [`benchmarks/profile_vs_039.jl`](benchmarks/profile_vs_039.jl), [`benchmarks/compare.jl`](benchmarks/compare.jl).
+Stream / low-memory / read-only full-DOM / repeated traversal → **XML.jl**; `FlatNode` builds ~1.7× faster than the libxml2 binder (27.2 vs 46.6 ms), and the C library's one advantage is the one-shot *`Node`* build-and-extract (~1.3× end-to-end, Table 2) — either way, pure Julia, no C dependency. Against its own past, v0.4 is **~7× faster and ~14× leaner than 0.3.9** (530 → 79 ms and ~1.4 GiB → 100 MiB on this file, Table 2) — see [`benchmarks/profile.jl`](benchmarks/profile.jl), [`benchmarks/profile_vs_039.jl`](benchmarks/profile_vs_039.jl), [`benchmarks/compare.jl`](benchmarks/compare.jl).
 
 > [!NOTE]
 > **`:strict`** adds a character-range scan over text (a second O(content) pass); the overhead scales with the document's *text share* — ~1.1× on the markup-heavy XMark corpus, up to ~20× on a pure-text document; `:lenient` / `:structural` are unaffected.
