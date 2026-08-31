@@ -60,7 +60,7 @@ Structured pull helpers keep scans cheap without hand-tracked depth: `for_each_c
 
 ### Partial reads — `LazyNode`
 
-Opening builds nothing — for a document held as a `String` it costs one scan of the source for line ends, 0.21 ms on this 14 MB file, and for one held as anything else not even that ([Memory-mapped sources](#memory-mapped-sources)) — and nothing is ever cached: each visit re-tokenizes and rebuilds its small handles — iteration steps allocate nothing, and each child or attribute scan is one small resumable cursor object, elided when it never loops (Table 4 prices the full-scan case) — so a repeated look-up costs only its re-scan time, and costs repeat per visit. A traversal costs only the bytes it actually steps over: the child iterator defers a yielded element's subtree skip until the *next sibling* is requested, so descending to a target is O(bytes before it); scanning *everything* is the worst case, priced per reader in Table 4. What still costs: *horizontal* scans cost the subtrees they step past (as any index-free forward reader must), and *repeated* look-ups cost again — those two patterns tip the scale toward `FlatNode`/`Node`.
+Opening builds nothing — every document costs one probe of its prolog for entity declarations, 18 ns on this 14 MB file and allocation-free, and one held as a `String` costs a scan of the source for line ends on top of that, 0.21 ms here, where one held as anything else does not ([Memory-mapped sources](#memory-mapped-sources)) — and nothing is ever cached: each visit re-tokenizes and rebuilds its small handles — iteration steps allocate nothing, and each child or attribute scan is one small resumable cursor object, elided when it never loops (Table 4 prices the full-scan case) — so a repeated look-up costs only its re-scan time, and costs repeat per visit. A traversal costs only the bytes it actually steps over: the child iterator defers a yielded element's subtree skip until the *next sibling* is requested, so descending to a target is O(bytes before it); scanning *everything* is the worst case, priced per reader in Table 4. What still costs: *horizontal* scans cost the subtrees they step past (as any index-free forward reader must), and *repeated* look-ups cost again — those two patterns tip the scale toward `FlatNode`/`Node`.
 
 > [!NOTE]
 > Ask only for what you need: a `for` loop over `eachchildnode` fetches the next sibling — and runs its predecessor's deferred subtree skip — at the top of each round, so exit *from within the body* once you are done:
@@ -77,17 +77,17 @@ Opening builds nothing — for a document held as a `String` it costs one scan o
 
 ### Memory-mapped sources
 
-The readers keep whatever string type the document arrives as, and a document not held as a `String` is never rewritten when it is read in — so a `StringView` over `Mmap`, the recipe for files too large to hold in memory, reaches the reader intact whatever the file's line ends. The line-end normalization the specification requires then happens on each value as it is reported, which costs a copy only for the values that carry a line end, and only for the ones actually asked for. On the same XMark corpus, mapped instead of read, with CR LF line ends throughout — the worst case for this, since every line end is one CR to fold:
+The readers keep whatever string type the document arrives as, and a document not held as a `String` is not rewritten for its line ends — so a `StringView` over `Mmap`, the recipe for files too large to hold in memory, reaches the reader intact whatever the file's line ends. The line-end normalization the specification requires then happens on each value as it is reported, which costs a copy only for the values that carry a line end, and only for the ones actually asked for. The entry does read the prolog, to see whether the internal subset declares general entities: a document that declares and references them is expanded before the parse whatever string type holds it (XML 1.0 §4.4.2), one document-sized copy, and a document that declares none is passed through for the probe's cost alone. On the same XMark corpus, mapped instead of read, with CR LF line ends throughout — the worst case for this, since every line end is one CR to fold:
 
 | | time | allocated |
 |---|--:|--:|
-| open | **11.9 ns** | 176 B |
+| open | **24.4 ns** | 176 B |
 | open, then read 1 000 nodes | 43.8 µs | 38 KiB |
 | open, then read every node | 40.6 ms | 36.3 MiB |
 
-An LF file opens in the same 11.7 ns: the entry does not scan the source, so opening is O(1) in the file's size and a reader that touches a fraction of a mapped document costs only that fraction. Reading *all* of a CR LF document allocates more than a reader working from a rewritten `String` would. These are short-lived strings, reclaimed by the garbage collector as the reader moves on, where the rewrite holds one document-sized block for as long as any handle into it lives. For a file larger than memory, that difference determines whether it can be read at all.[^mapped]
+An LF file opens in the same 24.1 ns: the entry reads the prolog and not the document, so opening does not scale with the file's size and a reader that touches a fraction of a mapped document costs only that fraction. Reading *all* of a CR LF document allocates more than a reader working from a rewritten `String` would. These are short-lived strings, reclaimed by the garbage collector as the reader moves on, where the rewrite holds one document-sized block for as long as any handle into it lives. For a file larger than memory, that difference determines whether it can be read at all.[^mapped]
 
-[^mapped]: Measured 2026-08-25, same machine and settings as the rest, Julia 1.12.7; BenchmarkTools medians. Source: [`benchmarks/profile.jl`](benchmarks/profile.jl), section (5), which generates the CR LF twin of the corpus beside it.
+[^mapped]: Measured 2026-08-31, same machine and settings as the rest, Julia 1.12.7; BenchmarkTools medians. Source: [`benchmarks/profile.jl`](benchmarks/profile.jl), section (5), which generates the CR LF twin of the corpus beside it.
 
 ### Full DOM — parse + walk everything
 

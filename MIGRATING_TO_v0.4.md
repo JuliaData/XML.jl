@@ -57,9 +57,7 @@ iteration) and preserves document order.
 zero-copy parsing). `::Node` annotations still work. If you dispatched on `::AbstractXMLNode`, note
 that `Node` is no longer a subtype of it.
 
-The zero-copy `Node{SubString{String}}` variant returns text and attribute values **raw** — entities
-such as `&amp;` are *not* decoded, since decoding would require allocating a new string. The default
-`Node` (`Node{String}`), `LazyNode`, and `Cursor` all decode entities into values.
+The zero-copy `Node{SubString{String}}` variant returns text and attribute values **raw** — the predefined entities such as `&amp;`, and character references, are *not* decoded, since decoding would require allocating a new string. The default `Node` (`Node{String}`), `LazyNode`, and `Cursor` all decode them into values. General entities declared in an internal subset are a different matter: their replacement text is included in the document before it is parsed, so the zero-copy variant reports that text like any other reader.
 
 ### `LazyNode` is an immutable view
 
