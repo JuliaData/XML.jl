@@ -226,5 +226,36 @@ for (lbl, path) in (("LF", FILE), ("CR LF", FILE_CRLF))
         end
     end
 end
-println("\n(the entry either hands the mapping through or rewrites the document into the",
+println("\n(the entry either passes the mapping through or rewrites the document into the",
         "\n heap; the resulting Cursor type says which)")
+
+#--------------------------------------------------------------# (6) INTERNAL GENERAL ENTITIES
+# What XML 1.0 §4.4 inclusion costs, priced against a twin that parses to the SAME TREE, so any
+# difference below belongs to the entity machinery and to nothing else. The twin declares three
+# entities and references them where the plain corpus carries the words themselves, so those
+# references disappear into the expansion; a fourth word is rewritten as a character reference,
+# which survives the expansion and is what reaches the `:strict` reference check. Both
+# populations are needed: `has_entities` is computed after the expansion, so a twin carrying
+# only declared references would leave that check measuring nothing.
+
+const FILE_ENT = joinpath(@__DIR__, "data", "xmark_entities.xml")
+function entity_twin(s)
+    s = replace(s, r"\babout\b" => "&w1;", r"\bbetween\b" => "&w2;", r"\btogether\b" => "&w3;")
+    s = replace(s, r"\bexample\b" => "&#101;xample")
+    dt = "<!DOCTYPE site [<!ENTITY w1 \"about\"><!ENTITY w2 \"between\"><!ENTITY w3 \"together\">]>\n"
+    i = findfirst("?>\n", s)
+    string(SubString(s, 1, last(i)), dt, SubString(s, last(i) + 1))
+end
+isfile(FILE_ENT) || write(FILE_ENT, entity_twin(S))
+const SE = read(FILE_ENT, String)
+
+println("\n=== (6) INTERNAL GENERAL ENTITIES — what §4.4 inclusion costs ===")
+println("  invariant, twin parses to the same tree : ", parse(S, Node)[end] == parse(SE, Node)[end])
+println("  declared references, lost to the expansion : ", length(collect(eachmatch(r"&w[123];", SE))))
+println("  character references, kept through it     : ", length(collect(eachmatch(r"&#101;", SE))))
+row("parse, no declarations",    @benchmark parse($S, Node))
+row("parse, entities included",  @benchmark parse($SE, Node))
+row("parse :strict, no decl",    @benchmark parse($S, Node; wellformed = :strict))
+row("parse :strict, entities",   @benchmark parse($SE, Node; wellformed = :strict))
+row("expansion pass alone",      @benchmark XML._expand_entities($SE))
+row("prolog probe, no decl",     @benchmark XML._internal_entities($S))
