@@ -1,4 +1,4 @@
-# Per-reader benchmark behind Table 4 of PERFORMANCE-v0.4.md and the README
+# Per-reader benchmark behind Table 5 of PERFORMANCE-v0.4.md and the README
 # "Performance by access pattern" table — BenchmarkTools throughout, default
 # parameters, 5 s budget per cell: samples run back-to-back, each printed number
 # is the median sample's time with the median GC share as its "(GC x)" tail
