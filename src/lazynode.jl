@@ -392,8 +392,10 @@ or reformatting.  This is the zero-copy counterpart of [`write`](@ref) for lazy 
 Being zero-copy, it reports the bytes of the document the reader actually holds. A `String`
 document whose lines end in CR is normalized when it is read in, so its source text is the
 normalized one; a document held as any other string type — a view over a memory-mapped file,
-say — is never rewritten, so its source text is the file's own bytes, line ends included.
-Reported *values* are normalized either way.
+say — keeps its own line ends, so its source text carries them. A document that declares and
+references general entities in its internal subset is expanded when it is read in, whatever
+string type holds it, so its source text is the expanded one (§4.4.2). Reported *values* are
+normalized either way.
 """
 function sourcetext(n::LazyNode)
     nt = n.nodetype

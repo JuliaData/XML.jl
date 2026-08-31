@@ -259,7 +259,7 @@ function _references_declared(s::AbstractString, ents::InternalEntities)
 end
 
 """
-    _expand_entities(src) -> src or an expanded copy
+    _expand_entities(src) -> src, or an expanded copy of the same type
 
 XML 1.0 §4.4.2 includes a general entity's replacement text "as though it were part of the
 document at the location the reference was recognized" — so a reference whose replacement text
@@ -270,15 +270,43 @@ Only content and attribute values are rewritten. A reference inside a comment, a
 a processing instruction or the internal subset is not a reference (§4.4.2 recognises them in
 content and in attribute values), so those spans are copied byte for byte.
 
-Dispatched on the source type: a document held as anything but a `String` is returned untouched,
-which keeps the memory-mapped recipe intact — it costs nothing, and its references stay literal.
+A document that declares nothing costs one probe of its prolog and is returned as it stands, so
+a source held outside the heap is copied only when it declares and references entities.
 """
-_expand_entities(s::AbstractString) = s
-
-function _expand_entities(s::String)
+function _expand_entities(s::AbstractString)
     ents = _internal_entities(s)
     (ents === nothing || isempty(ents)) && return s
+    bytes = _expanded_bytes(s, ents)
+    bytes === nothing && return s
+    rebuilt = _rebuild_source(s, bytes)
+    rebuilt === nothing ? s : rebuilt
+end
+
+"""
+    _rebuild_source(src, bytes) -> a source of `src`'s own type, or `nothing`
+
+The expansion produces bytes; this returns them as the type the reader was given, so a reader's
+type parameter is the same whether or not the document declared anything. Each method returns
+one concrete type and the fallback returns `nothing`, which is what keeps `_expand_entities`
+type-stable for every concrete source type: both of its branches yield the argument's own type.
+
+A source type with no method here keeps its references literal. An extension supplies the method
+for `StringView`, and is loaded whenever a `StringView` can exist at all, since the type comes
+from the package that extension names.
+"""
+_rebuild_source(::AbstractString, ::Vector{UInt8}) = nothing
+_rebuild_source(::String, bytes::Vector{UInt8}) = String(bytes)
+_rebuild_source(::SubString{String}, bytes::Vector{UInt8}) = SubString(String(bytes))
+
+# One walk of the document: spans that need no work are copied, references to declared names are
+# expanded. Returns `nothing` when nothing was rewritten, so the caller returns its own argument
+# instead of an equal copy.
+function _expanded_bytes(s::AbstractString, ents::InternalEntities)
     out = IOBuffer(sizehint = ncodeunits(s))
+    # Token offsets are root-relative, so a source that is itself a view over a larger string
+    # reports positions past its own start; subtracting its offset returns them to the index
+    # space of `s`, which is what the copied spans below are indexed in.
+    base = XMLTokenizer._data_offset(s)
     pos = 1                                          # 1-based byte position of the next byte to copy
     rewrote = false
     for tok in XMLTokenizer.tokenize(s, 1)
@@ -287,7 +315,7 @@ function _expand_entities(s::String)
         tok.has_entities || continue
         span = XMLTokenizer.raw(tok, s)
         _references_declared(span, ents) || continue
-        start = tok.offset + 1
+        start = tok.offset - base + 1
         Base.write(out, SubString(s, pos, prevind(s, start)))
         if tok.kind === XMLTokenizer.TokenKinds.ATTR_VALUE
             # the span carries its delimiters; only what they enclose is expanded, in literal
@@ -302,7 +330,7 @@ function _expand_entities(s::String)
         pos = start + tok.ncodeunits
         rewrote = true
     end
-    rewrote || return s
+    rewrote || return nothing
     pos <= ncodeunits(s) && Base.write(out, SubString(s, pos))
-    String(take!(out))
+    take!(out)
 end

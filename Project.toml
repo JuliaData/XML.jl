@@ -5,10 +5,13 @@ authors = ["Josh Day <emailjoshday@gmail.com> and contributors"]
 
 [weakdeps]
 AbstractTrees = "1520ce14-60c1-5f80-bbc7-55ef81b5835c"
+StringViews = "354b36f9-a18e-4713-926e-db85100087ba"
 
 [extensions]
 XMLAbstractTreesExt = "AbstractTrees"
+XMLStringViewsExt = "StringViews"
 
 [compat]
 AbstractTrees = "0.4"
+StringViews = "1, 2"
 julia = "1.10"

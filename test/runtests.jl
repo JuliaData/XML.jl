@@ -2,6 +2,7 @@ using XML
 using XML: Document, Element, Declaration, Comment, CData, DTD, ProcessingInstruction, Text
 using XML: escape, unescape, h, parse_dtd
 using XML: ParsedDTD, ElementDecl, AttDecl, EntityDecl, NotationDecl
+using Mmap, StringViews
 using Test
 
 # Run every testset below under one parent testset, so a failure or error in any single testset does
@@ -815,9 +816,70 @@ end
                     "<!DOCTYPE d [<!ENTITY e \"X\">]><d>&other;</d>")     # only undeclared names
             @test exp(src) === src                                        # the same object, not a copy
         end
-        # a source held as anything but a String keeps the memory-mapped recipe: untouched
-        sub = SubString("<!DOCTYPE d [<!ENTITY e \"X\">]><d>&e;</d>", 1)
+        # a source that is not a String takes the same exits
+        sub = SubString("<a>plain</a>", 1)
         @test XML._expand_entities(sub) === sub
+    end
+
+    @testset "sources that are not a `String`" begin
+        # Token offsets are root-relative, so a source that is itself a view reports positions
+        # past its own start; a view beginning after byte one is what catches the correction.
+        root = "padding<!DOCTYPE d [<!ENTITY e \"<b>x</b>\">]><d>&e;</d>"
+        sub = SubString(root, ncodeunits("padding") + 1)
+        @test XML._expand_entities(sub) == "<!DOCTYPE d [<!ENTITY e \"<b>x</b>\">]><d><b>x</b></d>"
+        @test XML._expand_entities(sub) isa SubString{String}
+        @test @inferred(XML._expand_entities(sub)) isa SubString{String}
+
+        doc = "<!DOCTYPE r [<!ENTITY e \"<b>x</b>\"><!ENTITY t \"hi\">]><r a=\"&t;\">&e;&t;</r>"
+        mktemp() do path, io
+            write(io, doc)
+            close(io)
+            open(path) do f
+                sv = StringView(Mmap.mmap(f))
+                @test @inferred(XML._expand_entities(sv)) isa StringView{Vector{UInt8}}
+                # §4.4.2 inclusion reaches a mapped document: markup in replacement text is
+                # structure, not a text node holding `<`
+                r = last(collect(children(parse(sv, LazyNode))))
+                kids = collect(children(r))
+                @test length(kids) == 2
+                @test tag(first(kids)) == "b"
+                @test attributes(r)["a"] == "hi"          # §4.4.5, included in literal
+                cur = XML.Cursor(sv)
+                seen = String[]
+                while XML.next!(cur) !== nothing
+                    nodetype(cur) === Element && push!(seen, tag(cur))
+                end
+                @test seen == ["r", "b"]
+            end
+        end
+
+        # an encoding signature makes `_drop_bom` hand the reader a view, which the expansion
+        # rebuilds as a view of the same type
+        mktemp() do path, io
+            write(io, "﻿" * doc)
+            close(io)
+            open(path) do f
+                sv = StringView(Mmap.mmap(f))
+                r = last(collect(children(parse(sv, LazyNode))))
+                @test length(collect(children(r))) == 2
+            end
+        end
+
+        # a mapped document that declares nothing is returned as it stands, so the recipe for
+        # files too large for the heap costs one probe of the prolog and no copy
+        mktemp() do path, io
+            write(io, "<a>plain</a>")
+            close(io)
+            open(path) do f
+                sv = StringView(Mmap.mmap(f))
+                @test XML._expand_entities(sv) === sv
+            end
+        end
+
+        # a `StringView` over anything but a `Vector{UInt8}` cannot be rebuilt as its own type,
+        # so it keeps its references literal rather than changing the reader's type parameter
+        odd = StringView(view(Vector{UInt8}(doc), 1:ncodeunits(doc)))
+        @test XML._expand_entities(odd) === odd
     end
 
     @testset "expansion is bounded, at every wellformed level" begin
