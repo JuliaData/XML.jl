@@ -130,8 +130,6 @@ function _check_chars_strict(s::AbstractString)
     end
 end
 
-const _PREDEFINED_ENTITY_NAMES = ("amp", "lt", "gt", "apos", "quot")
-
 # `:strict` only, one pass over a span's references, character and named alike. Gated + DCE'd off
 # the :strict path and called only when a token carries entities, so :lenient/:structural cost
 # nothing. A character reference is rejected when its code point falls outside the XML Char range.
@@ -146,7 +144,7 @@ function _check_refs_strict(s::AbstractString, names::Bool)
             cp = tryparse(UInt32, m[2]; base = isempty(m[1]) ? 10 : 16)
             (cp === nothing || !_is_xml_char(cp)) &&
                 error("not well-formed: illegal character reference \"&#$(m[1])$(m[2]);\"")
-        elseif names && !(m[3] in _PREDEFINED_ENTITY_NAMES)
+        elseif names && !(m[3] in _PREDEFINED)
             error("not well-formed: reference to undeclared entity \"&$(m[3]);\" (XML 1.0 §4.1)")
         end
     end

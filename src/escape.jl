@@ -27,6 +27,10 @@ end
 # reference that resolves to '&' (e.g. `&#38;`) is never re-scanned as the start of a new
 # entity — `replace` substitutes left-to-right over the original string and never re-reads
 # what it emitted.
+# The five names XML 1.0 §4.6 predefines, which need no declaration. `_ENTITY_RE` below
+# encodes the same set for the decode path; readers that check what a name refers to use this.
+const _PREDEFINED = ("amp", "lt", "gt", "apos", "quot")
+
 const _ENTITY_RE = r"&(?:amp|lt|gt|apos|quot|#[0-9]+|#[xX][0-9a-fA-F]+);"
 
 function _unescape_entity(m::AbstractString)

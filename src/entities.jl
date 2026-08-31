@@ -123,7 +123,6 @@ function _subset_entities(body::AbstractString)
 end
 
 const _GENREF_RE = r"&([A-Za-z_:][A-Za-z0-9._:-]*);"
-const _PREDEFINED = ("amp", "lt", "gt", "apos", "quot")
 
 # Well-formedness constraint "No Recursion" — a cycle is a termination hazard, refused at
 # every `wellformed` level.
