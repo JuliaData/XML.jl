@@ -137,8 +137,8 @@ const _PREDEFINED_ENTITY_NAMES = ("amp", "lt", "gt", "apos", "quot")
 # nothing. A character reference is rejected when its code point falls outside the XML Char range.
 # A named reference is checked only when `names` holds, and the test is then a membership one:
 # `_expand_entities` has already replaced every reference it could resolve, so a name arriving
-# here that is not predefined has no replacement text behind it (XML 1.0 §4.1, WFC: Entity
-# Declared). A name outside the ASCII set the pattern accepts goes unchecked, which costs a
+# here that is not predefined has no replacement text behind it (XML 1.0 §4.1, the "Entity
+# Declared" well-formedness constraint). A name outside the ASCII set the pattern accepts goes unchecked, which costs a
 # missed rejection and never a wrong one.
 function _check_refs_strict(s::AbstractString, names::Bool)
     for m in eachmatch(r"&(?:#([xX]?)([0-9a-fA-F]+)|([A-Za-z_:][A-Za-z0-9._:-]*));", s)

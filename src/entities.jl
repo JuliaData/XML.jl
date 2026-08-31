@@ -125,7 +125,8 @@ end
 const _GENREF_RE = r"&([A-Za-z_:][A-Za-z0-9._:-]*);"
 const _PREDEFINED = ("amp", "lt", "gt", "apos", "quot")
 
-# WFC: No Recursion — a cycle is a termination hazard, refused at every `wellformed` level.
+# Well-formedness constraint "No Recursion" — a cycle is a termination hazard, refused at
+# every `wellformed` level.
 # The same walk answers whether any reachable replacement text carries a `<`.
 function _check_and_scan(values::Dict{String, String})
     markup = false
@@ -133,7 +134,7 @@ function _check_and_scan(values::Dict{String, String})
     function visit(name, chain)
         get(state, name, -1) == 1 && return
         haskey(state, name) && error("not well-formed: entity `$name` refers to itself " *
-                                     "(XML 1.0 WFC: No Recursion), through $(join(chain, " -> "))")
+                                     "(XML 1.0 well-formedness constraint: No Recursion), through $(join(chain, " -> "))")
         state[name] = 0
         v = values[name]
         occursin('<', v) && (markup = true)
@@ -167,7 +168,7 @@ end
 
 #-----------------------------------------------------------------------------# inclusion (§4.4.2)
 # Nested declarations amplify without any cycle — ten entities each naming the previous one ten
-# times reach 10^10 bytes at depth ten — so WFC: No Recursion is not enough and expansion carries
+# times reach 10^10 bytes at depth ten — so the No Recursion constraint is not enough and expansion carries
 # its own bounds. Both are refused at every `wellformed` level: an unbounded expansion is a
 # termination hazard, not a conformance question.
 const _MAX_ENTITY_DEPTH = 40
@@ -338,7 +339,7 @@ end
 """
     _entity_wfc_applies(xml) -> Bool
 
-XML 1.0 §4.1's WFC: Entity Declared binds a processor only when the document carries every
+XML 1.0 §4.1's well-formedness constraint "Entity Declared" binds a processor only when the document carries every
 declaration that could name an entity: no DTD at all, or an internal subset alone with no
 parameter-entity reference and no external entity declared. Under any other shape a declaration
 this reader never reads could supply the name, so a name it does not know is not a defect.
