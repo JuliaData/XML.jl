@@ -64,9 +64,16 @@ Base.parse(::Type{Cursor}, xml::AbstractString) = Cursor(xml)
     Cursor(data::AbstractString, startpos::Integer)
 
 !!! warning "Deprecated"
-    Removed in XML.jl v0.5. To walk a subtree, take a snapshot and cross back —
-    [`LazyNode(cursor)`](@ref LazyNode) then [`Cursor(node)`](@ref). To read a document,
-    `Cursor(data)`.
+    Removed in XML.jl v0.5. To walk a subtree, take a snapshot and cross back through it:
+    [`LazyNode(cursor)`](@ref LazyNode) gives an immutable position, and [`Cursor`](@ref)
+    accepts that `LazyNode` to start a cursor there.
+
+    ```julia
+    snapshot = LazyNode(cursor)   # the position, held past further `next!` calls
+    subtree  = Cursor(snapshot)   # a cursor whose stream starts at it
+    ```
+
+    To read a document, `Cursor(data)`.
 
 A cursor whose token stream starts at byte position `startpos` in `data` instead
 of the document start — for walking a subtree whose start offset is already known.
@@ -85,7 +92,10 @@ const _CURSOR_STARTPOS_MSG = """
     `Cursor(data, startpos)` is deprecated and will be removed in XML.jl v0.5.
     It is the only entry that exposes a byte offset into the source, and nothing in the
     package or in any registered dependent calls it. To walk a subtree, take a snapshot and
-    cross back: `LazyNode(cursor)` then `Cursor(node)`. To read a document, `Cursor(data)`."""
+    cross back through it:
+        snapshot = LazyNode(cursor)
+        subtree  = Cursor(snapshot)
+    To read a document, `Cursor(data)`."""
 
 function Cursor(data::S, startpos::Integer) where {S <: AbstractString}
     Base.depwarn(_CURSOR_STARTPOS_MSG, :Cursor)
