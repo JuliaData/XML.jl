@@ -338,10 +338,14 @@ end
 """
     _entity_wfc_applies(xml) -> Bool
 
-XML 1.0 §4.1's well-formedness constraint "Entity Declared" binds a processor only when the document carries every
-declaration that could name an entity: no DTD at all, or an internal subset alone with no
-parameter-entity reference and no external entity declared. Under any other shape a declaration
-this reader never reads could supply the name, so a name it does not know is not a defect.
+XML 1.0 §4.1's well-formedness constraint "Entity Declared" binds a processor only where a
+missing name is certain, which needs every declaration the document has to be one this reader
+sees. Two shapes qualify. A document with no DTD has none to miss. A DOCTYPE qualifies when
+its declarations all sit in the internal subset and nothing points outside it: no external
+subset named by SYSTEM or PUBLIC, no parameter-entity reference — which could expand into
+further declarations — and no entity declared as external, whose replacement text is in
+another file. Under any other shape a declaration this reader never reads could supply the
+name, so a name it does not know is not a defect.
 
 The specification also binds the constraint under `standalone="yes"` even with external parts.
 `false` there means a missed rejection and never a wrong one, which is the direction to err in.

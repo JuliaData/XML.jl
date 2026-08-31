@@ -124,7 +124,7 @@ Review these even if your code compiles unchanged:
    parse(str, Node; wellformed = :strict)    # see below
    ```
 
-   `:strict` additionally rejects: `--` (or a trailing `-`) inside a comment; an empty or invalid processing-instruction target; a reference to an entity the document does not declare, where the document carries every declaration that could name one (XML 1.0 §4.1); and any character — whether a numeric **reference** (`&#0;`) or a **raw** literal character — outside the XML 1.0 §2.2 `Char` range (e.g. NUL and other control characters). Because that adds a character-range scan over textual content, `:strict` is meaningfully slower than `:structural` on text-heavy documents — a cost paid only when you opt in (`:lenient` and `:structural` are unaffected).
+   `:strict` additionally rejects: `--` (or a trailing `-`) inside a comment; an empty or invalid processing-instruction target; a reference to an entity that is not declared, in a document with no external DTD parts that could hold a declaration for it (XML 1.0 §4.1); and any character — whether a numeric **reference** (`&#0;`) or a **raw** literal character — outside the XML 1.0 §2.2 `Char` range (e.g. NUL and other control characters). Because that adds a character-range scan over textual content, `:strict` is meaningfully slower than `:structural` on text-heavy documents — a cost paid only when you opt in (`:lenient` and `:structural` are unaffected).
 
    A consequence of requiring a root element: input that is **not a complete document** — a
    standalone DTD file, or a prolog-only fragment — is now rejected at `:structural`. Read it with
