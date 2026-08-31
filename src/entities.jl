@@ -334,3 +334,25 @@ function _expanded_bytes(s::AbstractString, ents::InternalEntities)
     pos <= ncodeunits(s) && Base.write(out, SubString(s, pos))
     take!(out)
 end
+
+"""
+    _entity_wfc_applies(xml) -> Bool
+
+XML 1.0 §4.1's WFC: Entity Declared binds a processor only when the document carries every
+declaration that could name an entity: no DTD at all, or an internal subset alone with no
+parameter-entity reference and no external entity declared. Under any other shape a declaration
+this reader never reads could supply the name, so a name it does not know is not a defect.
+
+The specification also binds the constraint under `standalone="yes"` even with external parts.
+`false` there means a missed rejection and never a wrong one, which is the direction to err in.
+"""
+function _entity_wfc_applies(xml::AbstractString)
+    body = _doctype_body(xml)
+    body === nothing && return true
+    # One test covers both shapes that put a declaration out of reach: an external subset named
+    # in the DOCTYPE head, and an external entity declared inside the internal subset.
+    occursin(r"\bSYSTEM\b|\bPUBLIC\b", body) && return false
+    lb = findfirst('[', body)
+    lb === nothing && return true
+    !occursin('%', SubString(body, lb))
+end

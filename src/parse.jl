@@ -130,14 +130,25 @@ function _check_chars_strict(s::AbstractString)
     end
 end
 
-# `:strict` only: reject any numeric character reference whose code point is outside the XML Char
-# range. Gated + DCE'd off the :strict path, and only called when a token actually carries
-# entities, so :lenient/:structural cost nothing.
-function _check_charrefs_strict(s::AbstractString)
-    for m in eachmatch(r"&#([xX]?)([0-9a-fA-F]+);", s)
-        cp = tryparse(UInt32, m[2]; base = isempty(m[1]) ? 10 : 16)
-        (cp === nothing || !_is_xml_char(cp)) &&
-            error("not well-formed: illegal character reference \"&#$(m[1])$(m[2]);\"")
+const _PREDEFINED_ENTITY_NAMES = ("amp", "lt", "gt", "apos", "quot")
+
+# `:strict` only, one pass over a span's references, character and named alike. Gated + DCE'd off
+# the :strict path and called only when a token carries entities, so :lenient/:structural cost
+# nothing. A character reference is rejected when its code point falls outside the XML Char range.
+# A named reference is checked only when `names` holds, and the test is then a membership one:
+# `_expand_entities` has already replaced every reference it could resolve, so a name arriving
+# here that is not predefined has no replacement text behind it (XML 1.0 §4.1, WFC: Entity
+# Declared). A name outside the ASCII set the pattern accepts goes unchecked, which costs a
+# missed rejection and never a wrong one.
+function _check_refs_strict(s::AbstractString, names::Bool)
+    for m in eachmatch(r"&(?:#([xX]?)([0-9a-fA-F]+)|([A-Za-z_:][A-Za-z0-9._:-]*));", s)
+        if m[3] === nothing
+            cp = tryparse(UInt32, m[2]; base = isempty(m[1]) ? 10 : 16)
+            (cp === nothing || !_is_xml_char(cp)) &&
+                error("not well-formed: illegal character reference \"&#$(m[1])$(m[2]);\"")
+        elseif names && !(m[3] in _PREDEFINED_ENTITY_NAMES)
+            error("not well-formed: reference to undeclared entity \"&$(m[3]);\" (XML 1.0 §4.1)")
+        end
     end
 end
 
@@ -146,6 +157,9 @@ end
 # `Val{W}` is the well-formedness level (:lenient / :structural / :strict); its checks compile
 # away on :lenient.
 function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, W}
+    # `:strict` decides whether the named-reference check compiles in at all; the document's
+    # own shape decides whether it may fire (§4.1).
+    check_names = W === :strict && _entity_wfc_applies(xml)
     tags = S[]
     # The value-stack discipline of stack parsers (#107): constituents accumulate on two
     # parse-wide scratch vectors, integer marks delimit the currently-open element's run,
@@ -167,7 +181,7 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
         if k === TokenKinds.TEXT
             rawtext = raw(token, xml)
             W === :strict && _check_chars_strict(rawtext)
-            W === :strict && token.has_entities && _check_charrefs_strict(rawtext)
+            W === :strict && token.has_entities && _check_refs_strict(rawtext, check_names)
             v = _text_value(S, rawtext, token.has_entities, convert_text)
             push!(scratch_children, Node{S}(Text, nothing, nothing, v, nothing))
 
@@ -201,7 +215,7 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
             rawval = attr_value(token, xml)
             W !== :lenient && occursin('<', rawval) && error("not well-formed: '<' in attribute value (XML 1.0 §3.1)")
             W === :strict && _check_chars_strict(rawval)
-            W === :strict && token.has_entities && _check_charrefs_strict(rawval)
+            W === :strict && token.has_entities && _check_refs_strict(rawval, check_names)
             val = _text_value(S, _normalize_attr_ws(rawval), token.has_entities, convert_text)
             name = _to(S, pending_attr_name)
             if decl_attrs !== nothing

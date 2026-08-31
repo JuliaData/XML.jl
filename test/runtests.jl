@@ -326,6 +326,32 @@ end
         @test nodetype(parse("<root><? data?></root>", Node)) == Document
         @test nodetype(parse("<root><? data?></root>", Node; wellformed=:lenient)) == Document
     end
+
+    @testset ":strict rejects a reference to an undeclared entity (§4.1)" begin
+        # WFC: Entity Declared. `_expand_entities` has already replaced every reference it could
+        # resolve, so a name that reaches the check with no replacement text behind it has no
+        # declaration behind it either.
+        @test_throws Exception parse("<a>&foo;</a>", Node; wellformed=:strict)
+        @test_throws Exception parse("<a x=\"&foo;\"/>", Node; wellformed=:strict)
+        @test_throws Exception parse("<!DOCTYPE a [<!ENTITY e \"x\">]><a>&nope;</a>", Node; wellformed=:strict)
+        @test_throws Exception parse("<a>&foo;</a>", FlatNode; wellformed=:strict)
+        # the five predefined names and character references name no declaration to look up
+        @test nodetype(parse("<a>&amp;&lt;&gt;&apos;&quot;</a>", Node; wellformed=:strict)) == Document
+        @test nodetype(parse("<a>&#65;&#x42;</a>", Node; wellformed=:strict)) == Document
+        # a declared entity resolves, so nothing of it reaches the check
+        @test nodetype(parse("<!DOCTYPE a [<!ENTITY e \"x\">]><a>&e;</a>", Node; wellformed=:strict)) == Document
+        # The constraint binds only where the document carries every declaration that could name
+        # an entity. An external subset, an external entity declaration, and a parameter-entity
+        # reference each put one out of reach, so an unknown name is not a defect under them.
+        for shape in ("<!DOCTYPE a SYSTEM \"a.dtd\"><a>&foo;</a>",
+                      "<!DOCTYPE a [<!ENTITY e SYSTEM \"e.ent\">]><a>&foo;</a>",
+                      "<!DOCTYPE a [%pe;<!ENTITY e \"x\">]><a>&foo;</a>")
+            @test nodetype(parse(shape, Node; wellformed=:strict)) == Document
+        end
+        # below :strict the reference stays literal — the graceful degradation
+        @test value(children(parse("<a>&foo;</a>", Node)[end])[1]) == "&foo;"
+        @test value(children(parse("<a>&foo;</a>", Node; wellformed=:lenient)[end])[1]) == "&foo;"
+    end
 end
 
 #==============================================================================#

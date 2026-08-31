@@ -109,6 +109,7 @@ end
 # (see parse.jl), with the same well-formedness checks at the same token points — gated by
 # `Val{W}` so :lenient costs nothing — but appending isbits records instead of heap nodes.
 function _flat_parse(xml::String, ::Val{W}) where {W}
+    check_names = W === :strict && _entity_wfc_applies(xml)
     ncodeunits(xml) <= typemax(Int32) ||
         error("FlatNode stores byte offsets as Int32: source is larger than 2 GiB. Use `parse(xml, Node)`.")
     recs = _FlatRec[]
@@ -133,7 +134,7 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
         if k === K.TEXT
             rawtext = raw(token, xml)
             W === :strict && _check_chars_strict(rawtext)
-            W === :strict && token.has_entities && _check_charrefs_strict(rawtext)
+            W === :strict && token.has_entities && _check_refs_strict(rawtext, check_names)
             off, len = _frng(rawtext)
             token.has_entities && (len = -len)
             idx = Int32(length(recs) + 1)
@@ -178,7 +179,7 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
             rawval = attr_value(token, xml)
             W !== :lenient && occursin('<', rawval) && error("not well-formed: '<' in attribute value (XML 1.0 §3.1)")
             W === :strict && _check_chars_strict(rawval)
-            W === :strict && token.has_entities && _check_charrefs_strict(rawval)
+            W === :strict && token.has_entities && _check_refs_strict(rawval, check_names)
             name = _fsub_or_empty(xml, pan_off, pan_len)
             r = @inbounds recs[cur]
             ai = r.attr_first

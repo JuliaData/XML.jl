@@ -152,13 +152,12 @@ notwf_tests = filter(t -> t.type == "not-wf", xml10_tests)
                 n_pass += 1
             end
         end
-        # XML.jl is non-validating and this suite runs at :strict, so it rejects structural +
-        # syntactic ill-formedness but NOT validity errors needing DTD/entity processing (undefined
-        # entities, ID/IDREF, attribute types…). It therefore does not reject all 1257 in-scope not-wf
-        # cases of the pinned xmlts20130923 suite. Assert a no-regression floor on the count it DOES
-        # reject (367 at present; it rose sharply when :strict gained raw-character-range checking and
-        # DOCTYPE/XML-declaration placement checks). Bump it as coverage grows.
-        @test n_pass >= 367
+        # XML.jl is non-validating and this suite runs at :strict, so it rejects structural and
+        # syntactic ill-formedness but not the validity errors that need DTD processing (ID/IDREF,
+        # attribute types, content models). It therefore does not reject all 1257 in-scope not-wf
+        # cases of the pinned xmlts20130923 suite. Assert a no-regression floor on the count it does
+        # reject, and raise it as coverage grows.
+        @test n_pass >= 408
         n_fail > 0 && @info "W3C not-wf: $n_fail not yet rejected (out-of-scope validity errors: DTD/entity)" examples=first(failures, 20)
         @info "W3C not-well-formed: $n_pass / $(n_pass + n_fail) rejected"
     end
