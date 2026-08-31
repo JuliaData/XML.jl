@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Deprecated
+
+- **`Cursor(data, startpos)`**, removed in v0.5: it is the only entry that exposes a byte offset into the source, and nothing in the package or in any registered dependent calls it. Line-end normalization only shortens, so the offset still translates; entity inclusion inserts, so an offset inside a replaced reference has no image. To walk a subtree, take a snapshot and cross back — `LazyNode(cursor)` then `Cursor(node)`.
+
 ### Added
 
 - **`XML.escape` and `XML.unescape` are now public API** ([#125](https://github.com/JuliaData/XML.jl/issues/125)): declared `public` on Julia 1.11+ and covered by semver, for downstream code that assembles XML strings itself. They stay unexported — the bare names are too generic for `using XML`.

@@ -132,6 +132,9 @@ _read_eol(s::AbstractString) = occursin('\r', s) ? _rewrite_content_eol(s) : s
 # After the CR LF → LF rewrite, a byte position shifts left by the number of CR LF pairs
 # strictly before it (a lone CR rewrites in place). For translating caller-supplied
 # start offsets (`Cursor(data, startpos)`) when the document needed rewriting.
+#
+# That constructor is its only caller and is deprecated for removal in v0.5, so this goes
+# with it — no other entry takes a source offset from the caller.
 function _translate_eol_pos(s::AbstractString, pos::Int)
     cu = codeunits(s)
     n = min(pos - 1, length(cu))

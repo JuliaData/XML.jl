@@ -780,6 +780,33 @@ end
               "<!DOCTYPE d [<!ENTITY e \"X\"><!ENTITY f \"&e;\">]><d>X</d>"
     end
 
+    @testset "the offset constructor reads its source as it stands" begin
+        # An inclusion inserts, so an offset falling inside a replaced reference has no image
+        # in the expanded document — this primitive therefore takes `data` as given, and a
+        # caller that tracked offsets against a raw document keeps them valid.
+        src = "<!DOCTYPE d [<!ENTITY e \"EXP\">]><d><a>&e;</a></d>"
+        apos = first(findfirst("<a>", src))
+        vals = String[]
+        c = @test_deprecated XML.Cursor(src, apos)
+        while XML.next!(c) !== nothing
+            v = XML.value(c)
+            v === nothing || push!(vals, String(v))
+        end
+        @test vals == ["&e;"]
+        # while an entry that owns the whole document includes them
+        @test simple_value(only(children(only(filter(x -> nodetype(x) === XML.Element,
+                                                     children(parse(src, Node))))))) == "EXP"
+        # line ends are normalized here, and the offset travels with them (§2.11)
+        crlf = "<!DOCTYPE d [<!ELEMENT d ANY>]>\r\n<d><a>x\r\ny</a></d>"
+        c2 = @test_deprecated XML.Cursor(crlf, first(findfirst("<a>", crlf)))
+        got = String[]
+        while XML.next!(c2) !== nothing
+            v = XML.value(c2)
+            v === nothing || push!(got, String(v))
+        end
+        @test "x\ny" in got
+    end
+
     @testset "a document that needs no rewrite is returned as it stands" begin
         exp(x) = XML._expand_entities(x)
         for src in ("<a>plain</a>",
@@ -3553,7 +3580,7 @@ end
             # start offsets are translated into the normalized copy, so a subtree cursor
             # opened on the raw string still reaches the right element
             apos = findfirst("<a>", crlf).start
-            @test any(==("x\ny"), cursor_values(Cursor(crlf, apos)))
+            @test any(==("x\ny"), cursor_values(@test_deprecated Cursor(crlf, apos)))
 
             # the LazyNode → Cursor bridge walks the normalized copy, not the raw input
             @test any(==("x\ny"), cursor_values(Cursor(only(elements(only(elements(lz)))))))
