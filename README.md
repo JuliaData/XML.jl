@@ -355,6 +355,8 @@ _Measured 2026-08-31, Apple M5 (single-threaded), Julia 1.12.7, EzXML 1.2.3; Ben
 
 Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl). Data: `books.xml` (~4 KB) and a generated XMark auction document (~14 MB). The XML.jl column uses `Node` throughout — the full mutable DOM, the like-for-like counterpart of the libxml2 DOMs the C wrappers build; [Performance by access pattern](#performance-by-access-pattern) above shows how the other readers change the picture. BenchmarkTools median time, **lower is better.**
 
+What the constructions this corpus lacks cost, what each `wellformed` level adds, and the entry points no table above covers are in [PERFORMANCE-v0.4.md](PERFORMANCE-v0.4.md), Tables 6 to 8.
+
 | Benchmark | XML.jl | EzXML | LightXML | XMLDict |
 |---|--:|--:|--:|--:|
 | Parse, small | 12.9 µs | 13.4 µs | 11.3 µs | 116 µs |

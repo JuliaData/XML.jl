@@ -156,12 +156,63 @@ _Table 5 — per-reader full-DOM comparison; *build* is the whole `parse` call, 
 
 Build allocations: 42.2 MiB (`FlatNode`) vs 99.8 MiB (`Node`), and on the *build* `FlatNode` is ~1.8× faster than libxml2 itself, `Node` ~1.4× slower than the C library. The GC cells say why `FlatNode` builds so cheaply: its build allocates a handful of arrays instead of 882 K objects, so its median GC share is ~0.1 ms where `Node`'s is ~21 ms. Access on the finished stores: whole-tree walks are close (2.98 vs 3.58 ms — exact-size children vectors keep `Node`'s locality sharp), `parent`/`depth` stay O(1) index hops on `FlatNode` where `Node` must search down from the root, and pure value extraction is close too, flat store slightly faster (3.0 vs 3.6 ms — a per-value `SubString` view costs two integer stores).
 
+### What the constructions the corpus lacks cost
+
+The XMark corpus above carries no reference, no attribute value that needs normalizing, no comment, no CDATA section, no processing instruction and no DOCTYPE, so none of the rows above measures what those cost. Two twins are generated beside it through the generator's opt-in features (`XMarkGenerator.Features`), each keeping the corpus's elements and attributes in the same order, so that a difference between columns belongs to the construction alone. The *escaped* twin replaces one drawn word in ten by one carrying a predefined entity or a character reference, and gives every `item` and `person` a `note` attribute that needs decoding or [§3.3.3](https://www.w3.org/TR/xml/#AVNormalize) white-space normalization: 8 % of its text tokens and 8 % of its attribute values carry a `&`, 81,799 references in all. The *markup* twin writes one text child per `item` and `person` as a CDATA section followed by a comment and a processing instruction, under a DOCTYPE holding the schema's 74 element and 14 attribute-list declarations and no entity: 16,002 nodes more than the corpus, 882,026 → 898,028.
+
+| | corpus | escaped twin | markup twin |
+|---|--:|--:|--:|
+| `Cursor` stream | 24.9 ms · 1 | 38.9 ms · 269,015 | 26.3 ms · 5 |
+| `parse` → `Node` | 48.5 ms · 2,526,927 | 75.7 ms (GC 6.3) · 2,904,925 | 52.3 ms · 2,566,935 |
+| `parse` → `Node{SubString}` | 44.8 ms · 2,416,965 | 46.5 ms · 2,429,766 | 48.4 ms · 2,456,973 |
+| `LazyNode` walk | 136 ms (GC 0.5) · 272,762 | 155 ms (GC 1.1) · 541,776 | 139 ms (GC 0.4) · 272,762 |
+| `LazyNode` attribute sweep | 143 ms (GC 0.5) · 272,762 | 148 ms (GC 0.5) · 314,362 | 145 ms (GC 0.5) · 272,762 |
+| `FlatNode` walk | 3.79 ms · 0 | 14.2 ms · 269,014 | 3.86 ms · 0 |
+
+_Table 6 — the same operations over the corpus and its two twins: time (incl. GC) · allocations. The three columns of a row come from one run, and the differences between them are the point._[^twins]
+
+The escaped column is the decode path. A decoded value allocates about six times, the same +269,014 on `Cursor`, `LazyNode` and `FlatNode` for the 46,583 text tokens that carry a reference: `unescape` copies its argument to a `String`, runs a regular-expression `replace`, and copies the result. `Node{SubString}` does not decode, and its +12,801 are the §3.3.3 normalization of the 3,200 attribute values that carry a literal tab or newline, four allocations each. The markup column costs its extra nodes and nothing more, plus the prolog probe of a DOCTYPE that declares no entity, four allocations and 6 µs at every entry, which is why `Cursor` streams that twin in five. Parsing that DOCTYPE's 88 declarations with `parse_dtd` takes 8.0 µs and 372 allocations.
+
+### Well-formedness levels
+
+`:strict` adds two checks over `:structural`: a character-range scan of every text, attribute value, comment, CDATA section and processing-instruction body, and a check of every reference in a token that carries one, against the character range for a numeric reference and against the five predefined names for a named one, every declared entity having been included by then. The first costs in proportion to the document's text share, the second to its reference density, and the corpus, which has no reference at all, measures the first alone. `:lenient` and `:structural` differ only in the document-shape checks, whose cost does not separate from the run-to-run spread: 48.2 and 50.2 ms on the corpus.
+
+| `parse(…, Node; wellformed = …)` | `:structural` | `:strict` | ratio |
+|---|--:|--:|--:|
+| the corpus, text share 57 % | 50.2 ms | 60.1 ms | 1.2× |
+| its escaped twin, 81,799 references | 72.1 ms (GC 10.5) | 103 ms (GC 16.5) | 1.4× |
+| the corpus's character data alone, text share 100 %, 8.1 MB | 0.50 ms | 7.17 ms | 14× |
+
+_Table 7 — what `:strict` adds, by document shape._[^twins]
+
+The character-range scan allocates nothing. The reference check is a regular-expression match per reference: 583,076 allocations on the escaped twin, seven per reference.
+
+### The remaining entry points
+
+`sourcespan`, `splicetext`, `issamenode`, `depth`, `siblings`, `foreach_attr`, `xpath` and `parse_dtd` appear in no table above. On one `item` element, the 1000th of the corpus, four levels below the document, the same node in every reader:
+
+| | time | allocations |
+|---|--:|--:|
+| `sourcespan(::FlatNode)` | 3.4 ns | 0 |
+| `sourcespan(::LazyNode)` | 1.26 µs | 1 |
+| `splicetext`, `FlatNode` / `LazyNode` | 249 / 232 µs | 3 / 4, the 13.5 MiB result |
+| `issamenode`, `FlatNode` / `LazyNode` | 2.2 / 1.5 ns | 0 |
+| `depth(::FlatNode)` | 1.8 ns | 0 |
+| `depth(::Node, root)` | 4.32 ms | 2 |
+| `siblings(::Node, root)` | 5.25 ms | 15 |
+| `foreach_attr(::LazyNode)` | 36.0 ns | 0 |
+| `eachattribute(::LazyNode)` | 57.2 ns | 0 |
+| `xpath`, `/site/regions/asia/item[500]` | 2.5 µs | 26 |
+| `xpath`, `//item[@featured='yes']` | 8.68 ms | 60, 17.4 MiB |
+| `parse_dtd`, the schema's 88 declarations | 8.0 µs | 372 |
+
+_Table 8 — the entry points no other table covers._[^entrypoints]
+
+`FlatNode` answers `sourcespan` and `depth` from its store; `LazyNode` has to find the element's end for the first, and `Node`, which keeps no parent link, has to search down from the root for the second and for `siblings`. `splicetext` returns the whole document with one node replaced, so it costs a copy of the document whichever reader asks. `foreach_attr` yields raw tokens and `eachattribute` decoded pairs; on an element whose attributes need no decoding, both are allocation-free and a few nanoseconds apart. `xpath` over the descendant axis allocates 17 MiB on this tree.
+
 ### Choosing
 
 Stream / low-memory / read-only full-DOM / repeated traversal → **XML.jl**; `FlatNode` builds ~1.8× faster than the libxml2 binder (26.4 vs 47.6 ms), and the C library's one advantage is the one-shot *`Node`* build-and-extract (~1.2× end-to-end, Table 2) — either way, pure Julia, no C dependency. Against its own past, v0.4 is **~7× faster and ~14× leaner than 0.3.9** (530 → 79 ms and ~1.4 GiB → 100 MiB on this file, Table 2) — see [`benchmarks/profile.jl`](benchmarks/profile.jl), [`benchmarks/profile_vs_039.jl`](benchmarks/profile_vs_039.jl), [`benchmarks/compare.jl`](benchmarks/compare.jl).
-
-> [!NOTE]
-> **`:strict`** adds a character-range scan over text (a second O(content) pass); the overhead scales with the document's *text share* — ~1.1× on the markup-heavy XMark corpus, up to ~20× on a pure-text document; `:lenient` / `:structural` are unaffected.
 
 > [!TIP]
 > **GC tuning for tree-holding applications.** A single-threaded Julia process defaults to
@@ -177,3 +228,7 @@ Stream / low-memory / read-only full-DOM / repeated traversal → **XML.jl**; `F
 [^profile]: Tables 1–4: measured 2026-08-31 (the `v0.3.9` row: 2026-06-28) — same machine and settings throughout: Apple M5 (single-threaded), Julia 1.12.7; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3); BenchmarkTools at a 5 s budget per cell. Source: [`benchmarks/profile.jl`](benchmarks/profile.jl).
 
 [^flatbench]: Table 5 (and the README access-pattern table): measured 2026-08-31, same machine, Julia and BenchmarkTools settings; source [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl).
+
+[^twins]: Tables 6 and 7: measured 2026-09-01, same machine and settings as the rest, Julia 1.12.7; BenchmarkTools medians. Source: [`benchmarks/profile.jl`](benchmarks/profile.jl), sections (7) and (8), which generate the twins beside the corpus through the generator's opt-in features.
+
+[^entrypoints]: Table 8: measured 2026-09-01, same settings; source [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl), its last section, and section (7) of `profile.jl` for the `parse_dtd` row.
