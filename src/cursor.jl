@@ -46,7 +46,7 @@ aliasing-contract note on [`next!`](@ref).
 function Cursor(data::S) where {S <: AbstractString}
     data = _drop_bom(data)   # a leading U+FEFF BOM char is an encoding signature, not content (§4.3.3)
     # §2.11 — rewritten here for a `String`-backed document, on read for any other source
-    _cursor_at(_normalize_input_eol(data), 1)
+    _cursor_at(_expand_entities(_normalize_input_eol(data)), 1)
 end
 
 # `d` arrives with whatever §2.11 requires of it already applied: a `String`-backed document
@@ -63,13 +63,42 @@ Base.parse(::Type{Cursor}, xml::AbstractString) = Cursor(xml)
 """
     Cursor(data::AbstractString, startpos::Integer)
 
+!!! warning "Deprecated"
+    Removed in XML.jl v0.5. To walk a subtree, take a snapshot and cross back through it:
+    [`LazyNode(cursor)`](@ref LazyNode) gives an immutable position, and [`Cursor`](@ref)
+    accepts that `LazyNode` to start a cursor there.
+
+    ```julia
+    snapshot = LazyNode(cursor)   # the position, held past further `next!` calls
+    subtree  = Cursor(snapshot)   # a cursor whose stream starts at it
+    ```
+
+    To read a document, `Cursor(data)`.
+
 A cursor whose token stream starts at byte position `startpos` in `data` instead
 of the document start — for walking a subtree whose start offset is already known.
 The first [`next!`](@ref) reaches whatever element begins at `startpos`, at depth
 1, so [`for_each_child`](@ref) then iterates that element's immediate children and
 auto-stops at its subtree boundary (the depth break). LazyNode-agnostic primitive.
+
+This constructor reads `data` as it stands, and it is the only entry that exposes a byte
+offset into the source. Line-end normalization only shortens, so the offset still
+translates (§2.11); entity inclusion inserts, so an offset inside a replaced reference has
+no image (§4.4.2). Each further transformation at the document entry would have to be
+examined the same way, and nothing in the package or in any registered dependent calls it —
+which is why it goes.
 """
+const _CURSOR_STARTPOS_MSG = """
+    `Cursor(data, startpos)` is deprecated and will be removed in XML.jl v0.5.
+    It is the only entry that exposes a byte offset into the source, and nothing in the
+    package or in any registered dependent calls it. To walk a subtree, take a snapshot and
+    cross back through it:
+        snapshot = LazyNode(cursor)
+        subtree  = Cursor(snapshot)
+    To read a document, `Cursor(data)`."""
+
 function Cursor(data::S, startpos::Integer) where {S <: AbstractString}
+    Base.depwarn(_CURSOR_STARTPOS_MSG, :Cursor)
     d = _normalize_input_eol(data)   # §2.11 — same input-side normalization as Cursor(data)
     _cursor_at(d, d === data ? Int(startpos) : _translate_eol_pos(data, Int(startpos)))
 end

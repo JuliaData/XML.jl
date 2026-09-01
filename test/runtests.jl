@@ -2,6 +2,7 @@ using XML
 using XML: Document, Element, Declaration, Comment, CData, DTD, ProcessingInstruction, Text
 using XML: escape, unescape, h, parse_dtd
 using XML: ParsedDTD, ElementDecl, AttDecl, EntityDecl, NotationDecl
+using Mmap, StringViews
 using Test
 
 # Run every testset below under one parent testset, so a failure or error in any single testset does
@@ -324,6 +325,32 @@ end
         # :structural (default) and :lenient accept the empty target
         @test nodetype(parse("<root><? data?></root>", Node)) == Document
         @test nodetype(parse("<root><? data?></root>", Node; wellformed=:lenient)) == Document
+    end
+
+    @testset ":strict rejects a reference to an undeclared entity (§4.1)" begin
+        # WFC: Entity Declared. `_expand_entities` has already replaced every reference it could
+        # resolve, so a name that reaches the check with no replacement text behind it has no
+        # declaration behind it either.
+        @test_throws Exception parse("<a>&foo;</a>", Node; wellformed=:strict)
+        @test_throws Exception parse("<a x=\"&foo;\"/>", Node; wellformed=:strict)
+        @test_throws Exception parse("<!DOCTYPE a [<!ENTITY e \"x\">]><a>&nope;</a>", Node; wellformed=:strict)
+        @test_throws Exception parse("<a>&foo;</a>", FlatNode; wellformed=:strict)
+        # the five predefined names and character references name no declaration to look up
+        @test nodetype(parse("<a>&amp;&lt;&gt;&apos;&quot;</a>", Node; wellformed=:strict)) == Document
+        @test nodetype(parse("<a>&#65;&#x42;</a>", Node; wellformed=:strict)) == Document
+        # a declared entity resolves, so nothing of it reaches the check
+        @test nodetype(parse("<!DOCTYPE a [<!ENTITY e \"x\">]><a>&e;</a>", Node; wellformed=:strict)) == Document
+        # The constraint binds only where the document carries every declaration that could name
+        # an entity. An external subset, an external entity declaration, and a parameter-entity
+        # reference each put one out of reach, so an unknown name is not a defect under them.
+        for shape in ("<!DOCTYPE a SYSTEM \"a.dtd\"><a>&foo;</a>",
+                      "<!DOCTYPE a [<!ENTITY e SYSTEM \"e.ent\">]><a>&foo;</a>",
+                      "<!DOCTYPE a [%pe;<!ENTITY e \"x\">]><a>&foo;</a>")
+            @test nodetype(parse(shape, Node; wellformed=:strict)) == Document
+        end
+        # below :strict the reference stays literal — the graceful degradation
+        @test value(children(parse("<a>&foo;</a>", Node)[end])[1]) == "&foo;"
+        @test value(children(parse("<a>&foo;</a>", Node; wellformed=:lenient)[end])[1]) == "&foo;"
     end
 end
 
@@ -662,8 +689,251 @@ end
     end
 end
 
+@testset "Spec 4.4: Internal General Entity Declarations" begin
+    # The table the readers will consult. `markup` is the bit that decides how inclusion can be
+    # implemented: without a `<` in any reachable replacement text every reference is a text
+    # substitution; with one, inclusion has to produce structure (§4.4.2).
+    ents(x) = XML._internal_entities(x)
+
+    @testset "a document that declares none costs nothing" begin
+        @test ents("<a>x</a>") === nothing
+        @test ents("<?xml version=\"1.0\"?><!-- c --><a/>") === nothing
+        @test ents("<!DOCTYPE a [<!ELEMENT a EMPTY>]><a/>") === nothing
+        @test ents("<!DOCTYPE a SYSTEM \"a.dtd\"><a/>") === nothing
+    end
+
+    @testset "the byte probe never misses a DOCTYPE the tokenizer finds" begin
+        # `_has_doctype` decides whether reading the DOCTYPE is worth it, by scanning bytes
+        # rather than producing tokens, and its two errors do not cost the same: a false
+        # positive wastes a prolog walk, a false negative leaves entities unexpanded with
+        # nothing to show for it. So the assertion is one-sided, and it runs over every
+        # fixture on disk — the W3C suite, the libxml2/expat/pugixml cases, this package's own.
+        tokenizer_says(s) = try XML._doctype_body(s) !== nothing catch; nothing end
+        files = String[]
+        for (dir, _, fs) in walkdir(joinpath(@__DIR__, "data")), f in fs
+            endswith(f, ".xml") && push!(files, joinpath(dir, f))
+        end
+        @test length(files) > 100          # the suite is present; a lower count means it moved
+        checked = 0
+        missed = String[]                  # probe said no, tokenizer found one: never allowed
+        wasted = 0                         # probe said yes, tokenizer found none: only a cost
+        for f in files
+            s = try read(f, String) catch; continue end
+            isvalid(s) || continue         # UTF-16 fixtures are out of scope here
+            t = tokenizer_says(s)
+            t === nothing && continue
+            checked += 1
+            p = XML._has_doctype(s)
+            !p && t && push!(missed, basename(f))
+            p && !t && (wasted += 1)
+        end
+        @test isempty(missed)
+        @test checked > 100
+        @test wasted < checked ÷ 10        # the probe is a filter, not a coin toss
+    end
+
+    @testset "declarations are read, the first binding each name (§4.2)" begin
+        e = ents("<!DOCTYPE a [<!ENTITY e \"ev\">]><a>&e;</a>")
+        @test e.values == Dict("e" => "ev")
+        # valid-sa-086 declares `e` twice; the suite's canonical reference expects the first
+        e = ents("<!DOCTYPE d [<!ENTITY e \"\"><!ENTITY e \"<foo>\">]><d>&e;</d>")
+        @test e.values == Dict("e" => "")
+        @test e.markup == false
+    end
+
+    @testset "character references resolve into replacement text, general ones do not (§4.5)" begin
+        # valid-sa-024 builds its markup from `&#60;`, so the text already carries a `<`
+        @test ents("<!DOCTYPE d [<!ENTITY e \"&#60;foo></foo>\">]><d>&e;</d>").values["e"] == "<foo></foo>"
+        # `&lt;` is a reference like any other: bypassed here, and never markup
+        e = ents("<!DOCTYPE d [<!ENTITY e \"&lt;not a tag\">]><d>&e;</d>")
+        @test e.values["e"] == "&lt;not a tag"
+        @test e.markup == false
+    end
+
+    @testset "markup is detected through nesting" begin
+        @test ents("<!DOCTYPE d [<!ENTITY e \"<e/>\">]><d>&e;</d>").markup
+        @test ents("<!DOCTYPE d [<!ENTITY e \"&#60;e/>\">]><d>&e;</d>").markup
+        @test ents("<!DOCTYPE d [<!ENTITY a \"&b;\"><!ENTITY b \"<x/>\">]><d>&a;</d>").markup
+        @test ents("<!DOCTYPE d [<!ENTITY a \"&b;\"><!ENTITY b \"plain\">]><d>&a;</d>").markup == false
+    end
+
+    @testset "WFC: No Recursion is refused at every level" begin
+        for w in (:lenient, :structural, :strict)
+            @test_throws ErrorException ents("<!DOCTYPE d [<!ENTITY a \"&a;\">]><d>&a;</d>")
+            @test_throws ErrorException ents("<!DOCTYPE d [<!ENTITY a \"&b;\"><!ENTITY b \"&a;\">]><d>&a;</d>")
+        end
+    end
+
+    @testset "the subset is read as markup, not scanned for text" begin
+        # a declaration commented out is not a declaration
+        @test ents("<!DOCTYPE d [<!-- <!ENTITY trap \"x\"> --><!ENTITY e \"v\">]><d/>").values == Dict("e" => "v")
+        # other declaration kinds are stepped over
+        @test ents("<!DOCTYPE d [<!ELEMENT d (#PCDATA)><!ENTITY e \"v\"><!ATTLIST d a CDATA #IMPLIED>]><d/>").values == Dict("e" => "v")
+        # parameter entities are not general entities
+        @test ents("<!DOCTYPE d [<!ENTITY % p \"<foo>\"><!ENTITY e \"ok\">]><d/>").values == Dict("e" => "ok")
+    end
+
+    @testset "references are included before the parse (§4.4.2)" begin
+        # Inclusion happens on the document, not on each reported value: replacement text
+        # carrying markup then produces structure, because the parser reads what this wrote.
+        exp(x) = XML._expand_entities(x)
+        doc(sub, body) = "<!DOCTYPE d [" * sub * "]><d>" * body * "</d>"
+
+        @test exp("<a>texte &amp; suite</a>") == "<a>texte &amp; suite</a>"   # nothing declared
+        @test exp(doc("<!ENTITY e \"ev\">", "&e;")) == doc("<!ENTITY e \"ev\">", "ev")
+        @test exp(doc("<!ENTITY e \"<e/>\">", "&e;")) == doc("<!ENTITY e \"<e/>\">", "<e/>")
+        @test exp(doc("<!ENTITY a \"&b;\"><!ENTITY b \"B\">", "&a;")) ==
+              doc("<!ENTITY a \"&b;\"><!ENTITY b \"B\">", "B")
+        # valid-sa-024 builds its element from a character reference in the declaration
+        @test occursin("<d><foo></foo></d>", exp(doc("<!ENTITY e \"&#60;foo></foo>\">", "&e;")))
+        # valid-sa-086: the first declaration binds (§4.2)
+        @test exp(doc("<!ENTITY e \"\"><!ENTITY e \"<foo>\">", "&e;")) ==
+              doc("<!ENTITY e \"\"><!ENTITY e \"<foo>\">", "")
+        # §4.5 bypasses references when the declaration is read, so `&amp;` reaches the parser
+        # as `&amp;` and the application as `&` — resolving it here would corrupt that chain
+        @test exp(doc("<!ENTITY e \"a&amp;b\">", "&e;")) == doc("<!ENTITY e \"a&amp;b\">", "a&amp;b")
+        # attribute values are rewritten too
+        @test occursin("x=\"ev\"", exp("<!DOCTYPE a [<!ENTITY e \"ev\">]><a x=\"&e;\"/>"))
+    end
+
+    @testset "a reference is only a reference in content and attribute values" begin
+        exp(x) = XML._expand_entities(x)
+        for body in ("<!--&e;-->", "<![CDATA[&e;]]>", "<?pi &e;?>")
+            src = "<!DOCTYPE d [<!ENTITY e \"X\">]><d>" * body * "</d>"
+            @test exp(src) == src
+        end
+        # nor inside the subset: §4.5 bypasses it there, the table resolves it instead
+        @test exp("<!DOCTYPE d [<!ENTITY e \"X\"><!ENTITY f \"&e;\">]><d>&f;</d>") ==
+              "<!DOCTYPE d [<!ENTITY e \"X\"><!ENTITY f \"&e;\">]><d>X</d>"
+    end
+
+    @testset "the offset constructor reads its source as it stands" begin
+        # An inclusion inserts, so an offset falling inside a replaced reference has no image
+        # in the expanded document — this primitive therefore takes `data` as given, and a
+        # caller that tracked offsets against a raw document keeps them valid.
+        src = "<!DOCTYPE d [<!ENTITY e \"EXP\">]><d><a>&e;</a></d>"
+        apos = first(findfirst("<a>", src))
+        vals = String[]
+        c = @test_deprecated XML.Cursor(src, apos)
+        while XML.next!(c) !== nothing
+            v = XML.value(c)
+            v === nothing || push!(vals, String(v))
+        end
+        @test vals == ["&e;"]
+        # while an entry that owns the whole document includes them
+        @test simple_value(only(children(only(filter(x -> nodetype(x) === XML.Element,
+                                                     children(parse(src, Node))))))) == "EXP"
+        # line ends are normalized here, and the offset travels with them (§2.11)
+        crlf = "<!DOCTYPE d [<!ELEMENT d ANY>]>\r\n<d><a>x\r\ny</a></d>"
+        c2 = @test_deprecated XML.Cursor(crlf, first(findfirst("<a>", crlf)))
+        got = String[]
+        while XML.next!(c2) !== nothing
+            v = XML.value(c2)
+            v === nothing || push!(got, String(v))
+        end
+        @test "x\ny" in got
+    end
+
+    @testset "a document that needs no rewrite is returned as it stands" begin
+        exp(x) = XML._expand_entities(x)
+        for src in ("<a>plain</a>",
+                    "<!DOCTYPE d [<!ELEMENT d EMPTY>]><d/>",              # declarations, no entity
+                    "<!DOCTYPE d [<!ENTITY e \"X\">]><d>no use</d>",      # declared, never referenced
+                    "<!DOCTYPE d [<!ENTITY e \"X\">]><d>&other;</d>")     # only undeclared names
+            @test exp(src) === src                                        # the same object, not a copy
+        end
+        # a source that is not a String takes the same exits
+        sub = SubString("<a>plain</a>", 1)
+        @test XML._expand_entities(sub) === sub
+    end
+
+    @testset "sources that are not a `String`" begin
+        # Token offsets are root-relative, so a source that is itself a view reports positions
+        # past its own start; a view beginning after byte one is what catches the correction.
+        root = "padding<!DOCTYPE d [<!ENTITY e \"<b>x</b>\">]><d>&e;</d>"
+        sub = SubString(root, ncodeunits("padding") + 1)
+        @test XML._expand_entities(sub) == "<!DOCTYPE d [<!ENTITY e \"<b>x</b>\">]><d><b>x</b></d>"
+        @test XML._expand_entities(sub) isa SubString{String}
+        @test @inferred(XML._expand_entities(sub)) isa SubString{String}
+
+        doc = "<!DOCTYPE r [<!ENTITY e \"<b>x</b>\"><!ENTITY t \"hi\">]><r a=\"&t;\">&e;&t;</r>"
+        mktemp() do path, io
+            write(io, doc)
+            close(io)
+            open(path) do f
+                sv = StringView(Mmap.mmap(f))
+                @test @inferred(XML._expand_entities(sv)) isa StringView{Vector{UInt8}}
+                # §4.4.2 inclusion reaches a mapped document: markup in replacement text is
+                # structure, not a text node holding `<`
+                r = last(collect(children(parse(sv, LazyNode))))
+                kids = collect(children(r))
+                @test length(kids) == 2
+                @test tag(first(kids)) == "b"
+                @test attributes(r)["a"] == "hi"          # §4.4.5, included in literal
+                cur = XML.Cursor(sv)
+                seen = String[]
+                while XML.next!(cur) !== nothing
+                    nodetype(cur) === Element && push!(seen, tag(cur))
+                end
+                @test seen == ["r", "b"]
+            end
+        end
+
+        # an encoding signature makes `_drop_bom` hand the reader a view, which the expansion
+        # rebuilds as a view of the same type
+        mktemp() do path, io
+            write(io, "﻿" * doc)
+            close(io)
+            open(path) do f
+                sv = StringView(Mmap.mmap(f))
+                r = last(collect(children(parse(sv, LazyNode))))
+                @test length(collect(children(r))) == 2
+            end
+        end
+
+        # a mapped document that declares nothing is returned as it stands, so the recipe for
+        # files too large for the heap costs one probe of the prolog and no copy
+        mktemp() do path, io
+            write(io, "<a>plain</a>")
+            close(io)
+            open(path) do f
+                sv = StringView(Mmap.mmap(f))
+                @test XML._expand_entities(sv) === sv
+            end
+        end
+
+        # a `StringView` over anything but a `Vector{UInt8}` cannot be rebuilt as its own type,
+        # so it keeps its references literal rather than changing the reader's type parameter
+        odd = StringView(view(Vector{UInt8}(doc), 1:ncodeunits(doc)))
+        @test XML._expand_entities(odd) === odd
+    end
+
+    @testset "expansion is bounded, at every wellformed level" begin
+        # the billion-laughs shape has no cycle, so WFC: No Recursion does not catch it —
+        # ten entities each naming the previous one ten times reach 10^10 bytes at depth ten
+        laughs = "<!ENTITY a0 \"" * repeat("a", 1000) * "\">" *
+                 join(["<!ENTITY a$i \"" * repeat("&a$(i-1);", 10) * "\">" for i in 1:9])
+        @test_throws ErrorException XML._expand_entities("<!DOCTYPE d [" * laughs * "]><d>&a9;</d>")
+        # nesting alone is bounded too, without amplification
+        deep = join(["<!ENTITY b$i \"&b$(i-1);\">" for i in 1:60])
+        @test_throws ErrorException XML._expand_entities(
+            "<!DOCTYPE d [<!ENTITY b0 \"x\">" * deep * "]><d>&b60;</d>")
+        # and a modest nesting is not
+        @test occursin("<d>xxxx</d>", XML._expand_entities(
+            "<!DOCTYPE d [<!ENTITY c0 \"x\"><!ENTITY c1 \"&c0;&c0;\"><!ENTITY c2 \"&c1;&c1;\">]><d>&c2;</d>"))
+    end
+
+    @testset "§5.1 cutoff: declarations after an unread parameter entity are not used" begin
+        e = ents("<!DOCTYPE d [<!ENTITY e1 \"a\">%ext;<!ENTITY e2 \"b\">]><d/>")
+        @test e.values == Dict("e1" => "a")
+        # one the subset itself declares is read, so the cutoff does not apply
+        e = ents("<!DOCTYPE d [<!ENTITY % p \"\">%p;<!ENTITY e2 \"b\">]><d/>")
+        @test haskey(e.values, "e2")
+    end
+end
+
 #==============================================================================#
-#                  NAMESPACES (Colon in Tag and Attribute Names)                #
+#                  NAMESPACES (Colon in Tag and Attribute Names)               #
 #==============================================================================#
 @testset "Namespaces" begin
     @testset "namespaced element" begin
@@ -1483,6 +1753,18 @@ end
 #                        DTD PARSING (parse_dtd)                               #
 #==============================================================================#
 @testset "DTD Parsing (parse_dtd)" begin
+    @testset "a subset holding non-ASCII is read by character, not by byte" begin
+        # the readers walk the subset by index; stepping with `pos + 1` lands inside a character
+        # as soon as one is not ASCII, and indexing there throws
+        @test parse_dtd("doc [<!ENTITY e \"日本\">]").entities[1].value == "日本"
+        @test parse_dtd("doc [<!-- é --><!ENTITY e \"v\">]").entities[1].value == "v"
+        @test parse_dtd("doc [<!ELEMENT données EMPTY>]").elements[1].name == "données"
+        ad = parse_dtd("doc [<!ATTLIST données a CDATA \"é\">]").attributes[1]
+        @test (ad.element, ad.name, ad.default) == ("données", "a", "\"é\"")
+        # an unterminated quote must not step past the end while doing so
+        @test parse_dtd("doc [<!ENTITY e \"oups").entities[1].value == "oups"
+    end
+
     @testset "simple DTD with entities" begin
         path = joinpath(@__DIR__, "data", "simple_dtd.xml")
         isfile(path) || return
@@ -2355,7 +2637,7 @@ end
 end
 
 #==============================================================================#
-#                    SHOW (text/xml MIME) ROUNDTRIP                             #
+#                    SHOW (text/xml MIME) ROUNDTRIP                            #
 #==============================================================================#
 @testset "text/xml MIME output" begin
     doc = Document(
@@ -3386,7 +3668,7 @@ end
             # start offsets are translated into the normalized copy, so a subtree cursor
             # opened on the raw string still reaches the right element
             apos = findfirst("<a>", crlf).start
-            @test any(==("x\ny"), cursor_values(Cursor(crlf, apos)))
+            @test any(==("x\ny"), cursor_values(@test_deprecated Cursor(crlf, apos)))
 
             # the LazyNode → Cursor bridge walks the normalized copy, not the raw input
             @test any(==("x\ny"), cursor_values(Cursor(only(elements(only(elements(lz)))))))

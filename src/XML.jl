@@ -33,6 +33,7 @@ include("identity.jl")   # structural ==/hash bindings + issamenode (needs all r
 include("write.jl")      # XML writer: _write_xml/_write_escaped + XML.write entry points
 include("parse.jl")      # BOM normalization, Base.read entry points, the VPA parser
 include("dtd.jl")        # DTD/DOCTYPE parsing (independent: uses only the tokenizer)
+include("entities.jl")   # internal general entities §4.4 (needs dtd.jl's declaration reader)
 #-----------------------------------------------------------------------------# h (HTML/XML element builder)
 """
     h(tag, children...; attrs...)

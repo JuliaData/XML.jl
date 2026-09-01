@@ -39,7 +39,7 @@ end
 # for a `String`-backed document means the rewrite, and for any other source means leaving it
 # to `_read_eol`. Without this a hand-built `LazyNode(raw, Document)` would be the one entry
 # that skips the rewrite its source type requires, and return CR to the application.
-LazyNode(data::AbstractString, nt::NodeType) = _lazynode_at(_normalize_input_eol(data), nt)
+LazyNode(data::AbstractString, nt::NodeType) = _lazynode_at(_expand_entities(_normalize_input_eol(data)), nt)
 
 # `d` arrives with §2.11 already applied — see `_cursor_at` for the same split.
 # No scan here. Parametric on `d`'s own type, so a rewritten document (always a `String`)
@@ -392,8 +392,10 @@ or reformatting.  This is the zero-copy counterpart of [`write`](@ref) for lazy 
 Being zero-copy, it reports the bytes of the document the reader actually holds. A `String`
 document whose lines end in CR is normalized when it is read in, so its source text is the
 normalized one; a document held as any other string type — a view over a memory-mapped file,
-say — is never rewritten, so its source text is the file's own bytes, line ends included.
-Reported *values* are normalized either way.
+say — keeps its own line ends, so its source text carries them. A document that declares and
+references general entities in its internal subset is expanded when it is read in, whatever
+string type holds it, so its source text is the expanded one (§4.4.2). Reported *values* are
+normalized either way.
 """
 function sourcetext(n::LazyNode)
     nt = n.nodetype
@@ -710,7 +712,7 @@ Base.length(n::LazyNode) = length(children(n))
 
 #-----------------------------------------------------------------------------# parse / read
 Base.parse(::Type{LazyNode}, xml::AbstractString) = parse(xml, LazyNode)
-Base.parse(xml::AbstractString, ::Type{LazyNode}) = _lazynode_at(_normalize_input_eol(_drop_bom(xml)), Document)
+Base.parse(xml::AbstractString, ::Type{LazyNode}) = _lazynode_at(_expand_entities(_normalize_input_eol(_drop_bom(xml))), Document)
 
 Base.read(filename::AbstractString, ::Type{LazyNode}) = parse(String(_normalize_bom(read(filename))), LazyNode)
 Base.read(io::IO, ::Type{LazyNode}) = parse(String(_normalize_bom(read(io))), LazyNode)

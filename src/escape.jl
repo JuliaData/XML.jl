@@ -27,6 +27,10 @@ end
 # reference that resolves to '&' (e.g. `&#38;`) is never re-scanned as the start of a new
 # entity — `replace` substitutes left-to-right over the original string and never re-reads
 # what it emitted.
+# The five names XML 1.0 §4.6 predefines, which need no declaration. `_ENTITY_RE` below
+# encodes the same set for the decode path; readers that check what a name refers to use this.
+const _PREDEFINED = ("amp", "lt", "gt", "apos", "quot")
+
 const _ENTITY_RE = r"&(?:amp|lt|gt|apos|quot|#[0-9]+|#[xX][0-9a-fA-F]+);"
 
 function _unescape_entity(m::AbstractString)
@@ -132,6 +136,9 @@ _read_eol(s::AbstractString) = occursin('\r', s) ? _rewrite_content_eol(s) : s
 # After the CR LF → LF rewrite, a byte position shifts left by the number of CR LF pairs
 # strictly before it (a lone CR rewrites in place). For translating caller-supplied
 # start offsets (`Cursor(data, startpos)`) when the document needed rewriting.
+#
+# That constructor is its only caller and is deprecated for removal in v0.5, so this goes
+# with it — no other entry takes a source offset from the caller.
 function _translate_eol_pos(s::AbstractString, pos::Int)
     cu = codeunits(s)
     n = min(pos - 1, length(cu))

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Deprecated
+
+- **`Cursor(data, startpos)`**, removed in v0.5: it is the only entry that exposes a byte offset into the source, and nothing in the package or in any registered dependent calls it. Line-end normalization only shortens, so the offset still translates; entity inclusion inserts, so an offset inside a replaced reference has no image. To walk a subtree, take a snapshot and cross back through it: `snapshot = LazyNode(cursor)`, then `Cursor(snapshot)`.
+
 ### Added
 
 - **`XML.escape` and `XML.unescape` are now public API** ([#125](https://github.com/JuliaData/XML.jl/issues/125)): declared `public` on Julia 1.11+ and covered by semver, for downstream code that assembles XML strings itself. They stay unexported — the bare names are too generic for `using XML`.
@@ -15,11 +19,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Internal general entities are included per XML 1.0 §4.4** ([#130](https://github.com/JuliaData/XML.jl/issues/130)): a reference to an entity declared in a DOCTYPE internal subset came through as literal text — `&e;` — in every reader. Its replacement text is now included before the parse, so markup in that text produces structure rather than a text node holding `<`, and a reference in an attribute value resolves as well. **Any document that uses internal entities changes the values it reports.** Expansion is bounded at depth 40 and 64 MiB, so a [billion-laughs](https://en.wikipedia.org/wiki/Billion_laughs_attack) document raises an error rather than exhausting memory. A document read through a `StringView` over `Mmap` is covered by a package extension; one that declares no entities costs a single probe of its prolog, 18 ns on a 14 MB file. This turned 29 of the ledgered W3C canonical-reference gaps green.
+
+- **`:strict` rejects a reference to an undeclared entity** ([#130](https://github.com/JuliaData/XML.jl/issues/130)): XML 1.0 §4.1's well-formedness constraint *Entity Declared* — one even a non-validating processor must enforce, where a validity constraint binds only a validating one. It binds only where a missing name is certain, which needs every declaration the document has to be one this reader sees: a document with no DTD, or one whose declarations all sit in its internal subset with nothing pointing outside it — no external subset, no parameter-entity reference, no entity declared as external. Under any other shape a declaration never read could supply the name. Below `:strict` the reference stays literal, which is the behaviour every level had. This rejects eight more documents of the W3C not-well-formed suite, 408 of 1257.
+
+- **`parse_dtd` no longer raises `StringIndexError` on a non-ASCII internal subset**: it walked the subset one byte at a time, so a multi-byte character inside a declaration left the index between the bytes of a character.
+
 - **Line ends are now normalized per XML 1.0 §2.11** (all four readers): literal CR LF and lone CR read as LF — in character data, CDATA sections, processing-instruction data, comments, attribute values and the DOCTYPE value — while CR written as `&#13;` still reads as a real CR. Previously the raw bytes came through, so CR LF documents read differently in XML.jl than in conforming parsers. On write, a CR in text content is escaped as `&#13;`, so values round-trip exactly. This turned 62 of the ledgered W3C canonical-reference gaps green ([#129](https://github.com/JuliaData/XML.jl/issues/129)).
 
 - **The lazy readers no longer copy the document at the entry** ([#134](https://github.com/JuliaData/XML.jl/issues/134)): `parse(str, LazyNode)` and `parse(str, Cursor)` converted their argument to a `String` — 59 MiB for a 59 MiB document — and now take it as given, keeping its type. That copy was masking a second cost: over a non-`String` source, `attributes` walked the whole document once per attribute, 109 ms for 2,000 elements where it now takes 1.4 ms.
 
-- **A memory-mapped document is no longer copied into the heap when its lines end in CR** ([#135](https://github.com/JuliaData/XML.jl/issues/135)): the entry rewrote it whatever string type held it, so mapping a Windows-written file asked for as much heap as the file. Only a `String` document is rewritten now; any other source has each value normalized as it is read. Opening the mapped 14 MB corpus goes from 51.6 ms and 13.8 MiB to 12 ns and no copy. `sourcetext` reports the bytes of the document the reader holds, so a mapped document shows the file's own line ends.
+- **A memory-mapped document is no longer copied into the heap when its lines end in CR** ([#135](https://github.com/JuliaData/XML.jl/issues/135)): the entry rewrote it whatever string type held it, so mapping a Windows-written file asked for as much heap as the file. Only a `String` document is rewritten now; any other source has each value normalized as it is read. Opening the mapped 14 MB corpus goes from 51.6 ms and 13.8 MiB to 24 ns and no copy. `sourcetext` reports the bytes of the document the reader holds, so a mapped document shows the file's own line ends.
 
 ## [0.4.6] - 2026-08-17
 

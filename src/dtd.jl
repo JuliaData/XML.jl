@@ -42,9 +42,16 @@ end
     c == '_' || c == '-' || c == '.' || c == ':' || !isascii(c)
 
 # Advance past any whitespace.
+# One step forward, tolerant of running past the end: each reader tests `pos <= ncodeunits`
+# before it indexes, so a step beyond the last character only has to keep the loop terminating.
+@inline _dtd_next(s, pos) = pos <= ncodeunits(s) ? nextind(s, pos) : pos + 1
+
+# The DTD readers walk a String by index, so every step goes through `nextind`: a `pos + 1`
+# lands inside a character as soon as the subset holds one that is not ASCII — in a comment,
+# an entity value or a name — and indexing there throws.
 function _dtd_skip_ws(s, pos)
     while pos <= ncodeunits(s) && isspace(s[pos])
-        pos += 1
+        pos = _dtd_next(s, pos)
     end
     pos
 end
@@ -65,13 +72,13 @@ function _dtd_read_quoted(s, pos)
     pos = _dtd_skip_ws(s, pos)
     q = s[pos]
     (q == '"' || q == '\'') || error("Expected quoted string at position $pos in DTD")
-    pos += 1
+    pos = _dtd_next(s, pos)
     start = pos
     while pos <= ncodeunits(s) && s[pos] != q
-        pos += 1
+        pos = _dtd_next(s, pos)
     end
-    val = SubString(s, start, pos - 1)
-    pos += 1
+    val = SubString(s, start, prevind(s, pos))
+    pos = _dtd_next(s, pos)
     val, pos
 end
 
@@ -106,14 +113,14 @@ function _dtd_skip_to_close(s, pos)
     while pos <= ncodeunits(s) && s[pos] != '>'
         c = s[pos]
         if c == '"' || c == '\''
-            pos += 1
+            pos = _dtd_next(s, pos)
             while pos <= ncodeunits(s) && s[pos] != c
-                pos += 1
+                pos = _dtd_next(s, pos)
             end
         end
-        pos += 1
+        pos = _dtd_next(s, pos)
     end
-    pos <= ncodeunits(s) ? pos + 1 : pos
+    _dtd_next(s, pos)
 end
 
 # Parse `<!ELEMENT name content>` — content is either a name (EMPTY/ANY) or a parens

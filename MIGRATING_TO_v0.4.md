@@ -57,9 +57,7 @@ iteration) and preserves document order.
 zero-copy parsing). `::Node` annotations still work. If you dispatched on `::AbstractXMLNode`, note
 that `Node` is no longer a subtype of it.
 
-The zero-copy `Node{SubString{String}}` variant returns text and attribute values **raw** — entities
-such as `&amp;` are *not* decoded, since decoding would require allocating a new string. The default
-`Node` (`Node{String}`), `LazyNode`, and `Cursor` all decode entities into values.
+The zero-copy `Node{SubString{String}}` variant returns text and attribute values **raw** — the predefined entities such as `&amp;`, and character references, are *not* decoded, since decoding would require allocating a new string. The default `Node` (`Node{String}`), `LazyNode`, and `Cursor` all decode them into values. General entities declared in an internal subset are a different matter: their replacement text is included in the document before it is parsed, so the zero-copy variant reports that text like any other reader.
 
 ### `LazyNode` is an immutable view
 
@@ -126,12 +124,7 @@ Review these even if your code compiles unchanged:
    parse(str, Node; wellformed = :strict)    # see below
    ```
 
-   `:strict` additionally rejects: `--` (or a trailing `-`) inside a comment; an empty or invalid
-   processing-instruction target; and any character — whether a numeric **reference** (`&#0;`) or a
-   **raw** literal character — outside the XML 1.0 §2.2 `Char` range (e.g. NUL and other control
-   characters). Because that adds a full character-range scan over textual content, `:strict` is
-   meaningfully slower than `:structural` on text-heavy documents — a cost paid only when you opt in
-   (`:lenient` and `:structural` are unaffected).
+   `:strict` additionally rejects: `--` (or a trailing `-`) inside a comment; an empty or invalid processing-instruction target; a reference to an entity that is not declared, in a document with no external DTD parts that could hold a declaration for it (XML 1.0 §4.1); and any character — whether a numeric **reference** (`&#0;`) or a **raw** literal character — outside the XML 1.0 §2.2 `Char` range (e.g. NUL and other control characters). Because that adds a character-range scan over textual content, `:strict` is meaningfully slower than `:structural` on text-heavy documents — a cost paid only when you opt in (`:lenient` and `:structural` are unaffected).
 
    A consequence of requiring a root element: input that is **not a complete document** — a
    standalone DTD file, or a prolog-only fragment — is now rejected at `:structural`. Read it with
@@ -141,7 +134,7 @@ Review these even if your code compiles unchanged:
    read("schema.dtd", Node; wellformed = :lenient)   # a DTD file has no root element
    ```
 
-7. **Inter-element whitespace is preserved.** `parse`/`read` keep whitespace-only text between
+6. **Inter-element whitespace is preserved.** `parse`/`read` keep whitespace-only text between
    elements as `Text` nodes (0.3.x dropped it by default). So `children(root)` may include leading
    `Text` nodes, and `children(root)[1]` is **not** necessarily the first child *element*. Use
    `eachelement` / `elements` (new in **v0.4.1**) when you need elements only:
@@ -158,11 +151,13 @@ Review these even if your code compiles unchanged:
    first(c for c in children(root) if nodetype(c) === Element)
    ```
 
-8. **`LazyNode` and `Cursor` do not check well-formedness.** Only `Node` enforces the `wellformed`
-   level; `parse(x, LazyNode)` and `Cursor(x)` tokenize without validating and do not accept a
-   `wellformed` keyword. Parse through `Node` if you need well-formedness checking.
+7. **`LazyNode` and `Cursor` do not check well-formedness.** `Node` and `FlatNode` enforce the
+   `wellformed` level; `parse(x, LazyNode)` and `Cursor(x)` tokenize without validating and do not
+   accept a `wellformed` keyword. Parse through `Node` or `FlatNode` if you need well-formedness
+   checking.
 
-6. **No memory-mapping.** `read` no longer memory-maps the input file.
+8. **No memory-mapping.** `read` no longer memory-maps the input file. The README shows the manual
+   recipe, a `StringView` over `Mmap`, for files too large for the heap.
 
 ## Compat
 

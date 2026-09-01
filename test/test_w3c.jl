@@ -152,13 +152,12 @@ notwf_tests = filter(t -> t.type == "not-wf", xml10_tests)
                 n_pass += 1
             end
         end
-        # XML.jl is non-validating and this suite runs at :strict, so it rejects structural +
-        # syntactic ill-formedness but NOT validity errors needing DTD/entity processing (undefined
-        # entities, ID/IDREF, attribute types…). It therefore does not reject all 1257 in-scope not-wf
-        # cases of the pinned xmlts20130923 suite. Assert a no-regression floor on the count it DOES
-        # reject (367 at present; it rose sharply when :strict gained raw-character-range checking and
-        # DOCTYPE/XML-declaration placement checks). Bump it as coverage grows.
-        @test n_pass >= 367
+        # XML.jl is non-validating and this suite runs at :strict, so it rejects structural and
+        # syntactic ill-formedness but not the validity errors that need DTD processing (ID/IDREF,
+        # attribute types, content models). It therefore does not reject all 1257 in-scope not-wf
+        # cases of the pinned xmlts20130923 suite. Assert a no-regression floor on the count it does
+        # reject, and raise it as coverage grows.
+        @test n_pass >= 408
         n_fail > 0 && @info "W3C not-wf: $n_fail not yet rejected (out-of-scope validity errors: DTD/entity)" examples=first(failures, 20)
         @info "W3C not-well-formed: $n_pass / $(n_pass + n_fail) rejected"
     end
@@ -235,23 +234,19 @@ const CANON_KNOWN_FAIL = Dict{String, String}()
 let
     # Line-end normalization (§2.11) is implemented, so its cases are absent from this
     # ledger; a case that combined it with another gap is listed under that remaining gap.
-    ent = "internal entity expansion (§4.4, #130): entities declared in the internal subset are reported unexpanded"
+    # Internal general entities are included before the parse (§4.4.2), so their cases are absent
+    # from this ledger; what remains of that class is one attribute value where §3.3.3 has to
+    # normalize the white space a character reference contributes through an entity.
+    avn = "§3.3.3 normalization through an entity (#130): `&#13;&#10;` reaching an attribute value inside replacement text"
     att = "ATTLIST default attribute injection (§3.3.2, #131)"
     ntn = "notation declarations: Second Canonical Form prepends a DOCTYPE carrying <!NOTATION …>"
     for (reason, ids) in (
-        ent => ["valid-sa-023", "valid-sa-024", "valid-sa-053", "valid-sa-066", "valid-sa-068",
-                "valid-sa-085", "valid-sa-086", "valid-sa-087", "valid-sa-088", "valid-sa-089",
-                "valid-sa-108", "valid-sa-110", "valid-sa-114", "valid-sa-115", "valid-sa-117",
-                "valid-sa-118", "v-pe03",
-                "ibm-valid-P09-ibm09v01.xml", "ibm-valid-P09-ibm09v02.xml", "ibm-valid-P09-ibm09v04.xml",
-                "ibm-valid-P10-ibm10v01.xml", "ibm-valid-P10-ibm10v02.xml", "ibm-valid-P10-ibm10v03.xml",
-                "ibm-valid-P10-ibm10v04.xml", "ibm-valid-P10-ibm10v05.xml", "ibm-valid-P10-ibm10v06.xml",
-                "ibm-valid-P10-ibm10v07.xml", "ibm-valid-P10-ibm10v08.xml",
-                "ibm-valid-P29-ibm29v01.xml", "ibm-valid-P43-ibm43v01.xml", "ibm-valid-P67-ibm67v01.xml"],
+        avn => ["valid-sa-110"],
         att => ["valid-sa-044", "valid-sa-045", "valid-sa-046", "valid-sa-058", "valid-sa-080",
                 "valid-sa-094", "valid-sa-096", "valid-sa-111", "v-sgml01",
                 "ibm-invalid-P56-ibm56i03.xml"],
         ntn => ["valid-sa-069", "valid-sa-076", "valid-sa-090", "valid-sa-091", "sa02",
+                "ibm-valid-P29-ibm29v01.xml",
                 "ibm-valid-P56-ibm56v08.xml", "ibm-valid-P57-ibm57v01.xml", "ibm-valid-P58-ibm58v01.xml",
                 "ibm-valid-P58-ibm58v02.xml", "ibm-valid-P82-ibm82v01.xml",
                 "ibm-invalid-P58-ibm58i01.xml", "ibm-invalid-P58-ibm58i02.xml"],

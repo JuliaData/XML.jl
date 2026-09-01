@@ -176,7 +176,7 @@ using XML: Cursor, next!, for_each_child, @for_each_child, skip_element!, eof, n
         doc = "<r><a><x/><y/></a><b/></r>"
         # Primitive: start at the byte offset of <a> → walk a's subtree only.
         apos = first(findfirst("<a>", doc))
-        c = Cursor(doc, apos)
+        c = @test_deprecated Cursor(doc, apos)
         @test next!(c) !== nothing
         @test String(tag(c)) == "a"
         @test depth(c) == 1
