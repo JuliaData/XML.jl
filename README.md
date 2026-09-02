@@ -359,12 +359,12 @@ What the constructions this document lacks cost, what each `wellformed` level ad
 
 | Benchmark | XML.jl | EzXML | LightXML | XMLDict |
 |---|--:|--:|--:|--:|
-| Parse, small | 13.0 µs | 11.3 µs | 11.1 µs | 115 µs |
-| Parse, medium | 68.8 ms | 39.7 ms | 37.3 ms | 349 ms |
-| Write, small | 5.89 µs | 5.86 µs | 64.2 µs | — |
-| Write, medium | 24.9 ms | 21.6 ms | 32.1 ms | — |
-| Collect tags, small | 0.37 µs | 1.07 µs | 1.80 µs | — |
-| Collect tags, medium | 4.76 ms | 10.7 ms | 16.4 ms | — |
+| Parse, small | 13.2 µs | 11.9 µs | 11.7 µs | 115 µs |
+| Parse, medium | 69.9 ms | 37.5 ms | 38.5 ms | 354 ms |
+| Write, small | 6.01 µs | 5.66 µs | 56.8 µs | — |
+| Write, medium | 25.2 ms | 21.7 ms | 29.8 ms | — |
+| Collect tags, small | 0.37 µs | 1.08 µs | 1.80 µs | — |
+| Collect tags, medium | 4.73 ms | 10.6 ms | 13.7 ms | — |
 
 EzXML and LightXML wrap libxml2 (C): faster on raw parse, slower on in-Julia traversal.
 Times include garbage collection; [PERFORMANCE](PERFORMANCE-v0.4.md) breaks each of its rows

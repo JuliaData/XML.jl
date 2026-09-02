@@ -166,36 +166,36 @@ XMark limits its documents to a restricted set of XML features by design: no ent
 
 | | XMark-style document | escaped twin | markup twin |
 |---|--:|--:|--:|
-| `Cursor` stream | 24.8 ms · 1 | 38.2 ms · 269,015 | 26.1 ms · 5 |
-| `parse` → `Node` | 49.8 ms · 2,526,927 | 76.5 ms (GC 11.8) · 2,904,925 | 50.1 ms · 2,566,935 |
-| `parse` → `Node{SubString}` | 44.1 ms · 2,416,965 | 46.3 ms · 2,429,766 | 46.3 ms · 2,456,973 |
-| `LazyNode` walk | 136 ms (GC 0.5) · 272,762 | 155 ms (GC 1.0) · 541,776 | 139 ms (GC 0.5) · 272,762 |
-| `LazyNode` attribute sweep | 142 ms (GC 0.5) · 272,762 | 148 ms (GC 0.5) · 314,362 | 145 ms (GC 0.4) · 272,762 |
-| `FlatNode` walk | 3.82 ms · 0 | 14.1 ms · 269,014 | 3.89 ms · 0 |
-| EzXML `StreamReader` (libxml2) | 67.3 ms (GC 1.0) · 1,172,072 | 76.3 ms (GC 0.9) · 1,172,697 | 79.0 ms (GC 0.9) · 1,188,708 |
-| EzXML `parsexml` (libxml2) | 38.3 ms · — | 47.6 ms · — | 45.0 ms · — |
+| `Cursor` stream | 24.8 ms · 1 | 30.5 ms · 46,584 | 26.1 ms · 5 |
+| `parse` → `Node` | 49.3 ms · 2,526,927 | 56.1 ms · 2,658,494 | 51.1 ms · 2,566,935 |
+| `parse` → `Node{SubString}` | 44.7 ms · 2,416,965 | 46.0 ms · 2,429,766 | 46.4 ms · 2,456,973 |
+| `LazyNode` walk | 136 ms (GC 0.5) · 272,762 | 146 ms (GC 0.7) · 319,345 | 140 ms (GC 0.5) · 272,762 |
+| `LazyNode` attribute sweep | 143 ms (GC 0.5) · 272,762 | 148 ms (GC 0.5) · 290,362 | 145 ms (GC 0.5) · 272,762 |
+| `FlatNode` walk | 3.79 ms · 0 | 8.09 ms · 46,583 | 3.86 ms · 0 |
+| EzXML `StreamReader` (libxml2) | 67.0 ms (GC 0.9) · 1,172,072 | 75.5 ms (GC 0.9) · 1,172,697 | 78.1 ms (GC 0.9) · 1,188,708 |
+| EzXML `parsexml` (libxml2) | 38.0 ms · — | 45.1 ms · — | 45.0 ms · — |
 
 _Table 6 — the same operations over the XMark-style document and its two twins: time (incl. GC) · allocations. The three columns of a row come from one run, and the differences between them are the point. The libxml2 DOM lives in the C heap, where the allocation column does not apply._[^twins]
 
-The escaped column is the decode path. A decoded value allocates about six times, the same +269,014 on `Cursor`, `LazyNode` and `FlatNode` for the 46,583 text tokens that carry a reference: `unescape` copies its argument to a `String`, runs a regular-expression `replace`, and copies the result. `Node{SubString}` does not decode, and its +12,801 are the §3.3.3 normalization of the 3,200 attribute values that carry a literal tab or newline, four allocations each. The markup column costs its extra nodes and nothing more, plus the prolog probe of a DOCTYPE that declares no entity, four allocations and 6 µs at every entry, which is why `Cursor` streams that twin in five. Parsing that DOCTYPE's 88 declarations with `parse_dtd` takes 8.1 µs and 372 allocations.
+The escaped column is the decode path. A decoded value allocates once, the result string, the same +46,583 on `Cursor`, `LazyNode` and `FlatNode` for the 46,583 text tokens that carry a reference: `unescape` decodes in one pass over the bytes into a scratch buffer kept per task, then copies out exactly the decoded bytes. `Node{SubString}` does not decode, and its +12,801 are the §3.3.3 normalization of the 3,200 attribute values that carry a literal tab or newline, four allocations each. The markup column costs its extra nodes and nothing more, plus the prolog probe of a DOCTYPE that declares no entity, four allocations and 6 µs at every entry, which is why `Cursor` streams that twin in five. Parsing that DOCTYPE's 88 declarations with `parse_dtd` takes 8.0 µs and 372 allocations.
 
-The two libxml2 rows put the C library on the same three documents. Its reader touches node names only, so its escaped column carries the lexing of a reference and not its decoding; its DOM build decodes, for 9 ms over the plain build against 27 ms for `parse` → `Node`, and takes the markup twin's comments, processing instructions, CDATA sections and DOCTYPE for 7 ms over it, where `parse` → `Node` shows no difference beyond noise. Every libxml2 cell frees its tree per sample outside the timing: EzXML attaches its finalizer to the document's node, so a cell that finalizes the document frees nothing, and a benchmark loop never wakes the collector.
+The two libxml2 rows put the C library on the same three documents. Its reader touches node names only, so its escaped column carries the lexing of a reference and not its decoding; its DOM build decodes, for 7 ms over the plain build, the same 7 ms `parse` → `Node` takes over its own, and takes the markup twin's comments, processing instructions, CDATA sections and DOCTYPE for 7 ms over it, where `parse` → `Node` pays only the twin's extra nodes. Every libxml2 cell frees its tree per sample outside the timing: EzXML attaches its finalizer to the document's node, so a cell that finalizes the document frees nothing, and a benchmark loop never wakes the collector.
 
 ### Well-formedness levels
 
-`:strict` adds two checks over `:structural`: a character-range scan of every text, attribute value, comment, CDATA section and processing-instruction body, and a check of every reference in a token that carries one, against the character range for a numeric reference and against the five predefined names for a named one, every declared entity having been included by then. The first costs in proportion to the document's text share, the second to its reference density, and the XMark-style document, which has no reference at all, measures the first alone. `:lenient` and `:structural` differ only in the document-shape checks, whose cost does not separate from the run-to-run spread: 48.2 and 48.5 ms on the document.
+`:strict` adds two checks over `:structural`: a character-range scan of every text, attribute value, comment, CDATA section and processing-instruction body, and a check of every reference in a token that carries one, against the character range for a numeric reference and against the five predefined names for a named one, every declared entity having been included by then. The first costs in proportion to the document's text share, the second to its reference density, and the XMark-style document, which has no reference at all, measures the first alone. `:lenient` and `:structural` differ only in the document-shape checks, whose cost does not separate from the run-to-run spread: 48.9 and 49.9 ms on the document.
 
 | `parse(…, Node; wellformed = …)` | `:structural` | `:strict` | ratio |
 |---|--:|--:|--:|
-| the XMark-style document, text share 57 % | 48.5 ms | 59.6 ms | 1.2× |
-| its escaped twin, 81,799 references | 67.5 ms (GC 5.1) | 103 ms (GC 19.3) | 1.3× |
-| its character data alone, text share 100 %, 8.1 MB | 0.49 ms | 7.0 ms | 14× |
+| the XMark-style document, text share 57 % | 49.9 ms | 60.4 ms | 1.2× |
+| its escaped twin, 81,799 references | 57.5 ms | 91.2 ms (GC 14.6) | 1.3× |
+| its character data alone, text share 100 %, 8.1 MB | 0.49 ms | 6.9 ms | 14× |
 
 _Table 7 — what `:strict` adds, by document shape; the ratio is taken on the time net of the GC share, the part that reproduces._[^twins]
 
 The character-range scan allocates nothing. The reference check is a regular-expression match per reference: 583,076 allocations on the escaped twin, seven per reference.
 
-libxml2 has no levels: it always enforces well-formedness in full. Its DOM build takes 37 ms on the plain document, 45 ms on the escaped twin and 4.0 ms on its character data alone, so on pure text the C library parses, checks and builds in a little over half the time of the `:strict` character-range scan by itself.
+libxml2 has no levels: it always enforces well-formedness in full. Its DOM build takes 38 ms on the plain document, 45 ms on the escaped twin and 4.0 ms on its character data alone, so on pure text the C library parses, checks and builds in a little over half the time of the `:strict` character-range scan by itself.
 
 ## The other entry points
 
