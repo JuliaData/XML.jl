@@ -19,7 +19,7 @@ BenchmarkTools.DEFAULT_PARAMETERS.seconds = 5
 
 const xmark = joinpath(@__DIR__, "data", "xmark.xml")
 const xml = read(xmark, String)
-println("corpus: ", basename(xmark), " (", round(ncodeunits(xml) / 2^20, digits = 1),
+println("document: ", basename(xmark), " (", round(ncodeunits(xml) / 2^20, digits = 1),
         " MiB)   julia ", VERSION, "   gcthreads ", Threads.ngcthreads())
 
 _tail(gc) = gc < 0.05 ? "" : string(" (GC ", round(gc, digits = 1), ")")

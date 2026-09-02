@@ -18,11 +18,11 @@ BenchmarkTools.DEFAULT_PARAMETERS.samples = 20000
 small_file = joinpath(@__DIR__, "..", "test", "data", "books.xml")
 small_xml = read(small_file, String)
 
-# Medium file (generated XMark auction XML, ~14 MB)
+# Medium file (generated XMark-style auction document, ~14 MB)
 medium_file = joinpath(@__DIR__, "data", "xmark.xml")
 if !isfile(medium_file)
     mkpath(dirname(medium_file))
-    @info "Generating XMark benchmark XML..."
+    @info "Generating the XMark-style benchmark document..."
     generate_xmark(medium_file, 1.0)
 end
 medium_xml = read(medium_file, String)

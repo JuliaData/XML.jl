@@ -183,7 +183,7 @@ println("\n(same recursive traversal for the three readers; a traversal that all
 #--------------------------------------------------------------# (5) MEMORY-MAPPED SOURCE
 # What a document held as something other than a `String` costs at the entry, and what a
 # partial read costs after that — the workload the README documents memory mapping for. The
-# corpus is mapped instead of read, and a CR LF twin is generated once beside it, because
+# document is mapped instead of read, and a CR LF twin is generated once beside it, because
 # a document's line ends determine whether the entry passes the mapping through or
 # rewrites it into the heap.
 using Mmap, StringViews
@@ -232,7 +232,7 @@ println("\n(the entry either passes the mapping through or rewrites the document
 #--------------------------------------------------------------# (6) INTERNAL GENERAL ENTITIES
 # What XML 1.0 §4.4 inclusion costs, priced against a twin that parses to the SAME TREE, so any
 # difference below belongs to the entity machinery and to nothing else. The twin declares three
-# entities and references them where the plain corpus carries the words themselves, so those
+# entities and references them where the plain document carries the words themselves, so those
 # references disappear into the expansion; a fourth word is rewritten as a character reference,
 # which survives the expansion and is what reaches the `:strict` reference check. Both
 # populations are needed: `has_entities` is computed after the expansion, so a twin carrying
@@ -259,8 +259,8 @@ row("parse :strict, no decl",    @benchmark parse($S, Node; wellformed = :strict
 row("parse :strict, entities",   @benchmark parse($SE, Node; wellformed = :strict))
 row("expansion pass alone",      @benchmark XML._expand_entities($SE))
 row("prolog probe, no decl",     @benchmark XML._internal_entities($S))
-#--------------------------------------------------------------# (7) CONSTRUCTIONS THE PLAIN CORPUS LACKS
-# The plain corpus carries no reference, no attribute value that needs normalizing, no comment, no
+#--------------------------------------------------------------# (7) CONSTRUCTIONS THE PLAIN DOCUMENT LACKS
+# The plain document carries no reference, no attribute value that needs normalizing, no comment, no
 # CDATA section, no processing instruction and no DOCTYPE, so nothing above has measured any of
 # them. Two twins are generated beside it through the generator's opt-in features, each keeping the
 # plain document's elements and attributes in the same order, so that a difference between a plain
@@ -308,7 +308,7 @@ function token_shares(s)
 end
 pct(x) = string(round(100x, digits = 1), " %")
 
-println("\n=== (7) CONSTRUCTIONS THE PLAIN CORPUS LACKS — twins of the same structure ===")
+println("\n=== (7) CONSTRUCTIONS THE PLAIN DOCUMENT LACKS — twins of the same structure ===")
 const LAZY_E = parse(SESC, LazyNode); const FLAT_E = parse(SESC, FlatNode)
 const LAZY_M = parse(SM, LazyNode); const FLAT_M = parse(SM, FlatNode)
 println("  invariant, same elements in the same order:  escaped=", same_elements(S, SESC),
@@ -337,8 +337,8 @@ println("\n(same rows as (1), (2) and (4) over the three documents; the DOCTYPE 
 # What `wellformed = :strict` adds over `:structural`: a character-range scan of every text,
 # attribute value, comment, CDATA section and processing-instruction body, and a check of every
 # character reference in a token that carries one. The first scales with the document's text
-# share, the second with its reference density. The plain corpus measures the first alone, its
-# escaped twin both, and a document made of the corpus's character data alone puts the text share
+# share, the second with its reference density. The plain document measures the first alone, its
+# escaped twin both, and a document made of the XMark-style document's character data alone puts the text share
 # at one. `:lenient` and `:structural` differ only in the document-shape checks.
 const TEXT_ONLY = string("<doc>", replace(S, r"<[^>]*>" => ""), "</doc>")
 println("\n=== (8) WELL-FORMEDNESS LEVELS — what :strict adds ===")
@@ -353,4 +353,4 @@ row("escaped :strict",       @benchmark parse($SESC, Node; wellformed = :strict)
 row("text-only :structural", @benchmark parse($TEXT_ONLY, Node; wellformed = :structural))
 row("text-only :strict",     @benchmark parse($TEXT_ONLY, Node; wellformed = :strict))
 println("\n(the character-range scan costs in proportion to the text share; the reference check",
-        "\n runs only on a token that carries a `&`, so never on the plain corpus)")
+        "\n runs only on a token that carries a `&`, so never on the plain document)")

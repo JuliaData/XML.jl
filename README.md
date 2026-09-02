@@ -253,7 +253,7 @@ doc = read("file.xml", LazyNode)
 
 `LazyNode` supports the same read-only interface as `Node`: `nodetype`, `tag`, `attributes`, `value`, `children`, `is_simple`, `simple_value`, plus integer and string indexing.
 
-`LazyNode` is for *partial* reads only: opening is a no-op wrapper (sub-microsecond whatever the file size), a traversal costs only the bytes it steps over — descending to a target is O(bytes before it) — and nothing is cached, so repeated visits cost again. Unbeatable for descents and kilobyte-scale documents; for whole-tree walks (135 ms vs ~29/~71 ms build+walk on the 14 MB corpus below) and repeated queries, build `FlatNode` or `Node` instead — see [Performance by access pattern](#performance-by-access-pattern).
+`LazyNode` is for *partial* reads only: opening is a no-op wrapper (sub-microsecond whatever the file size), a traversal costs only the bytes it steps over — descending to a target is O(bytes before it) — and nothing is cached, so repeated visits cost again. Unbeatable for descents and kilobyte-scale documents; for whole-tree walks (135 ms vs ~29/~71 ms build+walk on the 14 MB document below) and repeated queries, build `FlatNode` or `Node` instead — see [Performance by access pattern](#performance-by-access-pattern).
 
 For streaming and high-throughput workloads, several extra accessors avoid materializing intermediate collections:
 
@@ -283,7 +283,7 @@ doc = open("very_large.xml") do io
 end
 ```
 
-The reader keeps the string type it is given, so the document is walked through the mapping instead of being copied into the heap, and accessors return views into the mapped bytes. Opening costs one probe of the prolog whatever the file's line ends — about 25 ns on a mapped 14 MB corpus, LF or CR LF alike: the document is neither scanned nor rewritten for its line ends, and the line-end normalization the specification requires happens on each value as it is read, so a file written with CR LF or a lone CR copies only the values you actually ask for, and only those that carry a line end. A document whose internal subset declares and references general entities is the exception: XML 1.0 §4.4.2 includes their replacement text before the parse, which copies the document once whatever string type holds it. `sourcetext` is the one accessor that shows the file's own bytes — it is a zero-copy view of the document the reader holds, which for a mapped file that declares no entities is the file itself. See [Memory-mapped sources](PERFORMANCE-v0.4.md#memory-mapped-sources) for the measured figures.
+The reader keeps the string type it is given, so the document is walked through the mapping instead of being copied into the heap, and accessors return views into the mapped bytes. Opening costs one probe of the prolog whatever the file's line ends — about 25 ns on a mapped 14 MB document, LF or CR LF alike: the document is neither scanned nor rewritten for its line ends, and the line-end normalization the specification requires happens on each value as it is read, so a file written with CR LF or a lone CR copies only the values you actually ask for, and only those that carry a line end. A document whose internal subset declares and references general entities is the exception: XML 1.0 §4.4.2 includes their replacement text before the parse, which copies the document once whatever string type holds it. `sourcetext` is the one accessor that shows the file's own bytes — it is a zero-copy view of the document the reader holds, which for a mapped file that declares no entities is the file itself. See [Memory-mapped sources](PERFORMANCE-v0.4.md#memory-mapped-sources) for the measured figures.
 
 <br>
 
@@ -335,7 +335,7 @@ end
 
 # Performance by access pattern
 
-One number cannot rank the readers — cost depends on what you do with the document. Same ~14 MB / 882 K-node XMark document as the cross-library table below (source: [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl); **lower is better**; BenchmarkTools `@benchmark` medians at default parameters):
+One number cannot rank the readers — cost depends on what you do with the document. Same ~14 MB / 882 K-node XMark-style document as the cross-library table below (source: [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl); **lower is better**; BenchmarkTools `@benchmark` medians at default parameters):
 
 | | build | walk every node | extract all values | DOM size in memory |
 |---|--:|--:|--:|--:|
@@ -353,9 +353,9 @@ _Measured 2026-08-31, Apple M5 (single-threaded), Julia 1.12.7, EzXML 1.2.3; Ben
 
 # Benchmarks
 
-Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl). Data: `books.xml` (~4 KB) and a generated XMark auction document (~14 MB). The XML.jl column uses `Node` throughout — the full mutable DOM, the like-for-like counterpart of the libxml2 DOMs the C wrappers build; [Performance by access pattern](#performance-by-access-pattern) above shows how the other readers change the picture. BenchmarkTools median time, **lower is better.**
+Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl). Data: `books.xml` (~4 KB) and a generated XMark-style auction document (~14 MB). The XML.jl column uses `Node` throughout — the full mutable DOM, the like-for-like counterpart of the libxml2 DOMs the C wrappers build; [Performance by access pattern](#performance-by-access-pattern) above shows how the other readers change the picture. BenchmarkTools median time, **lower is better.**
 
-What the constructions this corpus lacks cost, what each `wellformed` level adds, and the entry points no table above covers are in [PERFORMANCE-v0.4.md](PERFORMANCE-v0.4.md), Tables 6 to 8.
+What the constructions this document lacks cost, what each `wellformed` level adds, and the entry points no table above covers are in [PERFORMANCE-v0.4.md](PERFORMANCE-v0.4.md), Tables 6 to 8.
 
 | Benchmark | XML.jl | EzXML | LightXML | XMLDict |
 |---|--:|--:|--:|--:|

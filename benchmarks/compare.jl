@@ -36,7 +36,7 @@ using .XMarkGenerator
 const MEDIUM_FILE = joinpath(ROOT, "benchmarks", "data", "xmark.xml")
 if !isfile(MEDIUM_FILE)
     mkpath(dirname(MEDIUM_FILE))
-    @info "Generating XMark benchmark XML..."
+    @info "Generating the XMark-style benchmark document..."
     generate_xmark(MEDIUM_FILE, 1.0)
 end
 const MEDIUM_XML = read(MEDIUM_FILE, String)
