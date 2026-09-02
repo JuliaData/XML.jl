@@ -269,7 +269,9 @@ row("prolog probe, no decl",     @benchmark XML._internal_entities($S))
 # item and person a `note` attribute that needs decoding or XML 1.0 §3.3.3 white-space
 # normalization. The markup twin writes one text child per item and person as a CDATA section
 # followed by a comment and a processing instruction, under a DOCTYPE holding the schema's
-# declarations.
+# declarations. Two EzXML rows put libxml2 on the same three documents: its reader touches node
+# names only, so its escaped column carries the lexing of a reference and not its decoding; its
+# DOM build decodes. The C tree is freed per sample, outside the timing, as in benchmarks.jl.
 const FILE_ESC = joinpath(@__DIR__, "data", "xmark_escaped.xml")
 const FILE_MK  = joinpath(@__DIR__, "data", "xmark_markup.xml")
 isfile(FILE_ESC) || generate_xmark(FILE_ESC, 1.0; features = Features(text_every = 10, attr_every = 1))
@@ -327,6 +329,8 @@ for (lbl, s, lz, fl) in (("plain", S, LAZY, FLAT), ("escaped", SESC, LAZY_E, FLA
     row("LazyNode walk, $lbl",   @benchmark traverse_walk($lz))
     row("attr sweep, $lbl",      @benchmark attr_sweep($lz))
     row("FlatNode walk, $lbl",   @benchmark traverse_walk($fl))
+    row("EzXML stream, $lbl",    @benchmark ezxml_stream($s))
+    row("EzXML DOM, $lbl",       @benchmark (d[] = EzXML.parsexml($s)) setup = (d = Ref{Any}(nothing)) teardown = (d[] === nothing || finalize(d[]); d[] = nothing))
 end
 const DTD_VALUE = XML.value(first(c for c in XML.children(LAZY_M) if XML.nodetype(c) === XML.DTD))
 mrow("parse_dtd, the schema",   @benchmark XML.parse_dtd($DTD_VALUE))
@@ -352,5 +356,10 @@ row("escaped :structural",   @benchmark parse($SESC, Node; wellformed = :structu
 row("escaped :strict",       @benchmark parse($SESC, Node; wellformed = :strict))
 row("text-only :structural", @benchmark parse($TEXT_ONLY, Node; wellformed = :structural))
 row("text-only :strict",     @benchmark parse($TEXT_ONLY, Node; wellformed = :strict))
+# libxml2 has no levels: it always enforces well-formedness in full, so its rows are the reference
+# of a parser that checks everything, on the same three documents.
+for (lbl, s) in (("plain", S), ("escaped", SESC), ("text-only", TEXT_ONLY))
+    row("EzXML DOM, $lbl",       @benchmark (d[] = EzXML.parsexml($s)) setup = (d = Ref{Any}(nothing)) teardown = (d[] === nothing || finalize(d[]); d[] = nothing))
+end
 println("\n(the character-range scan costs in proportion to the text share; the reference check",
         "\n runs only on a token that carries a `&`, so never on the plain document)")
