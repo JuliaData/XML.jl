@@ -24,10 +24,10 @@ import EzXML, LightXML
 
 BenchmarkTools.DEFAULT_PARAMETERS.seconds = 5
 
+include(joinpath(@__DIR__, "XMarkGenerator.jl"))
+using .XMarkGenerator
 const FILE = joinpath(@__DIR__, "data", "xmark.xml")
 if !isfile(FILE)
-    include(joinpath(@__DIR__, "XMarkGenerator.jl"))
-    using .XMarkGenerator
     mkpath(dirname(FILE)); generate_xmark(FILE, 1.0)
 end
 const S = read(FILE, String)
@@ -88,7 +88,16 @@ function ezxml_walk(node)
     end
     (cnt, acc)
 end
-ezxml_extract(s) = ezxml_walk(EzXML.root(EzXML.parsexml(s)))
+# EzXML attaches its finalizer to the document's node, not to the document: `finalize(doc)` frees
+# nothing, `finalize(doc.node)` frees the C tree. A benchmark loop allocates too little in Julia to
+# wake the collector, so a cell that leaves the trees to it piles them up by the gigabyte; every
+# DOM cell below frees its tree per sample, outside the timing.
+function ezxml_extract(s)
+    d = EzXML.parsexml(s)
+    out = ezxml_walk(EzXML.root(d))
+    finalize(d.node)
+    out
+end
 
 function lightxml_walk(el)
     cnt = 1; acc = sizeof(LightXML.name(el))
@@ -156,8 +165,8 @@ row("EzXML StreamReader", @benchmark ezxml_stream($S))
 println("\n=== (2) FULL EXTRACTION — parse + pull every tag/text ===")
 row("XML.jl (String)",    @benchmark xml_extract($S, Node))
 row("XML.jl (SubString)", @benchmark xml_extract($S, SSNode))
-row("EzXML",              @benchmark ezxml_extract($S))
-row("LightXML (elem)",    @benchmark lightxml_extract($S))
+row("EzXML",              @benchmark (d[] = EzXML.parsexml($S); ezxml_walk(EzXML.root(d[]))) setup = (d = Ref{Any}(nothing)) teardown = (d[] === nothing || finalize(d[].node); d[] = nothing))
+row("LightXML (elem)",    @benchmark (d[] = LightXML.parse_string($S); lightxml_walk(LightXML.root(d[]))) setup = (d = Ref{Any}(nothing)) teardown = (d[] === nothing || LightXML.free(d[]); d[] = nothing))
 
 println("\n=== (3) DECOMPOSE — XML.jl pipeline stages ===")
 const TREE = parse(S, Node)
@@ -183,7 +192,7 @@ println("\n(same recursive traversal for the three readers; a traversal that all
 #--------------------------------------------------------------# (5) MEMORY-MAPPED SOURCE
 # What a document held as something other than a `String` costs at the entry, and what a
 # partial read costs after that — the workload the README documents memory mapping for. The
-# corpus is mapped instead of read, and a CR LF twin is generated once beside it, because
+# document is mapped instead of read, and a CR LF twin is generated once beside it, because
 # a document's line ends determine whether the entry passes the mapping through or
 # rewrites it into the heap.
 using Mmap, StringViews
@@ -232,7 +241,7 @@ println("\n(the entry either passes the mapping through or rewrites the document
 #--------------------------------------------------------------# (6) INTERNAL GENERAL ENTITIES
 # What XML 1.0 §4.4 inclusion costs, priced against a twin that parses to the SAME TREE, so any
 # difference below belongs to the entity machinery and to nothing else. The twin declares three
-# entities and references them where the plain corpus carries the words themselves, so those
+# entities and references them where the plain document carries the words themselves, so those
 # references disappear into the expansion; a fourth word is rewritten as a character reference,
 # which survives the expansion and is what reaches the `:strict` reference check. Both
 # populations are needed: `has_entities` is computed after the expansion, so a twin carrying
@@ -259,3 +268,107 @@ row("parse :strict, no decl",    @benchmark parse($S, Node; wellformed = :strict
 row("parse :strict, entities",   @benchmark parse($SE, Node; wellformed = :strict))
 row("expansion pass alone",      @benchmark XML._expand_entities($SE))
 row("prolog probe, no decl",     @benchmark XML._internal_entities($S))
+#--------------------------------------------------------------# (7) CONSTRUCTIONS THE PLAIN DOCUMENT LACKS
+# The plain document carries no reference, no attribute value that needs normalizing, no comment, no
+# CDATA section, no processing instruction and no DOCTYPE, so nothing above has measured any of
+# them. Two twins are generated beside it through the generator's opt-in features, each keeping the
+# plain document's elements and attributes in the same order, so that a difference between a plain
+# row and a twin row belongs to the construction and to nothing else. The escaped twin replaces one
+# drawn word in ten by one carrying a predefined entity or a character reference, and gives every
+# item and person a `note` attribute that needs decoding or XML 1.0 §3.3.3 white-space
+# normalization. The markup twin writes one text child per item and person as a CDATA section
+# followed by a comment and a processing instruction, under a DOCTYPE holding the schema's
+# declarations. Two EzXML rows put libxml2 on the same three documents: its reader touches node
+# names only, so its escaped column carries the lexing of a reference and not its decoding; its
+# DOM build decodes. The C tree is freed per sample, outside the timing.
+const FILE_ESC = joinpath(@__DIR__, "data", "xmark_escaped.xml")
+const FILE_MK  = joinpath(@__DIR__, "data", "xmark_markup.xml")
+isfile(FILE_ESC) || generate_xmark(FILE_ESC, 1.0; features = Features(text_every = 10, attr_every = 1))
+isfile(FILE_MK)  || generate_xmark(FILE_MK,  1.0; features = Features(markup_every = 1, doctype = true))
+const SESC = read(FILE_ESC, String)
+const SM = read(FILE_MK, String)
+
+# The twin invariant, checked rather than assumed: the same element tags in the same order.
+function next_element!(c)
+    while XML.next!(c) !== nothing
+        XML.nodetype(c) === XML.Element && return XML.tag(c)
+    end
+    nothing
+end
+function same_elements(a, b)
+    ca = XML.Cursor(a); cb = XML.Cursor(b)
+    while true
+        ta = next_element!(ca); tb = next_element!(cb)
+        ta == tb || return false
+        ta === nothing && return true
+    end
+end
+
+# The share of the bytes that text tokens cover, and the share of text and attribute-value tokens
+# carrying a `&`: what `has_entities` gates, and what the `:strict` reference check reads.
+function token_shares(s)
+    tb = 0; tn = 0; tr = 0; an = 0; ar = 0
+    for tok in XML.XMLTokenizer.tokenize(s)
+        if tok.kind === XML.XMLTokenizer.TokenKinds.TEXT
+            tb += tok.ncodeunits; tn += 1; tr += tok.has_entities
+        elseif tok.kind === XML.XMLTokenizer.TokenKinds.ATTR_VALUE
+            an += 1; ar += tok.has_entities
+        end
+    end
+    (text = tb / ncodeunits(s), text_ref = tr / tn, attr_ref = ar / an)
+end
+pct(x) = string(round(100x, digits = 1), " %")
+
+println("\n=== (7) CONSTRUCTIONS THE PLAIN DOCUMENT LACKS — twins of the same structure ===")
+const LAZY_E = parse(SESC, LazyNode); const FLAT_E = parse(SESC, FlatNode)
+const LAZY_M = parse(SM, LazyNode); const FLAT_M = parse(SM, FlatNode)
+println("  invariant, same elements in the same order:  escaped=", same_elements(S, SESC),
+        "  markup=", same_elements(S, SM))
+println("  nodes:  plain=", traverse_walk(LAZY)[1], "  escaped=", traverse_walk(LAZY_E)[1],
+        "  markup=", traverse_walk(LAZY_M)[1])
+let e = token_shares(SESC)
+    println("  escaped twin, tokens carrying a reference:  text ", pct(e.text_ref),
+            "  attribute values ", pct(e.attr_ref))
+end
+for (lbl, s, lz, fl) in (("plain", S, LAZY, FLAT), ("escaped", SESC, LAZY_E, FLAT_E),
+                          ("markup", SM, LAZY_M, FLAT_M))
+    row("Cursor stream, $lbl",   @benchmark cursor_stream($s))
+    row("parse → DOM, $lbl",     @benchmark parse($s, Node))
+    row("parse SubString, $lbl", @benchmark parse($s, SSNode))
+    row("LazyNode walk, $lbl",   @benchmark traverse_walk($lz))
+    row("attr sweep, $lbl",      @benchmark attr_sweep($lz))
+    row("FlatNode walk, $lbl",   @benchmark traverse_walk($fl))
+    row("EzXML stream, $lbl",    @benchmark ezxml_stream($s))
+    row("EzXML DOM, $lbl",       @benchmark (d[] = EzXML.parsexml($s)) setup = (d = Ref{Any}(nothing)) teardown = (d[] === nothing || finalize(d[].node); d[] = nothing))
+end
+const DTD_VALUE = XML.value(first(c for c in XML.children(LAZY_M) if XML.nodetype(c) === XML.DTD))
+mrow("parse_dtd, the schema",   @benchmark XML.parse_dtd($DTD_VALUE))
+println("\n(same rows as (1), (2) and (4) over the three documents; the DOCTYPE holds 74 element",
+        "\n and 14 attribute-list declarations)")
+
+#--------------------------------------------------------------# (8) WELL-FORMEDNESS LEVELS
+# What `wellformed = :strict` adds over `:structural`: a character-range scan of every text,
+# attribute value, comment, CDATA section and processing-instruction body, and a check of every
+# character reference in a token that carries one. The first scales with the document's text
+# share, the second with its reference density. The plain document measures the first alone, its
+# escaped twin both, and a document made of the XMark-style document's character data alone puts the text share
+# at one. `:lenient` and `:structural` differ only in the document-shape checks.
+const TEXT_ONLY = string("<doc>", replace(S, r"<[^>]*>" => ""), "</doc>")
+println("\n=== (8) WELL-FORMEDNESS LEVELS — what :strict adds ===")
+println("  text share of the bytes:  plain ", pct(token_shares(S).text), "  escaped ",
+        pct(token_shares(SESC).text), "  text-only ", pct(token_shares(TEXT_ONLY).text),
+        " (", round(ncodeunits(TEXT_ONLY) / 1e6, digits = 1), " MB)")
+row("plain :lenient",        @benchmark parse($S, Node; wellformed = :lenient))
+row("plain :structural",     @benchmark parse($S, Node; wellformed = :structural))
+row("plain :strict",         @benchmark parse($S, Node; wellformed = :strict))
+row("escaped :structural",   @benchmark parse($SESC, Node; wellformed = :structural))
+row("escaped :strict",       @benchmark parse($SESC, Node; wellformed = :strict))
+row("text-only :structural", @benchmark parse($TEXT_ONLY, Node; wellformed = :structural))
+row("text-only :strict",     @benchmark parse($TEXT_ONLY, Node; wellformed = :strict))
+# libxml2 has no levels: it always enforces well-formedness in full, so its rows are the reference
+# of a parser that checks everything, on the same three documents.
+for (lbl, s) in (("plain", S), ("escaped", SESC), ("text-only", TEXT_ONLY))
+    row("EzXML DOM, $lbl",       @benchmark (d[] = EzXML.parsexml($s)) setup = (d = Ref{Any}(nothing)) teardown = (d[] === nothing || finalize(d[].node); d[] = nothing))
+end
+println("\n(the character-range scan costs in proportion to the text share; the reference check",
+        "\n runs only on a token that carries a `&`, so never on the plain document)")

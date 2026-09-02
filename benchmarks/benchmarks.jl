@@ -18,11 +18,11 @@ BenchmarkTools.DEFAULT_PARAMETERS.samples = 20000
 small_file = joinpath(@__DIR__, "..", "test", "data", "books.xml")
 small_xml = read(small_file, String)
 
-# Medium file (generated XMark auction XML, ~14 MB)
+# Medium file (generated XMark-style auction document, ~14 MB)
 medium_file = joinpath(@__DIR__, "data", "xmark.xml")
 if !isfile(medium_file)
     mkpath(dirname(medium_file))
-    @info "Generating XMark benchmark XML..."
+    @info "Generating the XMark-style benchmark document..."
     generate_xmark(medium_file, 1.0)
 end
 medium_xml = read(medium_file, String)
@@ -43,40 +43,42 @@ const SSNode = Node{SubString{String}}
 #-----------------------------------------------------------------------------# Parse (small)
 @add_benchmark "Parse (small)" "XML.jl" parse($small_xml, Node)
 @add_benchmark "Parse (small)" "XML.jl (SS)" parse($small_xml, SSNode)
-@add_benchmark "Parse (small)" "EzXML" EzXML.parsexml($small_xml)
-@add_benchmark "Parse (small)" "LightXML" LightXML.parse_string($small_xml)
+@add_benchmark "Parse (small)" "EzXML" (d[] = EzXML.parsexml($small_xml)) setup=(d = Ref{Any}(nothing)) teardown=(d[] === nothing || finalize(d[].node); d[] = nothing) evals=1
+@add_benchmark "Parse (small)" "LightXML" (d[] = LightXML.parse_string($small_xml)) setup=(d = Ref{Any}(nothing)) teardown=(d[] === nothing || LightXML.free(d[]); d[] = nothing) evals=1
 @add_benchmark "Parse (small)" "XMLDict" XMLDict.xml_dict($small_xml)
 
 #-----------------------------------------------------------------------------# Parse (medium)
 @add_benchmark "Parse (medium)" "XML.jl" parse($medium_xml, Node)
 @add_benchmark "Parse (medium)" "XML.jl (SS)" parse($medium_xml, SSNode)
-# C-tree lifetime in the medium/read-file cells: LightXML attaches no finalizer, so an
-# unfreed parse leaks its whole tree outright; EzXML attaches one, but a benchmark loop
-# outruns the collector, so dead C trees pile up (gigabytes over a 5 s cell) until the
-# machine pages. These cells therefore release per sample (teardown, untimed; evals=1 at
-# this duration): LightXML.free / finalize for EzXML — both free C memory without touching
+# C-tree lifetime, small and medium cells alike: LightXML attaches no finalizer, so an unfreed parse
+# leaks its whole tree outright; EzXML attaches one to the document's node, not to the document,
+# so `finalize(doc)` frees nothing and `finalize(doc.node)` is the call — and a benchmark loop
+# allocates too little in Julia to wake the collector, so trees left to it pile up by the
+# gigabyte until the machine pages. Every C-tree cell therefore releases its tree per sample
+# (teardown, untimed; the small parse cells run one evaluation per sample so that the teardown
+# reaches every tree): LightXML.free / finalize(doc.node) — both free C memory without touching
 # the Julia GC, so cell timings are unchanged. XMLDict's internal EzXML document is
 # unreachable from outside and its per-cell C residue is small (~50 MiB per sample at ~14
 # samples); it is left to the between-cell GC.gc() in @add_benchmark — a per-sample
 # collection would reset the young generation inside the cell and hide the GC cost the
 # allocation-heavy conversion incurs in real use.
-@add_benchmark "Parse (medium)" "EzXML" (d[] = EzXML.parsexml($medium_xml)) setup=(d = Ref{Any}(nothing)) teardown=(d[] === nothing || finalize(d[]); d[] = nothing)
+@add_benchmark "Parse (medium)" "EzXML" (d[] = EzXML.parsexml($medium_xml)) setup=(d = Ref{Any}(nothing)) teardown=(d[] === nothing || finalize(d[].node); d[] = nothing)
 @add_benchmark "Parse (medium)" "LightXML" (d[] = LightXML.parse_string($medium_xml)) setup=(d = Ref{Any}(nothing)) teardown=(d[] === nothing || LightXML.free(d[]); d[] = nothing)
 @add_benchmark "Parse (medium)" "XMLDict" XMLDict.xml_dict($medium_xml)
 
 #-----------------------------------------------------------------------------# Write (small)
 @add_benchmark "Write (small)" "XML.jl" XML.write(o) setup=(o = parse(small_xml, Node))
-@add_benchmark "Write (small)" "EzXML" sprint(print, o) setup=(o = EzXML.parsexml(small_xml))
+@add_benchmark "Write (small)" "EzXML" sprint(print, o) setup=(o = EzXML.parsexml(small_xml)) teardown=(finalize(o.node))
 @add_benchmark "Write (small)" "LightXML" LightXML.save_file(o, f) setup=(o = LightXML.parse_string(small_xml); f = tempname()) teardown=(LightXML.free(o); rm(f, force=true))
 
 #-----------------------------------------------------------------------------# Write (medium)
 @add_benchmark "Write (medium)" "XML.jl" XML.write(o) setup=(o = parse(medium_xml, Node))
-@add_benchmark "Write (medium)" "EzXML" sprint(print, o) setup=(o = EzXML.parsexml(medium_xml))
+@add_benchmark "Write (medium)" "EzXML" sprint(print, o) setup=(o = EzXML.parsexml(medium_xml)) teardown=(finalize(o.node))
 @add_benchmark "Write (medium)" "LightXML" LightXML.save_file(o, f) setup=(o = LightXML.parse_string(medium_xml); f = tempname()) teardown=(LightXML.free(o); rm(f, force=true))
 
 #-----------------------------------------------------------------------------# Read from file
 @add_benchmark "Read file" "XML.jl" read($medium_file, Node)
-@add_benchmark "Read file" "EzXML" (d[] = EzXML.readxml($medium_file)) setup=(d = Ref{Any}(nothing)) teardown=(d[] === nothing || finalize(d[]); d[] = nothing)
+@add_benchmark "Read file" "EzXML" (d[] = EzXML.readxml($medium_file)) setup=(d = Ref{Any}(nothing)) teardown=(d[] === nothing || finalize(d[].node); d[] = nothing)
 @add_benchmark "Read file" "LightXML" (d[] = LightXML.parse_file($medium_file)) setup=(d = Ref{Any}(nothing)) teardown=(d[] === nothing || LightXML.free(d[]); d[] = nothing)
 
 #-----------------------------------------------------------------------------# Collect element tags
@@ -119,11 +121,11 @@ function _lightxml_collect_tags!(out, el::LightXML.XMLElement)
 end
 
 @add_benchmark "Collect tags (small)" "XML.jl" xml_collect_tags(o) setup=(o = parse(small_xml, Node))
-@add_benchmark "Collect tags (small)" "EzXML" ezxml_collect_tags(o.root) setup=(o = EzXML.parsexml(small_xml))
+@add_benchmark "Collect tags (small)" "EzXML" ezxml_collect_tags(o.root) setup=(o = EzXML.parsexml(small_xml)) teardown=(finalize(o.node))
 @add_benchmark "Collect tags (small)" "LightXML" lightxml_collect_tags(LightXML.root(o)) setup=(o = LightXML.parse_string(small_xml)) teardown=(LightXML.free(o))
 
 @add_benchmark "Collect tags (medium)" "XML.jl" xml_collect_tags(o) setup=(o = parse(medium_xml, Node))
-@add_benchmark "Collect tags (medium)" "EzXML" ezxml_collect_tags(o.root) setup=(o = EzXML.parsexml(medium_xml))
+@add_benchmark "Collect tags (medium)" "EzXML" ezxml_collect_tags(o.root) setup=(o = EzXML.parsexml(medium_xml)) teardown=(finalize(o.node))
 @add_benchmark "Collect tags (medium)" "LightXML" lightxml_collect_tags(LightXML.root(o)) setup=(o = LightXML.parse_string(medium_xml)) teardown=(LightXML.free(o))
 
 #-----------------------------------------------------------------------------# XLSX-pattern fixtures

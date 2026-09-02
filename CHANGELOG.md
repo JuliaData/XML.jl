@@ -17,7 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The W3C conformance testset now byte-compares parsed values against the suite's canonical `out/` references** ([#94](https://github.com/JuliaData/XML.jl/issues/94)): 262 reference pairs in scope, 147 byte-identical, the other 115 ledgered as `@test_broken` under the conformance feature that closes each. The ported processing-instruction testsets assert upstream-expected values rather than node counts.
 
+- **The benchmarks now cover the constructions their XMark-style document lacked** ([#138](https://github.com/JuliaData/XML.jl/issues/138)): `XMarkGenerator.jl` gains opt-in features — references and character references in text, attribute values needing decoding or white-space normalization, comments, CDATA sections, processing instructions, a DOCTYPE — placed deterministically, so a generated twin keeps the document's elements and attributes in the same order; the default document is byte-identical. `profile.jl` measures every reader over the document and its two twins and the three `wellformed` levels, so the `:strict` figures of `PERFORMANCE-v0.4.md` come from a script and are corrected: 1.2× on the document and 14× on its character data alone, where the note said ~1.1× and ~20×. `flatnode_bench.jl` measures the eight entry points that had no cell. Tables 6 to 8 of `PERFORMANCE-v0.4.md` publish them.
+
 ### Fixed
+
+- **The published libxml2 figures were measured with the C trees never freed** ([#138](https://github.com/JuliaData/XML.jl/issues/138)): EzXML attaches its finalizer to a document's node, not to the document, so the `finalize(doc)` the benchmark cells relied on freed nothing, and a benchmark loop allocates too little in Julia to wake the collector; the trees piled up by the gigabyte within a cell until the machine compressed and swapped. Every C-tree cell now frees its tree per sample, outside the timing, and every figure in `README.md` and `PERFORMANCE-v0.4.md` is republished from one campaign: libxml2's build of the 14 MB document goes from a published 47.6 ms to 37.3 ms, its full extraction from 65 to 58 ms, and the XML.jl figures move within noise.
 
 - **Internal general entities are included per XML 1.0 §4.4** ([#130](https://github.com/JuliaData/XML.jl/issues/130)): a reference to an entity declared in a DOCTYPE internal subset came through as literal text — `&e;` — in every reader. Its replacement text is now included before the parse, so markup in that text produces structure rather than a text node holding `<`, and a reference in an attribute value resolves as well. **Any document that uses internal entities changes the values it reports.** Expansion is bounded at depth 40 and 64 MiB, so a [billion-laughs](https://en.wikipedia.org/wiki/Billion_laughs_attack) document raises an error rather than exhausting memory. A document read through a `StringView` over `Mmap` is covered by a package extension; one that declares no entities costs a single probe of its prolog, 18 ns on a 14 MB file. This turned 29 of the ledgered W3C canonical-reference gaps green.
 
@@ -29,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The lazy readers no longer copy the document at the entry** ([#134](https://github.com/JuliaData/XML.jl/issues/134)): `parse(str, LazyNode)` and `parse(str, Cursor)` converted their argument to a `String` — 59 MiB for a 59 MiB document — and now take it as given, keeping its type. That copy was masking a second cost: over a non-`String` source, `attributes` walked the whole document once per attribute, 109 ms for 2,000 elements where it now takes 1.4 ms.
 
-- **A memory-mapped document is no longer copied into the heap when its lines end in CR** ([#135](https://github.com/JuliaData/XML.jl/issues/135)): the entry rewrote it whatever string type held it, so mapping a Windows-written file asked for as much heap as the file. Only a `String` document is rewritten now; any other source has each value normalized as it is read. Opening the mapped 14 MB corpus goes from 51.6 ms and 13.8 MiB to 24 ns and no copy. `sourcetext` reports the bytes of the document the reader holds, so a mapped document shows the file's own line ends.
+- **A memory-mapped document is no longer copied into the heap when its lines end in CR** ([#135](https://github.com/JuliaData/XML.jl/issues/135)): the entry rewrote it whatever string type held it, so mapping a Windows-written file asked for as much heap as the file. Only a `String` document is rewritten now; any other source has each value normalized as it is read. Opening the mapped 14 MB document goes from 51.6 ms and 13.8 MiB to 24 ns and no copy. `sourcetext` reports the bytes of the document the reader holds, so a mapped document shows the file's own line ends.
 
 ## [0.4.6] - 2026-08-17
 
@@ -42,7 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **GC-tuning note in PERFORMANCE-v0.4.md**: `--gcthreads=4` cuts a full collection with a
-  large live `Node` tree ~2.7× on the benchmark corpus, at no cost to computation —
+  large live `Node` tree ~2.7× on the benchmark document, at no cost to computation —
   measured guidance for applications that hold big trees.
 
 ### Changed
@@ -59,7 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **The `Node` build no longer allocates per-element vectors**: children and attributes
   accumulate on parse-wide scratch stacks, sliced out exact-size at each closing tag. On
-  the 14 MB benchmark corpus: ~380 K allocations and ~22 MiB of garbage less per build,
+  the 14 MB benchmark document: ~380 K allocations and ~22 MiB of garbage less per build,
   median build −7.5 %, retained tree 80.0 → 71.6 MiB, full walks ~1.4× faster (#107).
 
 - **Views are span-native end to end**: tokens carry `(offset, ncodeunits)` byte spans,
@@ -67,7 +71,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   helpers — is rebuilt by direct field construction, with no `prevind`/`nextind` walks.
   Sound because every span edge falls on an ASCII byte or EOF, hence a UTF-8 character
   boundary; `--check-bounds=yes` builds (as in `Pkg.test`) compile the checked
-  reconstruction instead, selected at load time. On the 14 MB corpus: lex 37.4 → 23.4 ms,
+  reconstruction instead, selected at load time. On the 14 MB document: lex 37.4 → 23.4 ms,
   `FlatNode` extract 6.6 → 3.1 ms, and two orderings reverse — `FlatNode` builds ~1.7×
   faster than libxml2 and extracts faster than `Node`'s direct field reads — while
   pure-Julia streaming is ~2.5× faster than EzXML's `StreamReader`. Allocations
@@ -120,7 +124,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `getindex` sentinel default, and small unions crossing non-inlined call boundaries.
   `simple_value(::LazyNode)` now runs the same single-pass token walk as
   `is_simple_value` instead of materializing `attributes` and `children`. On the 14 MB
-  benchmark corpus, a full `Cursor` streaming pass now allocates nothing at all (was
+  benchmark document, a full `Cursor` streaming pass now allocates nothing at all (was
   17 MiB) and runs ~14 % faster, and the `FlatNode` value-extraction stage drops ~30 %
   (9.3 → 6.6 ms). Allocation guards in the test suite pin every accessor at zero (#105).
 - **`foreach_attr`'s docstring no longer recommends the internal tokenizer layer**
