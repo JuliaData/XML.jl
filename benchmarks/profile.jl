@@ -88,7 +88,16 @@ function ezxml_walk(node)
     end
     (cnt, acc)
 end
-ezxml_extract(s) = ezxml_walk(EzXML.root(EzXML.parsexml(s)))
+# EzXML attaches its finalizer to the document's node, not to the document: `finalize(doc)` frees
+# nothing, `finalize(doc.node)` frees the C tree. A benchmark loop allocates too little in Julia to
+# wake the collector, so a cell that leaves the trees to it piles them up by the gigabyte; every
+# DOM cell below frees its tree per sample, outside the timing.
+function ezxml_extract(s)
+    d = EzXML.parsexml(s)
+    out = ezxml_walk(EzXML.root(d))
+    finalize(d.node)
+    out
+end
 
 function lightxml_walk(el)
     cnt = 1; acc = sizeof(LightXML.name(el))
@@ -156,8 +165,8 @@ row("EzXML StreamReader", @benchmark ezxml_stream($S))
 println("\n=== (2) FULL EXTRACTION — parse + pull every tag/text ===")
 row("XML.jl (String)",    @benchmark xml_extract($S, Node))
 row("XML.jl (SubString)", @benchmark xml_extract($S, SSNode))
-row("EzXML",              @benchmark ezxml_extract($S))
-row("LightXML (elem)",    @benchmark lightxml_extract($S))
+row("EzXML",              @benchmark (d[] = EzXML.parsexml($S); ezxml_walk(EzXML.root(d[]))) setup = (d = Ref{Any}(nothing)) teardown = (d[] === nothing || finalize(d[].node); d[] = nothing))
+row("LightXML (elem)",    @benchmark (d[] = LightXML.parse_string($S); lightxml_walk(LightXML.root(d[]))) setup = (d = Ref{Any}(nothing)) teardown = (d[] === nothing || LightXML.free(d[]); d[] = nothing))
 
 println("\n=== (3) DECOMPOSE — XML.jl pipeline stages ===")
 const TREE = parse(S, Node)
@@ -271,7 +280,7 @@ row("prolog probe, no decl",     @benchmark XML._internal_entities($S))
 # followed by a comment and a processing instruction, under a DOCTYPE holding the schema's
 # declarations. Two EzXML rows put libxml2 on the same three documents: its reader touches node
 # names only, so its escaped column carries the lexing of a reference and not its decoding; its
-# DOM build decodes. The C tree is freed per sample, outside the timing, as in benchmarks.jl.
+# DOM build decodes. The C tree is freed per sample, outside the timing.
 const FILE_ESC = joinpath(@__DIR__, "data", "xmark_escaped.xml")
 const FILE_MK  = joinpath(@__DIR__, "data", "xmark_markup.xml")
 isfile(FILE_ESC) || generate_xmark(FILE_ESC, 1.0; features = Features(text_every = 10, attr_every = 1))
@@ -330,7 +339,7 @@ for (lbl, s, lz, fl) in (("plain", S, LAZY, FLAT), ("escaped", SESC, LAZY_E, FLA
     row("attr sweep, $lbl",      @benchmark attr_sweep($lz))
     row("FlatNode walk, $lbl",   @benchmark traverse_walk($fl))
     row("EzXML stream, $lbl",    @benchmark ezxml_stream($s))
-    row("EzXML DOM, $lbl",       @benchmark (d[] = EzXML.parsexml($s)) setup = (d = Ref{Any}(nothing)) teardown = (d[] === nothing || finalize(d[]); d[] = nothing))
+    row("EzXML DOM, $lbl",       @benchmark (d[] = EzXML.parsexml($s)) setup = (d = Ref{Any}(nothing)) teardown = (d[] === nothing || finalize(d[].node); d[] = nothing))
 end
 const DTD_VALUE = XML.value(first(c for c in XML.children(LAZY_M) if XML.nodetype(c) === XML.DTD))
 mrow("parse_dtd, the schema",   @benchmark XML.parse_dtd($DTD_VALUE))
@@ -359,7 +368,7 @@ row("text-only :strict",     @benchmark parse($TEXT_ONLY, Node; wellformed = :st
 # libxml2 has no levels: it always enforces well-formedness in full, so its rows are the reference
 # of a parser that checks everything, on the same three documents.
 for (lbl, s) in (("plain", S), ("escaped", SESC), ("text-only", TEXT_ONLY))
-    row("EzXML DOM, $lbl",       @benchmark (d[] = EzXML.parsexml($s)) setup = (d = Ref{Any}(nothing)) teardown = (d[] === nothing || finalize(d[]); d[] = nothing))
+    row("EzXML DOM, $lbl",       @benchmark (d[] = EzXML.parsexml($s)) setup = (d = Ref{Any}(nothing)) teardown = (d[] === nothing || finalize(d[].node); d[] = nothing))
 end
 println("\n(the character-range scan costs in proportion to the text share; the reference check",
         "\n runs only on a token that carries a `&`, so never on the plain document)")

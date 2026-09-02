@@ -47,7 +47,9 @@ end
 # ── build (the whole `parse` call) ──
 cell("build FlatNode", @benchmark(parse($xml, FlatNode)); alloc = true)
 cell("build Node",     @benchmark(parse($xml, Node));     alloc = true)
-cell("build EzXML",    @benchmark(EzXML.parsexml($xml)))   # C-heap tree: Julia alloc not meaningful
+# The C tree is freed per sample outside the timing, through the document's node, which is where
+# EzXML attaches its finalizer; Julia alloc is not meaningful for it.
+cell("build EzXML",    @benchmark((d[] = EzXML.parsexml($xml)), setup = (d = Ref{Any}(nothing)), teardown = (d[] === nothing || finalize(d[].node); d[] = nothing)))
 # LazyNode materializes nothing, so its "build" is the document entry alone: one line-end
 # scan of the source (§2.11), allocation-free, proportional to document size.
 cell("open LazyNode",  @benchmark(parse($xml, LazyNode));  alloc = true)

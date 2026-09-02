@@ -339,15 +339,15 @@ One number cannot rank the readers — cost depends on what you do with the docu
 
 | | build | walk every node | extract all values | DOM size in memory |
 |---|--:|--:|--:|--:|
-| `Cursor` | — (streams) | 23.3 ms (its one scan) | — | — (no DOM) |
-| `LazyNode` | 0.21 ms (one line-end scan) | 135 ms (re-tokenizes) | — | — (source only) |
-| `FlatNode` | 26.4 ms | 2.98 ms | 3.0 ms | 54.9 MiB |
-| `Node` | 67.9 ms | 3.58 ms | 3.6 ms | 71.6 MiB |
-| EzXML (libxml2) | 47.6 ms | — | — | — |
+| `Cursor` | — (streams) | 22.9 ms (its one scan) | — | — (no DOM) |
+| `LazyNode` | 0.21 ms (one line-end scan) | 131 ms (re-tokenizes) | — | — (source only) |
+| `FlatNode` | 26.0 ms | 2.96 ms | 3.1 ms | 54.9 MiB |
+| `Node` | 67.6 ms | 3.36 ms | 3.6 ms | 71.6 MiB |
+| EzXML (libxml2) | 37.3 ms | — | — | — |
 
-Reading the table: `Cursor`'s walk *is* its parse — one tokenizing scan, nothing retained. `LazyNode` materializes nothing, so its open is one allocation-free scan of the source for line ends (the source is rewritten once when it has CR LF or lone CR line ends, or declares general entities in its internal subset) — after that it costs per node visited, which still makes it the pick for touching a *fraction* of a large document, and (as the walk column shows) the wrong tool for visiting all of it. `FlatNode` builds ~2.6× faster than `Node`, holds ~23% less memory, and its `parent`/`depth` are O(1) where `Node` searches from the root; whole-tree walks are close (`Node`'s exact-size children vectors keep its locality sharp), and pure value extraction is close too, flat store slightly faster (3.0 vs 3.6 ms — a per-value `SubString` view costs two integer stores). `FlatNode` builds ~1.8× faster than even libxml2, and `Node`'s gap to the C library is materialization, not scanning (see [PERFORMANCE-v0.4.md](PERFORMANCE-v0.4.md)).
+Reading the table: `Cursor`'s walk *is* its parse — one tokenizing scan, nothing retained. `LazyNode` materializes nothing, so its open is one allocation-free scan of the source for line ends (the source is rewritten once when it has CR LF or lone CR line ends, or declares general entities in its internal subset) — after that it costs per node visited, which still makes it the pick for touching a *fraction* of a large document, and (as the walk column shows) the wrong tool for visiting all of it. `FlatNode` builds ~2.6× faster than `Node`, holds ~23% less memory, and its `parent`/`depth` are O(1) where `Node` searches from the root; whole-tree walks are close (`Node`'s exact-size children vectors keep its locality sharp), and pure value extraction is close too, flat store slightly faster (3.1 vs 3.6 ms — a per-value `SubString` view costs two integer stores). `FlatNode` builds ~1.4× faster than even libxml2, and `Node`'s gap to the C library is materialization, not scanning (see [PERFORMANCE-v0.4.md](PERFORMANCE-v0.4.md)).
 
-_Measured 2026-08-31, Apple M5 (single-threaded), Julia 1.12.7, EzXML 1.2.3; BenchmarkTools medians._
+_Measured 2026-09-02, Apple M5 (single-threaded), Julia 1.12.7, EzXML 1.2.3; BenchmarkTools medians._
 
 <br>
 
@@ -359,12 +359,12 @@ What the constructions this document lacks cost, what each `wellformed` level ad
 
 | Benchmark | XML.jl | EzXML | LightXML | XMLDict |
 |---|--:|--:|--:|--:|
-| Parse, small | 12.9 µs | 13.4 µs | 11.3 µs | 116 µs |
-| Parse, medium | 67.7 ms | 46.7 ms | 37.6 ms | 369 ms |
-| Write, small | 6.01 µs | 5.62 µs | 59.7 µs | — |
-| Write, medium | 24.4 ms | 20.8 ms | 29.2 ms | — |
-| Collect tags, small | 0.37 µs | 1.07 µs | 1.82 µs | — |
-| Collect tags, medium | 4.80 ms | 10.5 ms | 13.1 ms | — |
+| Parse, small | 13.0 µs | 11.3 µs | 11.1 µs | 115 µs |
+| Parse, medium | 68.8 ms | 39.7 ms | 37.3 ms | 349 ms |
+| Write, small | 5.89 µs | 5.86 µs | 64.2 µs | — |
+| Write, medium | 24.9 ms | 21.6 ms | 32.1 ms | — |
+| Collect tags, small | 0.37 µs | 1.07 µs | 1.80 µs | — |
+| Collect tags, medium | 4.76 ms | 10.7 ms | 16.4 ms | — |
 
 EzXML and LightXML wrap libxml2 (C): faster on raw parse, slower on in-Julia traversal.
 Times include garbage collection; [PERFORMANCE](PERFORMANCE-v0.4.md) breaks each of its rows
@@ -372,4 +372,4 @@ into the stable GC-free work and the per-session GC share.
 
 For the per-access-pattern decomposition (streaming / partial reads / full DOM / stage breakdown) and the theory behind these numbers, see [**PERFORMANCE-v0.4.md**](PERFORMANCE-v0.4.md).
 
-_Measured 2026-08-31, Apple M5 (single-threaded), Julia 1.12.7; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3), XMLDict 0.4.2. Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl)._
+_Measured 2026-09-02, Apple M5 (single-threaded), Julia 1.12.7; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3), XMLDict 0.4.2. Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl)._
