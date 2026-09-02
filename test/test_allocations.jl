@@ -7,6 +7,7 @@
 
 using Test, XML
 using XML: unescape
+using Mmap, StringViews
 
 # The value-correctness checks always run (they double as compile warm-up for each
 # barrier); the `== 0` assertions are skipped under coverage, whose counters allocate
@@ -25,6 +26,7 @@ measure_get(x)       = @allocated _use(get(x, "r", nothing))
 measure_index(x)     = @allocated _use(x["r"])
 measure_haskey(x)    = @allocated haskey(x, "r")
 measure_tag(x)       = @allocated _use(tag(x))
+measure_unescape(x)  = @allocations _use(unescape(x))
 measure_value(x)     = @allocated _use(value(x))
 measure_simple(x)    = @allocated _use(simple_value(x))
 measure_is_simple(x) = @allocated _use(is_simple_value(x))
@@ -59,6 +61,30 @@ end
 
     @testset "the shared decode root is type-stable" begin
         @test only(Base.return_types(unescape, (SubString{String},))) === SubString{String}
+    end
+
+    # `unescape` on a value that carries a reference allocates once, the result string
+    # itself (#141). The ceiling is a count rather than bytes: the result's size is the value's.
+    @testset "unescape allocates once per decoded value" begin
+        str = "a &amp; b &#x41; &#65; &lt; c"
+        sub = SubString(str)
+        @test unescape(sub) == "a & b A A < c"
+        @test unescape(str) == "a & b A A < c"
+        measure_unescape(sub); measure_unescape(str)
+        if _NO_COVERAGE
+            @test measure_unescape(sub) <= 1
+            @test measure_unescape(str) <= 1
+        end
+        mktemp() do path, io
+            write(io, str)
+            close(io)
+            open(path) do f
+                sv = StringView(Mmap.mmap(f))
+                @test unescape(sv) == "a & b A A < c"
+                measure_unescape(sv)
+                _NO_COVERAGE && @test measure_unescape(sv) <= 1
+            end
+        end
     end
 
     @testset "guarded fixtures read correctly" begin

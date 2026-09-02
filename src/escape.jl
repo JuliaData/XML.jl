@@ -13,6 +13,116 @@ Escape the five XML predefined entities: `&` `<` `>` `'` `"`.
 """
 escape(x::AbstractString) = replace(x, ESCAPE_CHARS...)
 
+# The five names XML 1.0 §4.6 predefines, which need no declaration. `_reference_at` below
+# recognises the same five in the decode path; readers that check what a name refers to use
+# this tuple.
+const _PREDEFINED = ("amp", "lt", "gt", "apos", "quot")
+
+#------------------------------------------------------------------------------------# decode
+# `unescape` is one pass over the bytes of its argument into a scratch buffer kept per task,
+# then one `unsafe_string` copy of exactly the decoded bytes, so a value that carries a
+# reference costs one allocation, the result itself. Every decision falls on an ASCII byte —
+# `&`, `#`, `x`, a digit, a letter of the five names, `;` — which is a character boundary in
+# UTF-8, so the runs between references are copied byte for byte. What is emitted is never
+# re-read: a reference that resolves to `&` (`&#38;`) cannot start another one.
+
+@inline _decdigit(b::UInt8) = UInt8('0') <= b <= UInt8('9') ? b - UInt8('0') : 0xff
+@inline function _hexdigit(b::UInt8)
+    UInt8('0') <= b <= UInt8('9') && return b - UInt8('0')
+    UInt8('a') <= b <= UInt8('f') && return b - UInt8('a') + 0x0a
+    UInt8('A') <= b <= UInt8('F') && return b - UInt8('A') + 0x0a
+    return 0xff
+end
+
+# Classify the bytes at `i`, where `cu[i]` is `&`: `(cp, len)`, the code point the reference
+# denotes and its length in code units from the `&` to the `;`, or `len == 0` when the bytes
+# form no reference and the `&` is kept as written. Recognised: the five names, case-sensitive;
+# `&#` + decimal digits + `;`; `&#x` or `&#X` + hexadecimal digits + `;`. A numeric reference
+# that `isvalid(Char, cp)` refuses — a surrogate, or past U+10FFFF, digits overflowing included —
+# is no reference either.
+@inline function _reference_at(cu, i::Int, n::Int)
+    i + 2 <= n || return (0x00000000, 0)
+    @inbounds b = cu[i + 1]
+    if b == UInt8('#')
+        j = i + 2
+        @inbounds hex = cu[j] == UInt8('x') || cu[j] == UInt8('X')
+        hex && (j += 1)
+        cp = 0x00000000
+        ndigits = 0
+        over = false
+        while j <= n
+            @inbounds d = hex ? _hexdigit(cu[j]) : _decdigit(cu[j])
+            d == 0xff && break
+            ndigits += 1
+            if !over
+                cp = cp * (hex ? 0x10 : 0x0a) + d   # cp ≤ 0x10FFFF here, so no UInt32 overflow
+                over = cp > 0x10FFFF
+            end
+            j += 1
+        end
+        (ndigits > 0 && j <= n && @inbounds(cu[j]) == UInt8(';')) || return (0x00000000, 0)
+        (over || 0xD800 <= cp <= 0xDFFF) && return (0x00000000, 0)
+        return (cp, j - i + 1)
+    elseif b == UInt8('a')
+        if i + 4 <= n && @inbounds(cu[i + 2] == UInt8('m') && cu[i + 3] == UInt8('p') && cu[i + 4] == UInt8(';'))
+            return (UInt32('&'), 5)
+        elseif i + 5 <= n && @inbounds(cu[i + 2] == UInt8('p') && cu[i + 3] == UInt8('o') && cu[i + 4] == UInt8('s') && cu[i + 5] == UInt8(';'))
+            return (UInt32('\''), 6)
+        end
+    elseif b == UInt8('l')
+        i + 3 <= n && @inbounds(cu[i + 2] == UInt8('t') && cu[i + 3] == UInt8(';')) && return (UInt32('<'), 4)
+    elseif b == UInt8('g')
+        i + 3 <= n && @inbounds(cu[i + 2] == UInt8('t') && cu[i + 3] == UInt8(';')) && return (UInt32('>'), 4)
+    elseif b == UInt8('q')
+        i + 5 <= n && @inbounds(cu[i + 2] == UInt8('u') && cu[i + 3] == UInt8('o') && cu[i + 4] == UInt8('t') && cu[i + 5] == UInt8(';')) && return (UInt32('"'), 6)
+    end
+    return (0x00000000, 0)
+end
+
+# The scratch buffer lives in the task's local storage, so tasks never share it, and grows to
+# the input's length, which bounds the output. Past `_SCRATCH_CAP` a fresh vector serves
+# instead, so no task retains more than the cap; copying such a value dwarfs its allocation.
+const _SCRATCH_CAP = 1 << 16
+function _decode_scratch(n::Int)
+    n > _SCRATCH_CAP && return Vector{UInt8}(undef, n)
+    buf = get!(task_local_storage(), :xml_unescape_scratch) do
+        Vector{UInt8}(undef, 256)
+    end::Vector{UInt8}
+    length(buf) < n && resize!(buf, n)
+    return buf
+end
+
+# Decode `cu` into the scratch: `(buf, m, nrefs)`, the buffer, the decoded length and the
+# number of references resolved. The writes are bounds-checked; a `Char` holds its UTF-8
+# bytes in its `UInt32`, most significant first, so a reference is written from that word.
+function _decode_to_scratch!(cu, n::Int)
+    buf = _decode_scratch(n)
+    i = 1
+    k = 1
+    nrefs = 0
+    while i <= n
+        @inbounds b = cu[i]
+        if b == UInt8('&')
+            cp, len = _reference_at(cu, i, n)
+            if len != 0
+                c = Char(cp)
+                u = reinterpret(UInt32, c)
+                for s in 1:ncodeunits(c)
+                    buf[k] = (u >> (32 - 8s)) % UInt8
+                    k += 1
+                end
+                nrefs += 1
+                i += len
+                continue
+            end
+        end
+        buf[k] = b
+        k += 1
+        i += 1
+    end
+    return (buf, k - 1, nrefs)
+end
+
 # Replace a numeric character reference with its Unicode character.
 # Numeric character references encode characters by code point: decimal (&#233; → é) or hex (&#xE9; → é).
 function _unescape_charref(ref::AbstractString)
@@ -22,17 +132,9 @@ function _unescape_charref(ref::AbstractString)
     !isnothing(cp) && isvalid(Char, cp) ? string(Char(cp)) : ref
 end
 
-# One regex matching any supported reference: the five predefined entities plus a decimal
-# or hex numeric character reference. `unescape` applies it in a SINGLE `replace` pass, so a
-# reference that resolves to '&' (e.g. `&#38;`) is never re-scanned as the start of a new
-# entity — `replace` substitutes left-to-right over the original string and never re-reads
-# what it emitted.
-# The five names XML 1.0 §4.6 predefines, which need no declaration. `_ENTITY_RE` below
-# encodes the same set for the decode path; readers that check what a name refers to use this.
-const _PREDEFINED = ("amp", "lt", "gt", "apos", "quot")
-
-const _ENTITY_RE = r"&(?:amp|lt|gt|apos|quot|#[0-9]+|#[xX][0-9a-fA-F]+);"
-
+# Resolver for a regular-expression match, used by `_resolve_charrefs` in `entities.jl` on
+# an entity's replacement text, once per declaration. `unescape` itself decodes through
+# `_reference_at`, with the same outcomes.
 function _unescape_entity(m::AbstractString)
     m == "&amp;"  && return "&"
     m == "&lt;"   && return "<"
@@ -48,15 +150,18 @@ end
 
 Unescape XML entities in `x`: the five predefined entities (`&amp;` `&lt;` `&gt;` `&apos;`
 `&quot;`) and numeric character references (`&#123;`, `&#xAB;`). Each reference is processed
-exactly once (no double-unescaping).
+exactly once (no double-unescaping); an `&` that starts no reference is kept as written.
 
-When `x` is a `SubString{String}` containing no `&`, the input is returned unchanged with
-no allocation — the common case for typical XML attribute and text content.
+A `SubString{String}` that carries no reference is returned unchanged with no allocation —
+the common case for typical XML attribute and text content. A value that carries one costs
+one allocation, the decoded string itself.
 """
 function unescape(x::AbstractString)
-    s = string(x)
-    occursin('&', s) || return s
-    replace(s, _ENTITY_RE => _unescape_entity)
+    occursin('&', x) || return string(x)
+    cu = codeunits(x)
+    buf, m, nrefs = _decode_to_scratch!(cu, length(cu))
+    nrefs == 0 && return string(x)
+    return GC.@preserve buf unsafe_string(pointer(buf), m)
 end
 
 # XML 1.0 §3.3.3 attribute-value normalization, applied to the RAW value slice BEFORE
@@ -200,12 +305,13 @@ function _as_substring(s::AbstractString)
     SubString(String(bytes))
 end
 
-# The rewrite result is wrapped back into `SubString` so both paths return the same
-# concrete type: every reader's decode funnel calls this on its hot path, and a
-# `Union{SubString{String}, String}` return would heap-box the dominant clean-path
-# SubString at every non-inlined call site — one 32-byte box per read (#98, #105).
+# Both branches return the argument's own type: every reader's decode funnel calls this on
+# its hot path, and a `Union{SubString{String}, String}` return would heap-box the dominant
+# clean-path SubString at every non-inlined call site — one 32-byte box per read (#98, #105).
 function unescape(x::SubString{String})
     occursin('&', x) || return x
-    SubString(replace(String(x), _ENTITY_RE => _unescape_entity))
+    cu = codeunits(x)
+    buf, m, nrefs = _decode_to_scratch!(cu, length(cu))
+    nrefs == 0 && return x
+    return SubString(GC.@preserve buf unsafe_string(pointer(buf), m))
 end
-
