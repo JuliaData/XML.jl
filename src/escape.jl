@@ -123,6 +123,20 @@ function _decode_to_scratch!(cu, n::Int)
     return (buf, k - 1, nrefs)
 end
 
+# The result's allocation in `unsafe_string` is a point where a collection, and then the
+# task's pending finalizers, can run: a finalizer that decoded a value of its own would reuse
+# this task's scratch under the copy. Finalizers are held off across the copy, as Base does
+# around its locks, and restored whatever happens. The copy is the path's one allocation,
+# so the guard stays off the decode loop.
+@inline function _take_string(buf::Vector{UInt8}, m::Int)
+    GC.enable_finalizers(false)
+    try
+        return GC.@preserve buf unsafe_string(pointer(buf), m)
+    finally
+        GC.enable_finalizers(true)
+    end
+end
+
 # Replace a numeric character reference with its Unicode character.
 # Numeric character references encode characters by code point: decimal (&#233; → é) or hex (&#xE9; → é).
 function _unescape_charref(ref::AbstractString)
@@ -160,8 +174,7 @@ function unescape(x::AbstractString)
     occursin('&', x) || return string(x)
     cu = codeunits(x)
     buf, m, nrefs = _decode_to_scratch!(cu, length(cu))
-    nrefs == 0 && return string(x)
-    return GC.@preserve buf unsafe_string(pointer(buf), m)
+    return nrefs == 0 ? string(x) : _take_string(buf, m)
 end
 
 # XML 1.0 §3.3.3 attribute-value normalization, applied to the RAW value slice BEFORE
@@ -312,6 +325,5 @@ function unescape(x::SubString{String})
     occursin('&', x) || return x
     cu = codeunits(x)
     buf, m, nrefs = _decode_to_scratch!(cu, length(cu))
-    nrefs == 0 && return x
-    return SubString(GC.@preserve buf unsafe_string(pointer(buf), m))
+    return nrefs == 0 ? x : SubString(_take_string(buf, m))
 end
