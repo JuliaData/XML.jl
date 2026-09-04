@@ -69,6 +69,105 @@ Test.push_testset(_ROOT_TS)
         @test s isa SubString
         @test escape(s) == "&lt;y&gt;"
     end
+
+    @testset "reference grammar: what decodes and what stays verbatim" begin
+        # The five names are matched case-sensitively; every other `&` sequence is left as
+        # written, including a name without its `;` and a `#` with no digits behind it.
+        @test unescape("&AMP;") == "&AMP;"
+        @test unescape("&amp") == "&amp"
+        @test unescape("&") == "&"
+        @test unescape("a &") == "a &"
+        @test unescape("&;") == "&;"
+        @test unescape("&#;") == "&#;"
+        @test unescape("&#x;") == "&#x;"
+        @test unescape("&#x1G;") == "&#x1G;"
+        @test unescape("&# 65;") == "&# 65;"
+        @test unescape("&&amp;") == "&&"
+        @test unescape("&amp;&amp;") == "&&"
+        @test unescape("&amp;x") == "&x"
+        @test unescape("x&amp;") == "x&"
+        # Code points: leading zeros, both hex cases, the top of the range. Past the range,
+        # in the surrogate block, or past `UInt32`, the reference stays verbatim.
+        @test unescape("&#0000065;") == "A"
+        @test unescape("&#x0000041;") == "A"
+        @test unescape("&#x10FFFF;") == "\U10FFFF"
+        @test unescape("&#1114111;") == "\U10FFFF"
+        @test unescape("&#x110000;") == "&#x110000;"
+        @test unescape("&#1114112;") == "&#1114112;"
+        @test unescape("&#xD800;") == "&#xD800;"
+        @test unescape("&#xDFFF;") == "&#xDFFF;"
+        @test unescape("&#55296;") == "&#55296;"
+        @test unescape("&#4294967296;") == "&#4294967296;"
+        @test unescape("&#99999999999999999999;") == "&#99999999999999999999;"
+        # `isvalid(Char, cp)` accepts NUL and the non-characters, so the decoder emits them;
+        # rejecting them is `:strict`'s reference check, which runs before decoding.
+        @test unescape("&#0;") == "\0"
+        @test unescape("&#xFFFE;") == "￾"
+        @test unescape("&#xFFFF;") == "￿"
+    end
+
+    @testset "multibyte text around references" begin
+        @test unescape("é &amp; 中 &#x1f600; 😀") == "é & 中 😀 😀"
+        @test unescape("&lt;é&gt;") == "<é>"
+        @test unescape("😀&#233;😀") == "😀é😀"
+        @test unescape(SubString("x😀&amp;😀y", 2, 11)) == "😀&😀"
+    end
+
+    @testset "the input type decides the return type" begin
+        @test unescape("a &amp; b") isa String
+        @test unescape(SubString("a &amp; b")) isa SubString{String}
+        @test unescape(SubString("a &amp; b", 3, 7)) == "&"
+        s = SubString("plain, no ampersand")
+        @test unescape(s) === s
+        mktemp() do path, io
+            write(io, "a &amp; b &#x41;")
+            close(io)
+            open(path) do f
+                sv = StringView(Mmap.mmap(f))
+                @test unescape(sv) == "a & b A"
+                @test unescape(sv) isa String
+                @test unescape(SubString(sv, 3, 7)) == "&"
+            end
+        end
+    end
+
+    @testset "every short string decodes as the regular-expression reference does" begin
+        # The reference is the v0.4.6 decoder, kept here as the specification: one `replace`
+        # pass with a single pattern, left to right, never re-reading what it emitted.
+        ref_re = r"&(?:amp|lt|gt|apos|quot|#[0-9]+|#[xX][0-9a-fA-F]+);"
+        function ref_entity(m)
+            m == "&amp;" && return "&"
+            m == "&lt;" && return "<"
+            m == "&gt;" && return ">"
+            m == "&apos;" && return "'"
+            m == "&quot;" && return "\""
+            is_hex = length(m) > 3 && m[3] in ('x', 'X')
+            cp = tryparse(UInt32, SubString(m, is_hex ? 4 : 3, length(m) - 1); base = is_hex ? 16 : 10)
+            !isnothing(cp) && isvalid(Char, cp) ? string(Char(cp)) : m
+        end
+        ref_unescape(s) = replace(s, ref_re => ref_entity)
+        # Every string of one to five tokens over an alphabet that can spell each reference
+        # form, a broken one, and multibyte text: 579,194 strings, both methods.
+        tokens = ("a", "&", "#", "x", "1", "F", ";", "amp", "lt", "quot", "é", "😀", "0", "9")
+        mismatches = String[]
+        for len in 1:5, idx in Iterators.product(ntuple(_ -> eachindex(tokens), len)...)
+            s = join(tokens[i] for i in idx)
+            r = ref_unescape(s)
+            (unescape(s) == r && unescape(SubString(s)) == r) || push!(mismatches, s)
+            length(mismatches) >= 10 && break
+        end
+        @test mismatches == String[]
+    end
+
+    @testset "the scratch buffer is per task, and a value past its cap decodes too" begin
+        vals = ["a &amp; b &#x41; " * "x"^k for k in 0:63]
+        expect = ["a & b A " * "x"^k for k in 0:63]
+        results = fetch.([Threads.@spawn map(v -> unescape(SubString(v)), vals) for _ in 1:8])
+        @test all(r == expect for r in results)
+        big = "&amp;" * "y"^(XML._SCRATCH_CAP + 1)
+        @test unescape(SubString(big)) == "&" * "y"^(XML._SCRATCH_CAP + 1)
+        @test unescape(big) == "&" * "y"^(XML._SCRATCH_CAP + 1)
+    end
 end
 
 #==============================================================================#

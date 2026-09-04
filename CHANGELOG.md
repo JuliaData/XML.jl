@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A memory-mapped document is no longer copied into the heap when its lines end in CR** ([#135](https://github.com/JuliaData/XML.jl/issues/135)): the entry rewrote it whatever string type held it, so mapping a Windows-written file asked for as much heap as the file. Only a `String` document is rewritten now; any other source has each value normalized as it is read. Opening the mapped 14 MB document goes from 51.6 ms and 13.8 MiB to 24 ns and no copy. `sourcetext` reports the bytes of the document the reader holds, so a mapped document shows the file's own line ends.
 
+- **`unescape` allocated about six times per value carrying a reference** ([#141](https://github.com/JuliaData/XML.jl/issues/141)): it copied its argument to a `String`, ran a regular-expression `replace` and built a string per character reference, in every reader. It now decodes in one pass over the bytes and allocates once, the result; a value whose `&` starts no reference is returned as it is. On the escaped twin of the benchmarks, a `Cursor` pass drops from 269,015 to 46,584 allocations and from 38.2 to 30.7 ms; on a value of a spreadsheet cell's shape, from 171 to 34 ns per call.
+
 ## [0.4.6] - 2026-08-17
 
 ### Fixed

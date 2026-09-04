@@ -2,84 +2,84 @@
 
 ```
 Parse (small)
-	XML.jl              0.013 ms
-	XML.jl (SS)        0.0119 ms
-	EzXML              0.0113 ms  (XML.jl 15.5% slower)
-	LightXML           0.0111 ms  (XML.jl 17.7% slower)
-	XMLDict             0.115 ms  (XML.jl 88.7% faster)
+	XML.jl             0.0129 ms
+	XML.jl (SS)        0.0118 ms
+	EzXML               0.012 ms  (XML.jl 8.0% slower)
+	LightXML           0.0118 ms  (XML.jl 9.5% slower)
+	XMLDict             0.114 ms  (XML.jl 88.6% faster)
 
 Parse (medium)
-	XML.jl               68.8 ms
-	XML.jl (SS)          61.3 ms
-	EzXML                39.7 ms  (XML.jl 73.3% slower)
-	LightXML             37.3 ms  (XML.jl 84.4% slower)
-	XMLDict             349.0 ms  (XML.jl 80.3% faster)
+	XML.jl               69.2 ms
+	XML.jl (SS)          60.9 ms
+	EzXML                37.1 ms  (XML.jl 86.3% slower)
+	LightXML             37.8 ms  (XML.jl 82.9% slower)
+	XMLDict             354.0 ms  (XML.jl 80.5% faster)
 
 Write (small)
-	XML.jl            0.00589 ms
-	EzXML             0.00586 ms  (~same)
-	LightXML           0.0642 ms  (XML.jl 90.8% faster)
+	XML.jl            0.00585 ms
+	EzXML             0.00578 ms  (~same)
+	LightXML           0.0588 ms  (XML.jl 90.0% faster)
 
 Write (medium)
-	XML.jl               24.9 ms
-	EzXML                21.6 ms  (XML.jl 15.3% slower)
-	LightXML             32.1 ms  (XML.jl 22.3% faster)
+	XML.jl               25.4 ms
+	EzXML                21.0 ms  (XML.jl 20.8% slower)
+	LightXML             29.4 ms  (XML.jl 13.7% faster)
 
 Read file
-	XML.jl               69.8 ms
-	EzXML                40.0 ms  (XML.jl 74.3% slower)
-	LightXML             39.1 ms  (XML.jl 78.3% slower)
+	XML.jl               68.9 ms
+	EzXML                39.9 ms  (XML.jl 72.5% slower)
+	LightXML             40.0 ms  (XML.jl 72.0% slower)
 
 Collect tags (small)
-	XML.jl           0.000371 ms
-	EzXML             0.00107 ms  (XML.jl 65.2% faster)
-	LightXML           0.0018 ms  (XML.jl 79.4% faster)
+	XML.jl            0.00037 ms
+	EzXML             0.00108 ms  (XML.jl 65.6% faster)
+	LightXML          0.00182 ms  (XML.jl 79.6% faster)
 
 Collect tags (medium)
-	XML.jl               4.76 ms
-	EzXML                10.7 ms  (XML.jl 55.7% faster)
-	LightXML             16.4 ms  (XML.jl 71.0% faster)
+	XML.jl               4.77 ms
+	EzXML                10.4 ms  (XML.jl 54.1% faster)
+	LightXML             13.7 ms  (XML.jl 65.3% faster)
 
 Parse SST (LazyNode)
-	XML.jl             0.0656 ms
-	Node (for ref)       13.7 ms  (XML.jl 99.5% faster)
+	XML.jl             0.0382 ms
+	Node (for ref)       9.93 ms  (XML.jl 99.6% faster)
 
 Parse worksheet (LazyNode)
-	XML.jl             0.0389 ms
-	Node (for ref)       27.0 ms  (XML.jl 99.9% faster)
+	XML.jl             0.0279 ms
+	Node (for ref)       17.5 ms  (XML.jl 99.8% faster)
 
 SST: write each <si>
-	LazyNode + write (zero-copy)     24.0 ms
-	LazyNode + write (normalize)     64.8 ms
-	Node (for ref)       6.99 ms
+	LazyNode + write (zero-copy)     19.4 ms
+	LazyNode + write (normalize)     51.6 ms
+	Node (for ref)       5.44 ms
 
 SST: unformatted text
-	LazyNode + is_simple_value     23.9 ms
-	Node (for ref)        3.1 ms
+	LazyNode + is_simple_value     19.4 ms
+	Node (for ref)       2.23 ms
 
 Worksheet: collect rows
-	children() (fresh Vector each call)     25.4 ms
-	children!(buf, n) (reused buffer)     26.5 ms
+	children() (fresh Vector each call)     22.8 ms
+	children!(buf, n) (reused buffer)     22.8 ms
 
 Worksheet: attribute scan
-	eachattribute        22.5 ms
-	attributes() (materialize dict)     23.1 ms
+	eachattribute        22.7 ms
+	attributes() (materialize dict)     22.8 ms
 
 Worksheet: single attr fetch
-	get(c, "r", "")      23.2 ms
-	attributes(c)["r"]     22.3 ms
+	get(c, "r", "")      22.8 ms
+	attributes(c)["r"]     22.7 ms
 
 Worksheet: <v> value
-	is_simple_value      24.1 ms
-	is_simple + simple_value     24.1 ms
+	is_simple_value      22.6 ms
+	is_simple + simple_value     22.9 ms
 
 XLSX sst_load! (end-to-end)
-	LazyNode             29.3 ms
-	LazyNode (entity-heavy)     27.2 ms
+	LazyNode             27.3 ms
+	LazyNode (entity-heavy)     19.7 ms
 
 XLSX cell read (end-to-end)
-	numeric ws           22.7 ms
-	string ws            20.5 ms
+	numeric ws           22.8 ms
+	string ws            20.7 ms
 
 ```
 

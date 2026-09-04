@@ -359,12 +359,12 @@ What the constructions this document lacks cost, what each `wellformed` level ad
 
 | Benchmark | XML.jl | EzXML | LightXML | XMLDict |
 |---|--:|--:|--:|--:|
-| Parse, small | 13.0 µs | 11.3 µs | 11.1 µs | 115 µs |
-| Parse, medium | 68.8 ms | 39.7 ms | 37.3 ms | 349 ms |
-| Write, small | 5.89 µs | 5.86 µs | 64.2 µs | — |
-| Write, medium | 24.9 ms | 21.6 ms | 32.1 ms | — |
-| Collect tags, small | 0.37 µs | 1.07 µs | 1.80 µs | — |
-| Collect tags, medium | 4.76 ms | 10.7 ms | 16.4 ms | — |
+| Parse, small | 12.9 µs | 12.0 µs | 11.8 µs | 114 µs |
+| Parse, medium | 69.2 ms | 37.1 ms | 37.8 ms | 354 ms |
+| Write, small | 5.85 µs | 5.78 µs | 58.8 µs | — |
+| Write, medium | 25.4 ms | 21.0 ms | 29.4 ms | — |
+| Collect tags, small | 0.37 µs | 1.08 µs | 1.82 µs | — |
+| Collect tags, medium | 4.77 ms | 10.4 ms | 13.7 ms | — |
 
 EzXML and LightXML wrap libxml2 (C): faster on raw parse, slower on in-Julia traversal.
 Times include garbage collection; [PERFORMANCE](PERFORMANCE-v0.4.md) breaks each of its rows
@@ -372,4 +372,4 @@ into the stable GC-free work and the per-session GC share.
 
 For the per-access-pattern decomposition (streaming / partial reads / full DOM / stage breakdown) and the theory behind these numbers, see [**PERFORMANCE-v0.4.md**](PERFORMANCE-v0.4.md).
 
-_Measured 2026-09-02, Apple M5 (single-threaded), Julia 1.12.7; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3), XMLDict 0.4.2. Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl)._
+_Measured 2026-09-04, Apple M5 (single-threaded), Julia 1.12.7; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3), XMLDict 0.4.2. Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl)._
