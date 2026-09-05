@@ -13,10 +13,11 @@ Escape the five XML predefined entities: `&` `<` `>` `'` `"`.
 """
 escape(x::AbstractString) = replace(x, ESCAPE_CHARS...)
 
-# The five names XML 1.0 §4.6 predefines, which need no declaration. `_reference_at` below
-# recognises the same five in the decode path; readers that check what a name refers to use
-# this tuple.
+# The five names XML 1.0 §4.6 predefines, which need no declaration, and the characters they
+# denote, index for index. `_predefined_at` below reads a name against them, for the decoder
+# and for the `:strict` reference check alike; the entity reader tests membership directly.
 const _PREDEFINED = ("amp", "lt", "gt", "apos", "quot")
+const _PREDEFINED_CHARS = ('&', '<', '>', '\'', '"')
 
 #------------------------------------------------------------------------------------# decode
 # `unescape` is one pass over the bytes of its argument into a scratch buffer kept per task,
@@ -26,7 +27,6 @@ const _PREDEFINED = ("amp", "lt", "gt", "apos", "quot")
 # UTF-8, so the runs between references are copied byte for byte. What is emitted is never
 # re-read: a reference that resolves to `&` (`&#38;`) cannot start another one.
 
-@inline _decdigit(b::UInt8) = UInt8('0') <= b <= UInt8('9') ? b - UInt8('0') : 0xff
 @inline function _hexdigit(b::UInt8)
     UInt8('0') <= b <= UInt8('9') && return b - UInt8('0')
     UInt8('a') <= b <= UInt8('f') && return b - UInt8('a') + 0x0a
@@ -34,49 +34,88 @@ const _PREDEFINED = ("amp", "lt", "gt", "apos", "quot")
     return 0xff
 end
 
+# The reference lexer, shared by the decoder below and by the `:strict` reference check in
+# parse.jl. Each helper reads the bytes of one form from a `&` and reports where the form ends
+# and what it denotes; what a caller does with a form it cannot resolve — keep the `&` as
+# written, or reject the document — is the caller's. Every byte a helper decides on is ASCII,
+# hence a character boundary in UTF-8.
+
+# The character reference whose `&#` sits at `i`: `(j, cp)`, the index of its `;` and the code
+# point its digit run denotes, or `j == 0` when the bytes form no reference. `x` or `X` selects
+# the hexadecimal form. The run is read on the hexadecimal alphabet in both forms, and a run the
+# form cannot parse — a letter in the decimal form, a value past U+10FFFF — comes back as
+# `typemax(UInt32)`, outside every character range.
+@inline function _charref_at(cu, i::Int, n::Int)
+    j = i + 2
+    j <= n || return (0, 0x00000000)
+    @inbounds hex = cu[j] == UInt8('x') || cu[j] == UInt8('X')
+    hex && (j += 1)
+    start = j
+    cp = 0x00000000
+    bad = false
+    while j <= n
+        @inbounds d = _hexdigit(cu[j])
+        d == 0xff && break
+        bad |= !hex && d >= 0x0a
+        if !bad
+            cp = cp * (hex ? 0x10 : 0x0a) + d   # cp ≤ 0x10FFFF here, so no UInt32 overflow
+            bad = cp > 0x10FFFF
+        end
+        j += 1
+    end
+    (j > start && j <= n && @inbounds(cu[j]) == UInt8(';')) || return (0, 0x00000000)
+    return (j, bad ? typemax(UInt32) : cp)
+end
+
+# The named reference whose name would start at `a`: the index of its `;`, or 0 when the bytes
+# form no reference. The name is read on the ASCII subset of the Name production (XML 1.0 §2.3).
+@inline function _name_end(cu, a::Int, n::Int)
+    (a <= n && _is_ascii_name_start(@inbounds(cu[a]))) || return 0
+    j = a + 1
+    while j <= n && _is_ascii_name_char(@inbounds(cu[j]))
+        j += 1
+    end
+    return (j <= n && @inbounds(cu[j]) == UInt8(';')) ? j : 0
+end
+@inline _is_ascii_name_start(b::UInt8) =
+    (UInt8('a') <= b <= UInt8('z')) || (UInt8('A') <= b <= UInt8('Z')) || b == UInt8('_') || b == UInt8(':')
+@inline _is_ascii_name_char(b::UInt8) =
+    _is_ascii_name_start(b) || (UInt8('0') <= b <= UInt8('9')) || b == UInt8('.') || b == UInt8('-')
+
+# The predefined reference at `i`, where `cu[i]` is `&`: `(cp, len)`, the character it denotes
+# and its length in code units from the `&` to the `;`, or `len == 0` when the bytes spell none
+# of the five names followed by `;`. The names are taken as byte tuples, so the recursion over
+# them unrolls at compile time and each comparison reads an immediate.
+const _PREDEFINED_BYTES = map(name -> Tuple(codeunits(name)), _PREDEFINED)
+@inline _predefined_at(cu, i::Int, n::Int) = _predefined_at(cu, i, n, _PREDEFINED_BYTES, _PREDEFINED_CHARS)
+@inline _predefined_at(cu, i::Int, n::Int, ::Tuple{}, ::Tuple{}) = (0x00000000, 0)
+@inline function _predefined_at(cu, i::Int, n::Int, names::Tuple, chars::Tuple)
+    name = first(names)
+    len = length(name) + 2   # the `&`, the name, the `;`
+    if i + len - 1 <= n && _spells(cu, i + 1, name) && @inbounds(cu[i + len - 1]) == UInt8(';')
+        return (UInt32(first(chars)), len)
+    end
+    return _predefined_at(cu, i, n, Base.tail(names), Base.tail(chars))
+end
+@inline function _spells(cu, a::Int, name::NTuple{N, UInt8}) where {N}
+    for k in 1:N
+        @inbounds cu[a + k - 1] == name[k] || return false
+    end
+    return true
+end
+
 # Classify the bytes at `i`, where `cu[i]` is `&`: `(cp, len)`, the code point the reference
 # denotes and its length in code units from the `&` to the `;`, or `len == 0` when the bytes
-# form no reference and the `&` is kept as written. Recognised: the five names, case-sensitive;
-# `&#` + decimal digits + `;`; `&#x` or `&#X` + hexadecimal digits + `;`. A numeric reference
-# that `isvalid(Char, cp)` refuses — a surrogate, or past U+10FFFF, digits overflowing included —
-# is no reference either.
+# form no reference the decoder resolves, so that the `&` is kept as written: a `&` that starts
+# neither form, a name that is not one of the five, a numeric reference whose value
+# `isvalid(Char, cp)` refuses — a surrogate, or past U+10FFFF, digits overflowing included.
 @inline function _reference_at(cu, i::Int, n::Int)
-    i + 2 <= n || return (0x00000000, 0)
-    @inbounds b = cu[i + 1]
-    if b == UInt8('#')
-        j = i + 2
-        @inbounds hex = cu[j] == UInt8('x') || cu[j] == UInt8('X')
-        hex && (j += 1)
-        cp = 0x00000000
-        ndigits = 0
-        over = false
-        while j <= n
-            @inbounds d = hex ? _hexdigit(cu[j]) : _decdigit(cu[j])
-            d == 0xff && break
-            ndigits += 1
-            if !over
-                cp = cp * (hex ? 0x10 : 0x0a) + d   # cp ≤ 0x10FFFF here, so no UInt32 overflow
-                over = cp > 0x10FFFF
-            end
-            j += 1
-        end
-        (ndigits > 0 && j <= n && @inbounds(cu[j]) == UInt8(';')) || return (0x00000000, 0)
-        (over || 0xD800 <= cp <= 0xDFFF) && return (0x00000000, 0)
-        return (cp, j - i + 1)
-    elseif b == UInt8('a')
-        if i + 4 <= n && @inbounds(cu[i + 2] == UInt8('m') && cu[i + 3] == UInt8('p') && cu[i + 4] == UInt8(';'))
-            return (UInt32('&'), 5)
-        elseif i + 5 <= n && @inbounds(cu[i + 2] == UInt8('p') && cu[i + 3] == UInt8('o') && cu[i + 4] == UInt8('s') && cu[i + 5] == UInt8(';'))
-            return (UInt32('\''), 6)
-        end
-    elseif b == UInt8('l')
-        i + 3 <= n && @inbounds(cu[i + 2] == UInt8('t') && cu[i + 3] == UInt8(';')) && return (UInt32('<'), 4)
-    elseif b == UInt8('g')
-        i + 3 <= n && @inbounds(cu[i + 2] == UInt8('t') && cu[i + 3] == UInt8(';')) && return (UInt32('>'), 4)
-    elseif b == UInt8('q')
-        i + 5 <= n && @inbounds(cu[i + 2] == UInt8('u') && cu[i + 3] == UInt8('o') && cu[i + 4] == UInt8('t') && cu[i + 5] == UInt8(';')) && return (UInt32('"'), 6)
+    if i + 1 <= n && @inbounds(cu[i + 1]) == UInt8('#')
+        j, cp = _charref_at(cu, i, n)
+        j > 0 && isvalid(Char, cp) && return (cp, j - i + 1)
+        return (0x00000000, 0)
     end
-    return (0x00000000, 0)
+    return _predefined_at(cu, i, n)
 end
 
 # The scratch buffer lives in the task's local storage, so tasks never share it, and grows to

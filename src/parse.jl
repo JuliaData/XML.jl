@@ -159,69 +159,15 @@ function _check_refs_strict(s::AbstractString, names::Bool)
         else
             j = _name_end(cu, i + 1, n)
             if j > 0
-                names && !_is_predefined(cu, i + 1, j - 1) &&
-                    error("not well-formed: reference to undeclared entity \"", String(cu[i:j]), "\" (XML 1.0 §4.1)")
+                if names
+                    _, len = _predefined_at(cu, i, n)
+                    len == 0 && error("not well-formed: reference to undeclared entity \"", String(cu[i:j]), "\" (XML 1.0 §4.1)")
+                end
                 next = j + 1
             end
         end
         i = findnext(==(UInt8('&')), cu, next)   # next ≤ n + 1, where findnext answers `nothing`
     end
-end
-
-# The character reference whose `&#` sits at `i`: `(j, cp)`, the index of its `;` and the code
-# point its digit run denotes, or `j == 0` when the bytes form no reference. `x` or `X` selects
-# the hexadecimal form. The run is read on the hexadecimal alphabet in both forms, and a run the
-# form cannot parse — a letter in the decimal form, a value past U+10FFFF — comes back as
-# `typemax(UInt32)`, outside every character range.
-@inline function _charref_at(cu, i::Int, n::Int)
-    j = i + 2
-    j <= n || return (0, 0x00000000)
-    @inbounds hex = cu[j] == UInt8('x') || cu[j] == UInt8('X')
-    hex && (j += 1)
-    start = j
-    cp = 0x00000000
-    bad = false
-    while j <= n
-        @inbounds d = _hexdigit(cu[j])
-        d == 0xff && break
-        bad |= !hex && d >= 0x0a
-        if !bad
-            cp = cp * (hex ? 0x10 : 0x0a) + d   # cp ≤ 0x10FFFF here, so no UInt32 overflow
-            bad = cp > 0x10FFFF
-        end
-        j += 1
-    end
-    (j > start && j <= n && @inbounds(cu[j]) == UInt8(';')) || return (0, 0x00000000)
-    return (j, bad ? typemax(UInt32) : cp)
-end
-
-# The named reference whose name would start at `a`: the index of its `;`, or 0 when the bytes
-# form no reference. The name is read on the ASCII subset of the Name production (XML 1.0 §2.3).
-@inline function _name_end(cu, a::Int, n::Int)
-    (a <= n && _is_ascii_name_start(@inbounds(cu[a]))) || return 0
-    j = a + 1
-    while j <= n && _is_ascii_name_char(@inbounds(cu[j]))
-        j += 1
-    end
-    return (j <= n && @inbounds(cu[j]) == UInt8(';')) ? j : 0
-end
-@inline _is_ascii_name_start(b::UInt8) =
-    (UInt8('a') <= b <= UInt8('z')) || (UInt8('A') <= b <= UInt8('Z')) || b == UInt8('_') || b == UInt8(':')
-@inline _is_ascii_name_char(b::UInt8) =
-    _is_ascii_name_start(b) || (UInt8('0') <= b <= UInt8('9')) || b == UInt8('.') || b == UInt8('-')
-
-# Whether the bytes `a:b` spell one of the five predefined names, compared byte for byte.
-function _is_predefined(cu, a::Int, b::Int)
-    for name in _PREDEFINED
-        len = ncodeunits(name)
-        len == b - a + 1 || continue
-        k = 1
-        while k <= len && @inbounds(cu[a + k - 1]) == codeunit(name, k)
-            k += 1
-        end
-        k > len && return true
-    end
-    return false
 end
 
 # Token-stream → Node{S} builder. `convert_text` is `unescape` for parsed content (with entity
