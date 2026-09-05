@@ -290,6 +290,15 @@ end
         @test_throws Exception parse("""<e a="&#0;"/>""", Node; wellformed=:strict)        # in an attribute too
         # legal refs still parse under :strict
         @test simple_value(parse("<root>&#x41;&#x9;</root>", Node; wellformed=:strict)[1]) == "A\t"
+        # The edges of the range, both forms, leading zeros, and the digit run the check reads: the
+        # run is taken on the hexadecimal alphabet in both forms, so a decimal form carrying a letter
+        # is illegal, as a value past the range is; a `&#` that no digit run and `;` complete starts
+        # no reference and is left as written.
+        @test nodetype(parse("<root>&#x10FFFF;&#xE000;&#xFFFD;&#x20;&#X41;&#0000000065;</root>", Node; wellformed=:strict)) == Document
+        for ref in ("&#x110000;", "&#xFFFE;", "&#xDFFF;", "&#31;", "&#12a;", "&#99999999999;")
+            @test_throws "illegal character reference \"$ref\"" parse("<root>$ref</root>", Node; wellformed=:strict)
+        end
+        @test nodetype(parse("<root>&#; &#x; &#65 &#x41x; &#xx41;</root>", Node; wellformed=:strict)) == Document
 
         # The RAW (literal) form of an illegal character is rejected too, not only the reference
         # form — in text, attributes, comments, CDATA, and PI content.
@@ -437,6 +446,12 @@ end
         # the five predefined names and character references name no declaration to look up
         @test nodetype(parse("<a>&amp;&lt;&gt;&apos;&quot;</a>", Node; wellformed=:strict)) == Document
         @test nodetype(parse("<a>&#65;&#x42;</a>", Node; wellformed=:strict)) == Document
+        # The name is read on the ASCII subset of the Name production, case-sensitive, up to its `;`:
+        # a `&` that starts no such name is left as written, and a name that is not one of the five
+        # is named by the message.
+        @test_throws "reference to undeclared entity \"&AMP;\"" parse("<a>&AMP;</a>", Node; wellformed=:strict)
+        @test_throws "reference to undeclared entity \"&_x.y-z:1;\"" parse("<a>&_x.y-z:1;</a>", Node; wellformed=:strict)
+        @test nodetype(parse("<a>&; & &1a; &-a; &é; &amp &&amp;</a>", Node; wellformed=:strict)) == Document
         # a declared entity resolves, so nothing of it reaches the check
         @test nodetype(parse("<!DOCTYPE a [<!ENTITY e \"x\">]><a>&e;</a>", Node; wellformed=:strict)) == Document
         # The constraint binds only where the document carries every declaration that could name
@@ -450,6 +465,41 @@ end
         # below :strict the reference stays literal — the graceful degradation
         @test value(children(parse("<a>&foo;</a>", Node)[end])[1]) == "&foo;"
         @test value(children(parse("<a>&foo;</a>", Node; wellformed=:lenient)[end])[1]) == "&foo;"
+    end
+
+    @testset "every short span gets the verdict and message of the pattern-based check" begin
+        # The reference is the check as it read with a pattern, kept here as the specification:
+        # one `eachmatch` with three groups, a `tryparse` of the digit run against the character
+        # range, a membership test of the name against the five predefined ones. Its verdict —
+        # accepted, or the message it raises — is what the byte scan reproduces, `names` on and off.
+        function pattern_check(s, names)
+            for m in eachmatch(r"&(?:#([xX]?)([0-9a-fA-F]+)|([A-Za-z_:][A-Za-z0-9._:-]*));", s)
+                if m[3] === nothing
+                    cp = tryparse(UInt32, m[2]; base = isempty(m[1]) ? 10 : 16)
+                    (cp === nothing || !XML._is_xml_char(cp)) &&
+                        error("not well-formed: illegal character reference \"&#$(m[1])$(m[2]);\"")
+                elseif names && !(m[3] in XML._PREDEFINED)
+                    error("not well-formed: reference to undeclared entity \"&$(m[3]);\" (XML 1.0 §4.1)")
+                end
+            end
+        end
+        verdict(check, s, names) = try; check(s, names); "accepted"; catch e; sprint(showerror, e); end
+        # Every string of one to four tokens over an alphabet that can spell each reference form,
+        # each edge of the character range, a broken form and multibyte text: 406,900 strings,
+        # `String` and `SubString` alike, `names` on and off.
+        tokens = ("&#x", "&#", "&", "X", ";", "1", "a", "F", "0", "D800", "10FFFF", "110000", "FFFE",
+                  "9999999999", "amp", "lt", "quot", "AMP", "foo", "_", ".", ":", "é", "😀", " ")
+        mismatches = String[]
+        for len in 1:4, idx in Iterators.product(ntuple(_ -> eachindex(tokens), len)...)
+            s = join(tokens[i] for i in idx)
+            for names in (true, false)
+                want = verdict(pattern_check, s, names)
+                (verdict(XML._check_refs_strict, s, names) == want &&
+                 verdict(XML._check_refs_strict, SubString(s), names) == want) || push!(mismatches, s)
+            end
+            length(mismatches) >= 10 && break
+        end
+        @test mismatches == String[]
     end
 end
 

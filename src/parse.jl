@@ -132,22 +132,96 @@ end
 
 # `:strict` only, one pass over a span's references, character and named alike. Gated + DCE'd off
 # the :strict path and called only when a token carries entities, so :lenient/:structural cost
-# nothing. A character reference is rejected when its code point falls outside the XML Char range.
-# A named reference is checked only when `names` holds, and the test is then a membership one:
-# `_expand_entities` has already replaced every reference it could resolve, so a name arriving
-# here that is not predefined has no replacement text behind it (XML 1.0 §4.1, the "Entity
-# Declared" well-formedness constraint). A name outside the ASCII set the pattern accepts goes unchecked, which costs a
-# missed rejection and never a wrong one.
+# nothing. The pass reads code units: every byte it decides on — `&`, `#`, `x`, a digit, a letter
+# of a name, `;` — is ASCII, hence a character boundary, and a span it accepts allocates nothing;
+# only a rejected reference is copied, into its message. A character reference is rejected when
+# its digit run denotes no code point of the XML Char range; the run is read on the hexadecimal
+# alphabet in both forms, so a decimal form carrying a letter is rejected too. A named reference
+# is checked only when `names` holds, and the test is then a membership one: `_expand_entities`
+# has already replaced every reference it could resolve, so a name arriving here that is not
+# predefined has no replacement text behind it (XML 1.0 §4.1, the "Entity Declared"
+# well-formedness constraint). A `&` that starts neither form — a name outside the ASCII set the
+# pass accepts, a digit run without its `;` — goes unchecked, which costs a missed rejection and
+# never a wrong one.
 function _check_refs_strict(s::AbstractString, names::Bool)
-    for m in eachmatch(r"&(?:#([xX]?)([0-9a-fA-F]+)|([A-Za-z_:][A-Za-z0-9._:-]*));", s)
-        if m[3] === nothing
-            cp = tryparse(UInt32, m[2]; base = isempty(m[1]) ? 10 : 16)
-            (cp === nothing || !_is_xml_char(cp)) &&
-                error("not well-formed: illegal character reference \"&#$(m[1])$(m[2]);\"")
-        elseif names && !(m[3] in _PREDEFINED)
-            error("not well-formed: reference to undeclared entity \"&$(m[3]);\" (XML 1.0 §4.1)")
+    cu = codeunits(s)
+    n = length(cu)
+    i = findnext(==(UInt8('&')), cu, 1)
+    while i !== nothing
+        next = i + 1
+        if i + 1 <= n && @inbounds(cu[i + 1]) == UInt8('#')
+            j, cp = _charref_at(cu, i, n)
+            if j > 0
+                _is_xml_char(cp) ||
+                    error("not well-formed: illegal character reference \"", String(cu[i:j]), "\"")
+                next = j + 1
+            end
+        else
+            j = _name_end(cu, i + 1, n)
+            if j > 0
+                names && !_is_predefined(cu, i + 1, j - 1) &&
+                    error("not well-formed: reference to undeclared entity \"", String(cu[i:j]), "\" (XML 1.0 §4.1)")
+                next = j + 1
+            end
         end
+        i = findnext(==(UInt8('&')), cu, next)   # next ≤ n + 1, where findnext answers `nothing`
     end
+end
+
+# The character reference whose `&#` sits at `i`: `(j, cp)`, the index of its `;` and the code
+# point its digit run denotes, or `j == 0` when the bytes form no reference. `x` or `X` selects
+# the hexadecimal form. The run is read on the hexadecimal alphabet in both forms, and a run the
+# form cannot parse — a letter in the decimal form, a value past U+10FFFF — comes back as
+# `typemax(UInt32)`, outside every character range.
+@inline function _charref_at(cu, i::Int, n::Int)
+    j = i + 2
+    j <= n || return (0, 0x00000000)
+    @inbounds hex = cu[j] == UInt8('x') || cu[j] == UInt8('X')
+    hex && (j += 1)
+    start = j
+    cp = 0x00000000
+    bad = false
+    while j <= n
+        @inbounds d = _hexdigit(cu[j])
+        d == 0xff && break
+        bad |= !hex && d >= 0x0a
+        if !bad
+            cp = cp * (hex ? 0x10 : 0x0a) + d   # cp ≤ 0x10FFFF here, so no UInt32 overflow
+            bad = cp > 0x10FFFF
+        end
+        j += 1
+    end
+    (j > start && j <= n && @inbounds(cu[j]) == UInt8(';')) || return (0, 0x00000000)
+    return (j, bad ? typemax(UInt32) : cp)
+end
+
+# The named reference whose name would start at `a`: the index of its `;`, or 0 when the bytes
+# form no reference. The name is read on the ASCII subset of the Name production (XML 1.0 §2.3).
+@inline function _name_end(cu, a::Int, n::Int)
+    (a <= n && _is_ascii_name_start(@inbounds(cu[a]))) || return 0
+    j = a + 1
+    while j <= n && _is_ascii_name_char(@inbounds(cu[j]))
+        j += 1
+    end
+    return (j <= n && @inbounds(cu[j]) == UInt8(';')) ? j : 0
+end
+@inline _is_ascii_name_start(b::UInt8) =
+    (UInt8('a') <= b <= UInt8('z')) || (UInt8('A') <= b <= UInt8('Z')) || b == UInt8('_') || b == UInt8(':')
+@inline _is_ascii_name_char(b::UInt8) =
+    _is_ascii_name_start(b) || (UInt8('0') <= b <= UInt8('9')) || b == UInt8('.') || b == UInt8('-')
+
+# Whether the bytes `a:b` spell one of the five predefined names, compared byte for byte.
+function _is_predefined(cu, a::Int, b::Int)
+    for name in _PREDEFINED
+        len = ncodeunits(name)
+        len == b - a + 1 || continue
+        k = 1
+        while k <= len && @inbounds(cu[a + k - 1]) == codeunit(name, k)
+            k += 1
+        end
+        k > len && return true
+    end
+    return false
 end
 
 # Token-stream → Node{S} builder. `convert_text` is `unescape` for parsed content (with entity
