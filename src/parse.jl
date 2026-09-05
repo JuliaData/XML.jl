@@ -132,21 +132,41 @@ end
 
 # `:strict` only, one pass over a span's references, character and named alike. Gated + DCE'd off
 # the :strict path and called only when a token carries entities, so :lenient/:structural cost
-# nothing. A character reference is rejected when its code point falls outside the XML Char range.
-# A named reference is checked only when `names` holds, and the test is then a membership one:
-# `_expand_entities` has already replaced every reference it could resolve, so a name arriving
-# here that is not predefined has no replacement text behind it (XML 1.0 §4.1, the "Entity
-# Declared" well-formedness constraint). A name outside the ASCII set the pattern accepts goes unchecked, which costs a
-# missed rejection and never a wrong one.
+# nothing. The pass reads code units: every byte it decides on — `&`, `#`, `x`, a digit, a letter
+# of a name, `;` — is ASCII, hence a character boundary, and a span it accepts allocates nothing;
+# only a rejected reference is copied, into its message. A character reference is rejected when
+# its digit run denotes no code point of the XML Char range; the run is read on the hexadecimal
+# alphabet in both forms, so a decimal form carrying a letter is rejected too. A named reference
+# is checked only when `names` holds, and the test is then a membership one: `_expand_entities`
+# has already replaced every reference it could resolve, so a name arriving here that is not
+# predefined has no replacement text behind it (XML 1.0 §4.1, the "Entity Declared"
+# well-formedness constraint). A `&` that starts neither form — a name outside the ASCII set the
+# pass accepts, a digit run without its `;` — goes unchecked, which costs a missed rejection and
+# never a wrong one.
 function _check_refs_strict(s::AbstractString, names::Bool)
-    for m in eachmatch(r"&(?:#([xX]?)([0-9a-fA-F]+)|([A-Za-z_:][A-Za-z0-9._:-]*));", s)
-        if m[3] === nothing
-            cp = tryparse(UInt32, m[2]; base = isempty(m[1]) ? 10 : 16)
-            (cp === nothing || !_is_xml_char(cp)) &&
-                error("not well-formed: illegal character reference \"&#$(m[1])$(m[2]);\"")
-        elseif names && !(m[3] in _PREDEFINED)
-            error("not well-formed: reference to undeclared entity \"&$(m[3]);\" (XML 1.0 §4.1)")
+    cu = codeunits(s)
+    n = length(cu)
+    i = findnext(==(UInt8('&')), cu, 1)
+    while i !== nothing
+        next = i + 1
+        if i + 1 <= n && @inbounds(cu[i + 1]) == UInt8('#')
+            j, cp = _charref_at(cu, i, n)
+            if j > 0
+                _is_xml_char(cp) ||
+                    error("not well-formed: illegal character reference \"", String(cu[i:j]), "\"")
+                next = j + 1
+            end
+        else
+            j = _name_end(cu, i + 1, n)
+            if j > 0
+                if names
+                    _, len = _predefined_at(cu, i, n)
+                    len == 0 && error("not well-formed: reference to undeclared entity \"", String(cu[i:j]), "\" (XML 1.0 §4.1)")
+                end
+                next = j + 1
+            end
         end
+        i = findnext(==(UInt8('&')), cu, next)   # next ≤ n + 1, where findnext answers `nothing`
     end
 end
 

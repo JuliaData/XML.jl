@@ -260,3 +260,30 @@ measure_eol_rewrite(s) = Base.@allocations XML._rewrite_content_eol(s)
         @test measure_eol_rewrite(v) <= 3
     end
 end
+
+# `:strict` reference check — the contract: on a token that carries a `&`, the check reads the
+# code units and copies nothing on a span it accepts, so the level allocates exactly what
+# `:structural` allocates on a document full of references. The direct guard holds the check
+# to zero; the parse-level one holds `:strict` to the count of `:structural`, the acceptance
+# line of section (8) of `benchmarks/profile.jl`, and covers the character-range scan too.
+measure_refcheck(s, names)    = Base.@allocations XML._check_refs_strict(s, names)
+measure_parse_strict(xml)     = Base.@allocations parse(xml, Node; wellformed = :strict)
+measure_parse_structural(xml) = Base.@allocations parse(xml, Node; wellformed = :structural)
+
+@testset ":strict reference check: allocation-free on an accepted span" begin
+    span = "a &amp; b &#65; c &#x42; d &quot;&apos;&lt;&gt; e &#x1F600;"
+    sub = SubString("<" * span * ">", 2, ncodeunits(span) + 1)
+    @test XML._check_refs_strict(sub, true) === nothing
+    @test XML._check_refs_strict(span, false) === nothing
+    refs_xml = "<root>" * repeat("<e a=\"&amp;&#65;\">x &lt; &#x42; &quot;y&quot;</e>", 200) * "</root>"
+    doc = parse(refs_xml, Node; wellformed = :strict)
+    @test length(children(only(children(doc)))) == 200
+    @test doc == parse(refs_xml, Node; wellformed = :structural)
+    measure_refcheck(sub, true); measure_refcheck(span, false)               # warm-up
+    measure_parse_strict(refs_xml); measure_parse_structural(refs_xml)
+    if _NO_COVERAGE
+        @test measure_refcheck(sub, true) == 0
+        @test measure_refcheck(span, false) == 0
+        @test measure_parse_strict(refs_xml) == measure_parse_structural(refs_xml)
+    end
+end
