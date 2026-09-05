@@ -37,6 +37,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`unescape` allocated about six times per value carrying a reference** ([#141](https://github.com/JuliaData/XML.jl/issues/141)): it copied its argument to a `String`, ran a regular-expression `replace` and built a string per character reference, in every reader. It now decodes in one pass over the bytes and allocates once, the result; a value whose `&` starts no reference is returned as it is. On the escaped twin of the benchmarks, a `Cursor` pass drops from 269,015 to 46,584 allocations and from 38.2 to 30.7 ms; on a value of a spreadsheet cell's shape, from 171 to 34 ns per call.
 
+- **The `:strict` reference check allocated about seven times per reference** ([#142](https://github.com/JuliaData/XML.jl/issues/142)): it matched a regular expression per reference in every token carrying a `&`, in the `Node` and `FlatNode` parses alike. It now reads the token's bytes and allocates nothing, so `:strict` allocates exactly what `:structural` does; what it accepts and rejects is unchanged. On the escaped twin of the benchmarks, `parse(…, Node; wellformed = :strict)` goes from 3,241,570 to 2,658,494 allocations and from 89.8 to 68.9 ms. The decoder behind `unescape` and the check now share one reader of references.
+
 ## [0.4.6] - 2026-08-17
 
 ### Fixed

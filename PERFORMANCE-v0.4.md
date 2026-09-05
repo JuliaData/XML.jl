@@ -183,19 +183,19 @@ The two libxml2 rows put the C library on the same three documents. Its reader t
 
 ### Well-formedness levels
 
-`:strict` adds two checks over `:structural`: a character-range scan of every text, attribute value, comment, CDATA section and processing-instruction body, and a check of every reference in a token that carries one, against the character range for a numeric reference and against the five predefined names for a named one, every declared entity having been included by then. The first costs in proportion to the document's text share, the second to its reference density, and the XMark-style document, which has no reference at all, measures the first alone. `:lenient` and `:structural` differ only in the document-shape checks, whose cost does not separate from the run-to-run spread: 49.2 and 49.3 ms on the document.
+`:strict` adds two checks over `:structural`: a character-range scan of every text, attribute value, comment, CDATA section and processing-instruction body, and a check of every reference in a token that carries one, against the character range for a numeric reference and against the five predefined names for a named one, every declared entity having been included by then. The first costs in proportion to the document's text share, the second to its reference density, and the XMark-style document, which has no reference at all, measures the first alone. `:lenient` and `:structural` differ only in the document-shape checks, whose cost does not separate from the run-to-run spread: 48.1 and 48.9 ms on the document.
 
 | `parse(…, Node; wellformed = …)` | `:structural` | `:strict` | ratio |
 |---|--:|--:|--:|
-| the XMark-style document, text share 57 % | 49.3 ms | 59.8 ms | 1.2× |
-| its escaped twin, 81,799 references | 56.8 ms | 89.8 ms (GC 13.5) | 1.3× |
-| its character data alone, text share 100 %, 8.1 MB | 0.48 ms | 7.1 ms | 15× |
+| the XMark-style document, text share 57 % | 48.9 ms | 59.1 ms | 1.2× |
+| its escaped twin, 81,799 references | 56.4 ms | 68.9 ms | 1.2× |
+| its character data alone, text share 100 %, 8.1 MB | 0.48 ms | 7.0 ms | 15× |
 
 _Table 7 — what `:strict` adds, by document shape; the ratio is taken on the time net of the GC share, the part that reproduces._[^twins]
 
-The character-range scan allocates nothing. The reference check is a regular-expression match per reference: 583,076 allocations on the escaped twin, seven per reference.
+Neither check allocates. The reference check reads the bytes of a token that carries a `&` and copies only a reference it rejects, into its message, so `:strict` allocates exactly what `:structural` does on every document.
 
-libxml2 has no levels: it always enforces well-formedness in full. Its DOM build takes 38 ms on the plain document, 44 ms on the escaped twin and 4.0 ms on its character data alone, so on pure text the C library parses, checks and builds in a little over half the time of the `:strict` character-range scan by itself.
+libxml2 has no levels: it always enforces well-formedness in full. Its DOM build takes 38 ms on the plain document, 45 ms on the escaped twin and 3.9 ms on its character data alone, so on pure text the C library parses, checks and builds in a little over half the time of the `:strict` character-range scan by itself.
 
 ## The other entry points
 
@@ -239,7 +239,7 @@ Stream / low-memory / read-only full-DOM / repeated traversal → **XML.jl**; `F
 
 [^flatbench]: Table 5 (and the README access-pattern table): measured 2026-09-02, same machine, Julia and BenchmarkTools settings; source [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl).
 
-[^twins]: Tables 6 and 7: measured 2026-09-04, same machine and settings as the rest, Julia 1.12.7; BenchmarkTools medians. Source: [`benchmarks/profile.jl`](benchmarks/profile.jl), sections (7) and (8), which generate the twins beside the XMark-style document through the generator's opt-in features.
+[^twins]: Table 6 measured 2026-09-04 and Table 7 2026-09-05, same machine and settings as the rest, Julia 1.12.7; BenchmarkTools medians. Source: [`benchmarks/profile.jl`](benchmarks/profile.jl), sections (7) and (8), which generate the twins beside the XMark-style document through the generator's opt-in features.
 
 [^entrypoints]: Table 8: measured 2026-09-02, same settings; source [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl), its last section, and section (7) of `profile.jl` for the `parse_dtd` row.
 
