@@ -2,98 +2,98 @@
 
 ```
 Parse (small)
-	XML.jl             0.0129 ms
+	XML.jl              0.013 ms
 	XML.jl (SS)        0.0118 ms
-	EzXML               0.012 ms  (XML.jl 8.0% slower)
-	LightXML           0.0118 ms  (XML.jl 9.5% slower)
-	XMLDict             0.114 ms  (XML.jl 88.6% faster)
+	EzXML              0.0113 ms  (XML.jl 14.8% slower)
+	LightXML            0.011 ms  (XML.jl 17.8% slower)
+	XMLDict             0.118 ms  (XML.jl 89.1% faster)
 
 Parse (medium)
-	XML.jl               69.2 ms
-	XML.jl (SS)          60.9 ms
-	EzXML                37.1 ms  (XML.jl 86.3% slower)
-	LightXML             37.8 ms  (XML.jl 82.9% slower)
-	XMLDict             354.0 ms  (XML.jl 80.5% faster)
+	XML.jl               65.4 ms
+	XML.jl (SS)          61.0 ms
+	EzXML                37.3 ms  (XML.jl 75.1% slower)
+	LightXML             36.7 ms  (XML.jl 78.1% slower)
+	XMLDict             323.0 ms  (XML.jl 79.8% faster)
 
 Write (small)
-	XML.jl            0.00585 ms
-	EzXML             0.00578 ms  (~same)
-	LightXML           0.0588 ms  (XML.jl 90.0% faster)
+	XML.jl            0.00599 ms
+	EzXML             0.00585 ms  (~same)
+	LightXML           0.0584 ms  (XML.jl 89.7% faster)
 
 Write (medium)
-	XML.jl               25.4 ms
-	EzXML                21.0 ms  (XML.jl 20.8% slower)
-	LightXML             29.4 ms  (XML.jl 13.7% faster)
+	XML.jl               25.2 ms
+	EzXML                20.1 ms  (XML.jl 25.4% slower)
+	LightXML             30.4 ms  (XML.jl 17.1% faster)
 
 Read file
-	XML.jl               68.9 ms
-	EzXML                39.9 ms  (XML.jl 72.5% slower)
-	LightXML             40.0 ms  (XML.jl 72.0% slower)
+	XML.jl               68.1 ms
+	EzXML                38.9 ms  (XML.jl 75.1% slower)
+	LightXML             38.7 ms  (XML.jl 76.1% slower)
 
 Collect tags (small)
-	XML.jl            0.00037 ms
-	EzXML             0.00108 ms  (XML.jl 65.6% faster)
-	LightXML          0.00182 ms  (XML.jl 79.6% faster)
+	XML.jl           0.000344 ms
+	EzXML             0.00103 ms  (XML.jl 66.6% faster)
+	LightXML          0.00175 ms  (XML.jl 80.3% faster)
 
 Collect tags (medium)
-	XML.jl               4.77 ms
-	EzXML                10.4 ms  (XML.jl 54.1% faster)
-	LightXML             13.7 ms  (XML.jl 65.3% faster)
+	XML.jl               4.66 ms
+	EzXML                8.88 ms  (XML.jl 47.5% faster)
+	LightXML             12.4 ms  (XML.jl 62.4% faster)
 
 Parse SST (LazyNode)
 	XML.jl             0.0382 ms
-	Node (for ref)       9.93 ms  (XML.jl 99.6% faster)
+	Node (for ref)       9.78 ms  (XML.jl 99.6% faster)
 
 Parse worksheet (LazyNode)
 	XML.jl             0.0279 ms
-	Node (for ref)       17.5 ms  (XML.jl 99.8% faster)
+	Node (for ref)       16.8 ms  (XML.jl 99.8% faster)
 
 SST: write each <si>
-	LazyNode + write (zero-copy)     19.4 ms
-	LazyNode + write (normalize)     51.6 ms
-	Node (for ref)       5.44 ms
+	LazyNode + write (zero-copy)     8.88 ms
+	LazyNode + write (normalize)     37.6 ms
+	Node (for ref)       5.56 ms
 
 SST: unformatted text
-	LazyNode + is_simple_value     19.4 ms
-	Node (for ref)       2.23 ms
+	LazyNode + is_simple_value     9.23 ms
+	Node (for ref)       2.26 ms
 
 Worksheet: collect rows
-	children() (fresh Vector each call)     22.8 ms
-	children!(buf, n) (reused buffer)     22.8 ms
+	children() (fresh Vector each call)     7.54 ms
+	children!(buf, n) (reused buffer)     7.45 ms
 
 Worksheet: attribute scan
-	eachattribute        22.7 ms
-	attributes() (materialize dict)     22.8 ms
+	eachattribute        16.8 ms
+	attributes() (materialize dict)     19.4 ms
 
 Worksheet: single attr fetch
-	get(c, "r", "")      22.8 ms
-	attributes(c)["r"]     22.7 ms
+	get(c, "r", "")      14.3 ms
+	attributes(c)["r"]     19.3 ms
 
 Worksheet: <v> value
-	is_simple_value      22.6 ms
-	is_simple + simple_value     22.9 ms
+	is_simple_value      19.8 ms
+	is_simple + simple_value     24.6 ms
 
 XLSX sst_load! (end-to-end)
-	LazyNode             27.3 ms
-	LazyNode (entity-heavy)     19.7 ms
+	LazyNode             16.2 ms
+	LazyNode (entity-heavy)     11.5 ms
 
 XLSX cell read (end-to-end)
-	numeric ws           22.8 ms
-	string ws            20.7 ms
+	numeric ws           30.2 ms
+	string ws            27.5 ms
 
 ```
 
 ```julia
 versioninfo()
-# Julia Version 1.12.7
-# Commit 6d172b025e4 (2026-08-15 08:05 UTC)
+# Julia Version 1.13.0
+# Commit d1c37793dd2 (2026-09-09 19:00 UTC)
 # Build Info:
 #   Official https://julialang.org release
 # Platform Info:
-#   OS: macOS (arm64-apple-darwin25.5.0)
+#   OS: macOS (arm64-apple-darwin25.6.0)
 #   CPU: 10 × Apple M5
 #   WORD_SIZE: 64
-#   LLVM: libLLVM-18.1.7 (ORCJIT, apple-m1)
+#   LLVM: libLLVM-20.1.8 (ORCJIT, apple-m1)
 #   GC: Built with stock GC
-# Threads: 1 default, 1 interactive, 1 GC (on 4 virtual cores)
+# Threads: 1 default, 1 interactive, 1 GC (on 10 virtual cores)
 ```

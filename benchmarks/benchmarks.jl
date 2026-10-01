@@ -27,6 +27,124 @@ if !isfile(medium_file)
 end
 medium_xml = read(medium_file, String)
 
+#-----------------------------------------------------------------------------# XLSX-pattern fixtures
+# These fixtures mirror the shapes that XLSX.jl exercises:
+# - `sst_xml` matches `xl/sharedStrings.xml` (lots of small `<si><t>…</t></si>` entries
+#   separated by whitespace — the layout that exposes the LazyNode write/normalize choice)
+# - `ws_xml` matches `xl/sheetN.xml` (a `<sheetData>` with many `<row>`s of `<c r=… s=… t=…><v>…</v></c>`)
+
+@info "Generating XLSX-pattern fixtures..."
+
+sst_xml = let buf = IOBuffer()
+    print(buf, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+    print(buf, "<sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" count=\"50000\" uniqueCount=\"50000\">\n")
+    for i in 1:50000
+        print(buf, "  <si><t>shared string value number ", i, "</t></si>\n")
+    end
+    print(buf, "</sst>")
+    String(take!(buf))
+end
+
+ws_xml = let buf = IOBuffer()
+    print(buf, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+    print(buf, "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n")
+    print(buf, "<sheetData>\n")
+    for r in 1:3000
+        print(buf, "  <row r=\"", r, "\">")
+        for c in 1:15
+            col = Char(UInt32('A') + c - 1)
+            print(buf, "<c r=\"", col, r, "\" s=\"3\" t=\"n\"><v>", r * c, "</v></c>")
+        end
+        print(buf, "</row>\n")
+    end
+    print(buf, "</sheetData></worksheet>")
+    String(take!(buf))
+end
+
+# String-heavy worksheet: cells reference the shared string table (`t="s"`, `<v>` = SST
+# index). This is the most common real-world shape and the one where the `has_entities`
+# short-circuit and zero-copy accessors matter most for XLSX.jl `readtable`.
+ws_str_xml = let buf = IOBuffer()
+    print(buf, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
+    print(buf, "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n")
+    print(buf, "<sheetData>\n")
+    for r in 1:5000
+        print(buf, "  <row r=\"", r, "\">")
+        for c in 1:8
+            col = Char(UInt32('A') + c - 1)
+            print(buf, "<c r=\"", col, r, "\" s=\"2\" t=\"s\"><v>", (r * c) % 50000, "</v></c>")
+        end
+        print(buf, "</row>\n")
+    end
+    print(buf, "</sheetData></worksheet>")
+    String(take!(buf))
+end
+
+# Entity-heavy SST: every <t> needs decoding, exercising the `has_entities` slow path.
+sst_entity_xml = let buf = IOBuffer()
+    print(buf, "<sst count=\"50000\" uniqueCount=\"50000\">")
+    for i in 1:50000
+        print(buf, "<si><t>A &amp; B &lt;tag&gt; #", i, "</t></si>")
+    end
+    print(buf, "</sst>")
+    String(take!(buf))
+end
+
+@info "  sst_xml: $(round(length(sst_xml) / 1024 / 1024, digits=2)) MB ($(50000) <si>)"
+@info "  ws_xml:  $(round(length(ws_xml) / 1024 / 1024, digits=2)) MB ($(3000) <row> × $(15) <c>)"
+@info "  ws_str_xml: $(round(length(ws_str_xml) / 1024 / 1024, digits=2)) MB ($(5000) <row> × $(8) string <c>)"
+@info "  sst_entity_xml: $(round(length(sst_entity_xml) / 1024 / 1024, digits=2)) MB (entity-heavy)"
+
+# Element access as XLSX.jl does it: the root is the document's first element, reached by moving
+# forward (`xml_root_element`, XLSX.jl `src/xmlutil.jl`), and `<sheetData>` is the root's first
+# child of that name, where the search stops (`_find_sheetdata`, `src/stream.jl`). `doc[end]`
+# reaches the same root, but a `LazyNode` finds its last child only by skipping the whole document.
+function _xlsx_root(doc::LazyNode)
+    c = Cursor(doc)
+    while next!(c) !== nothing
+        nodetype(c) === Element && return LazyNode(c)
+    end
+    error("no root element")
+end
+_xlsx_root(doc::Node) = first(eachelement(doc))
+function _xlsx_sheetdata(doc)
+    for child in eachchildnode(_xlsx_root(doc))
+        nodetype(child) === Element && tag(child) == "sheetData" && return child
+    end
+    error("no <sheetData> element")
+end
+
+# Invariants, printed before any timing and checked: what the XLSX cells below reach through
+# these accessors. CI does not run this script, and a cell that reaches no cell still times
+# something, so a count that differs stops the script before the first measurement.
+let
+    function cell_counts(doc)
+        rows = cells = vals = 0
+        for row in eachchildnode(_xlsx_sheetdata(doc))
+            nodetype(row) === Element || continue
+            rows += 1
+            for c in eachchildnode(row)
+                nodetype(c) === Element || continue
+                cells += 1
+                for v in eachchildnode(c)
+                    nodetype(v) === Element && tag(v) == "v" && (vals += 1)
+                end
+            end
+        end
+        (; rows, cells, vals)
+    end
+    si_count(doc) = count(si -> nodetype(si) === Element && tag(si) == "si", children(_xlsx_root(doc)))
+    ws = cell_counts(parse(ws_xml, LazyNode))
+    ws_str = cell_counts(parse(ws_str_xml, LazyNode))
+    sst = (lazy = si_count(parse(sst_xml, LazyNode)), node = si_count(parse(sst_xml, Node)),
+           entity = si_count(parse(sst_entity_xml, LazyNode)))
+    @info "  invariants: ws_xml $(ws.rows) <row>, $(ws.cells) <c>, $(ws.vals) <v>; ws_str_xml $(ws_str.rows) <row>, $(ws_str.cells) <c>, $(ws_str.vals) <v>"
+    @info "  invariants: <si> in sst_xml $(sst.lazy) (LazyNode), $(sst.node) (Node); in sst_entity_xml $(sst.entity)"
+    ws == (rows = 3000, cells = 45000, vals = 45000) || error("ws_xml: expected 3000 rows, 45000 cells, 45000 values; got $ws")
+    ws_str == (rows = 5000, cells = 40000, vals = 40000) || error("ws_str_xml: expected 5000 rows, 40000 cells, 40000 values; got $ws_str")
+    sst == (lazy = 50000, node = 50000, entity = 50000) || error("SST: expected 50000 <si> in each; got $sst")
+end
+
 df = DataFrame(kind=String[], name=String[], bench=BenchmarkTools.Trial[])
 
 macro add_benchmark(kind, name, expr...)
@@ -131,74 +249,6 @@ end
 @add_benchmark "Collect tags (medium)" "EzXML" ezxml_collect_tags(o.root) setup=(o = EzXML.parsexml(medium_xml)) teardown=(finalize(o.node))
 @add_benchmark "Collect tags (medium)" "LightXML" lightxml_collect_tags(LightXML.root(o)) setup=(o = LightXML.parse_string(medium_xml)) teardown=(LightXML.free(o))
 
-#-----------------------------------------------------------------------------# XLSX-pattern fixtures
-# These fixtures mirror the shapes that XLSX.jl exercises:
-# - `sst_xml` matches `xl/sharedStrings.xml` (lots of small `<si><t>…</t></si>` entries
-#   separated by whitespace — the layout that exposes the LazyNode write/normalize choice)
-# - `ws_xml` matches `xl/sheetN.xml` (a `<sheetData>` with many `<row>`s of `<c r=… s=… t=…><v>…</v></c>`)
-
-@info "Generating XLSX-pattern fixtures..."
-
-sst_xml = let buf = IOBuffer()
-    print(buf, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
-    print(buf, "<sst xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\" count=\"50000\" uniqueCount=\"50000\">\n")
-    for i in 1:50000
-        print(buf, "  <si><t>shared string value number ", i, "</t></si>\n")
-    end
-    print(buf, "</sst>")
-    String(take!(buf))
-end
-
-ws_xml = let buf = IOBuffer()
-    print(buf, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
-    print(buf, "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n")
-    print(buf, "<sheetData>\n")
-    for r in 1:3000
-        print(buf, "  <row r=\"", r, "\">")
-        for c in 1:15
-            col = Char(UInt32('A') + c - 1)
-            print(buf, "<c r=\"", col, r, "\" s=\"3\" t=\"n\"><v>", r * c, "</v></c>")
-        end
-        print(buf, "</row>\n")
-    end
-    print(buf, "</sheetData></worksheet>")
-    String(take!(buf))
-end
-
-# String-heavy worksheet: cells reference the shared string table (`t="s"`, `<v>` = SST
-# index). This is the most common real-world shape and the one where the `has_entities`
-# short-circuit and zero-copy accessors matter most for XLSX.jl `readtable`.
-ws_str_xml = let buf = IOBuffer()
-    print(buf, "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n")
-    print(buf, "<worksheet xmlns=\"http://schemas.openxmlformats.org/spreadsheetml/2006/main\">\n")
-    print(buf, "<sheetData>\n")
-    for r in 1:5000
-        print(buf, "  <row r=\"", r, "\">")
-        for c in 1:8
-            col = Char(UInt32('A') + c - 1)
-            print(buf, "<c r=\"", col, r, "\" s=\"2\" t=\"s\"><v>", (r * c) % 50000, "</v></c>")
-        end
-        print(buf, "</row>\n")
-    end
-    print(buf, "</sheetData></worksheet>")
-    String(take!(buf))
-end
-
-# Entity-heavy SST: every <t> needs decoding, exercising the `has_entities` slow path.
-sst_entity_xml = let buf = IOBuffer()
-    print(buf, "<sst count=\"50000\" uniqueCount=\"50000\">")
-    for i in 1:50000
-        print(buf, "<si><t>A &amp; B &lt;tag&gt; #", i, "</t></si>")
-    end
-    print(buf, "</sst>")
-    String(take!(buf))
-end
-
-@info "  sst_xml: $(round(length(sst_xml) / 1024 / 1024, digits=2)) MB ($(50000) <si>)"
-@info "  ws_xml:  $(round(length(ws_xml) / 1024 / 1024, digits=2)) MB ($(3000) <row> × $(15) <c>)"
-@info "  ws_str_xml: $(round(length(ws_str_xml) / 1024 / 1024, digits=2)) MB ($(5000) <row> × $(8) string <c>)"
-@info "  sst_entity_xml: $(round(length(sst_entity_xml) / 1024 / 1024, digits=2)) MB (entity-heavy)"
-
 # Helper: walk a Node-based <si> subtree and concatenate its <t> text content.
 function _node_unformatted(io::IO, el::Node{String})
     XML.tag(el) == "rPh" && return
@@ -228,7 +278,7 @@ _node_unformatted(el::Node{String}) = sprint(_node_unformatted, el)
 
 @add_benchmark "SST: write each <si>" "LazyNode + write (zero-copy)" begin
     out = String[]
-    sst_el = doc[end]
+    sst_el = _xlsx_root(doc)
     for si in XML.eachchildnode(sst_el)
         XML.nodetype(si) === XML.Element || continue
         push!(out, XML.write(si))
@@ -238,7 +288,7 @@ end setup=(doc = parse(sst_xml, LazyNode))
 
 @add_benchmark "SST: write each <si>" "LazyNode + write (normalize)" begin
     out = String[]
-    sst_el = doc[end]
+    sst_el = _xlsx_root(doc)
     for si in XML.eachchildnode(sst_el)
         XML.nodetype(si) === XML.Element || continue
         push!(out, XML.write(si; normalize=true))
@@ -248,7 +298,7 @@ end setup=(doc = parse(sst_xml, LazyNode))
 
 @add_benchmark "SST: write each <si>" "Node (for ref)" begin
     out = String[]
-    sst_el = doc[end]
+    sst_el = _xlsx_root(doc)
     for si in XML.children(sst_el)
         XML.tag(si) == "si" || continue
         push!(out, XML.write(si))
@@ -258,7 +308,7 @@ end setup=(doc = parse(sst_xml, Node))
 
 @add_benchmark "SST: unformatted text" "LazyNode + is_simple_value" begin
     out = Vector{Union{Nothing,SubString{String},String}}()
-    sst_el = doc[end]
+    sst_el = _xlsx_root(doc)
     for si in XML.eachchildnode(sst_el)
         XML.nodetype(si) === XML.Element || continue
         for t in XML.eachchildnode(si)
@@ -272,7 +322,7 @@ end setup=(doc = parse(sst_xml, LazyNode))
 
 @add_benchmark "SST: unformatted text" "Node (for ref)" begin
     out = String[]
-    sst_el = doc[end]
+    sst_el = _xlsx_root(doc)
     for si in XML.children(sst_el)
         XML.tag(si) == "si" || continue
         push!(out, _node_unformatted(si))
@@ -284,18 +334,18 @@ end setup=(doc = parse(sst_xml, Node))
 # Mirrors `Cell(c::LazyNode, ws)` and `get_rowcells!`: iterate <row>, then <c>, then attrs + <v>.
 
 @add_benchmark "Worksheet: collect rows" "children() (fresh Vector each call)" begin
-    sd = doc[end][1]  # <sheetData>
+    sd = _xlsx_sheetdata(doc)
     XML.children(sd)
 end setup=(doc = parse(ws_xml, LazyNode))
 
 @add_benchmark "Worksheet: collect rows" "children!(buf, n) (reused buffer)" begin
-    sd = doc[end][1]
+    sd = _xlsx_sheetdata(doc)
     XML.children!(buf, sd)
 end setup=(doc = parse(ws_xml, LazyNode); buf = XML.LazyNode{String}[])
 
 @add_benchmark "Worksheet: attribute scan" "eachattribute" begin
     n = 0
-    sd = doc[end][1]
+    sd = _xlsx_sheetdata(doc)
     for row in XML.eachchildnode(sd)
         XML.nodetype(row) === XML.Element || continue
         for c in XML.eachchildnode(row)
@@ -310,7 +360,7 @@ end setup=(doc = parse(ws_xml, LazyNode))
 
 @add_benchmark "Worksheet: attribute scan" "attributes() (materialize dict)" begin
     n = 0
-    sd = doc[end][1]
+    sd = _xlsx_sheetdata(doc)
     for row in XML.eachchildnode(sd)
         XML.nodetype(row) === XML.Element || continue
         for c in XML.eachchildnode(row)
@@ -327,7 +377,7 @@ end setup=(doc = parse(ws_xml, LazyNode))
 
 @add_benchmark "Worksheet: single attr fetch" "get(c, \"r\", \"\")" begin
     n = 0
-    sd = doc[end][1]
+    sd = _xlsx_sheetdata(doc)
     for row in XML.eachchildnode(sd)
         XML.nodetype(row) === XML.Element || continue
         for c in XML.eachchildnode(row)
@@ -340,7 +390,7 @@ end setup=(doc = parse(ws_xml, LazyNode))
 
 @add_benchmark "Worksheet: single attr fetch" "attributes(c)[\"r\"]" begin
     n = 0
-    sd = doc[end][1]
+    sd = _xlsx_sheetdata(doc)
     for row in XML.eachchildnode(sd)
         XML.nodetype(row) === XML.Element || continue
         for c in XML.eachchildnode(row)
@@ -355,7 +405,7 @@ end setup=(doc = parse(ws_xml, LazyNode))
 
 @add_benchmark "Worksheet: <v> value" "is_simple_value" begin
     n = 0
-    sd = doc[end][1]
+    sd = _xlsx_sheetdata(doc)
     for row in XML.eachchildnode(sd)
         XML.nodetype(row) === XML.Element || continue
         for c in XML.eachchildnode(row)
@@ -372,7 +422,7 @@ end setup=(doc = parse(ws_xml, LazyNode))
 
 @add_benchmark "Worksheet: <v> value" "is_simple + simple_value" begin
     n = 0
-    sd = doc[end][1]
+    sd = _xlsx_sheetdata(doc)
     for row in XML.eachchildnode(sd)
         XML.nodetype(row) === XML.Element || continue
         for c in XML.eachchildnode(row)
@@ -412,7 +462,7 @@ end
 
 # Mirrors XLSX.jl `sst.jl` `sst_load!`: stream <si>, capture raw XML + unformatted text.
 @add_benchmark "XLSX sst_load! (end-to-end)" "LazyNode" begin
-    sst_el = doc[end]
+    sst_el = _xlsx_root(doc)
     shared = String[]
     unformatted = String[]
     for si in XML.eachchildnode(sst_el)
@@ -429,7 +479,7 @@ end setup=(doc = parse(sst_xml, LazyNode))
 # Mirrors XLSX.jl `cell.jl` `Cell(c, ws)` + `get_rowcells!`: per cell, read the r/s/t
 # attributes and the <v> value, exactly as the reader does. Numeric worksheet.
 @add_benchmark "XLSX cell read (end-to-end)" "numeric ws" begin
-    sd = doc[end][1]
+    sd = _xlsx_sheetdata(doc)
     ncells = 0
     acc = 0
     for row in XML.eachchildnode(sd)
@@ -456,7 +506,7 @@ end setup=(doc = parse(ws_xml, LazyNode))
 # Same loop on the string-heavy worksheet (t="s", SST-indexed) — the common real shape
 # and the one most sensitive to the entity short-circuit / zero-copy accessors.
 @add_benchmark "XLSX cell read (end-to-end)" "string ws" begin
-    sd = doc[end][1]
+    sd = _xlsx_sheetdata(doc)
     ncells = 0
     acc = 0
     for row in XML.eachchildnode(sd)
@@ -483,7 +533,7 @@ end setup=(doc = parse(ws_str_xml, LazyNode))
 # Realistic-string SST: entries containing characters that DO need entity decoding, so the
 # `has_entities` slow path is exercised (catches regressions in the decode branch).
 @add_benchmark "XLSX sst_load! (end-to-end)" "LazyNode (entity-heavy)" begin
-    sst_el = doc[end]
+    sst_el = _xlsx_root(doc)
     n = 0
     for si in XML.eachchildnode(sst_el)
         XML.nodetype(si) === XML.Element || continue
