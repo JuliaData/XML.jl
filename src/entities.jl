@@ -338,15 +338,23 @@ const _MAX_ENTITY_EXPANSION = 64 * 1024 * 1024   # bytes an expanded document ma
     end
 end
 
-function _write_span!(io::IOBuffer, s::AbstractString, literal::Bool)
+# §3.3.3 reads each white space character of an attribute value as one space. The readers do
+# that for the value as written, with the CR LF pair already one line end (§2.11); a character
+# that comes from an entity's text is written here as the space it reads as, so that a CR LF
+# pair there gives two spaces (W3C valid-sa-110). `entity` says the span is an entity's text.
+function _write_span!(io::IOBuffer, s::AbstractString, literal::Bool, entity::Bool = false)
     literal || return Base.write(io, s)
     for c in s
-        _write_literal(io, c, true)
+        _write_literal(io, entity && (c == '\t' || c == '\n' || c == '\r') ? ' ' : c, true)
     end
 end
 
+# `depth` is the nesting level of `s`: 1 for the document's own text, one more for each entity
+# its text comes through. In content, given the declarations `d`, a replacement text that
+# carries a `<` is read as markup by `_rewrite_walk!` (§4.4.2), so that the tags it brings are
+# rewritten as written ones are; any other is included as text.
 function _expand_refs!(io::IOBuffer, s::AbstractString, ents::InternalEntities, depth::Int,
-                       literal::Bool = false)
+                       literal::Bool = false, d::Union{Nothing, _Declarations} = nothing)
     depth > _MAX_ENTITY_DEPTH &&
         error("entity expansion exceeded $(_MAX_ENTITY_DEPTH) levels of nesting")
     i = firstindex(s)
@@ -354,10 +362,10 @@ function _expand_refs!(io::IOBuffer, s::AbstractString, ents::InternalEntities, 
     while i <= stop
         amp = findnext('&', s, i)
         if amp === nothing
-            _write_span!(io, SubString(s, i), literal)
+            _write_span!(io, SubString(s, i), literal, depth > 1)
             break
         end
-        amp > i && _write_span!(io, SubString(s, i, prevind(s, amp)), literal)
+        amp > i && _write_span!(io, SubString(s, i, prevind(s, amp)), literal, depth > 1)
         j = nextind(s, amp)
         while j <= stop && _is_name_byte(codeunit(s, j))
             j = nextind(s, j)
@@ -369,8 +377,13 @@ function _expand_refs!(io::IOBuffer, s::AbstractString, ents::InternalEntities, 
         end
         name = SubString(s, nextind(s, amp), prevind(s, j))
         rep = get(ents.values, name, nothing)
-        rep === nothing ? Base.write(io, SubString(s, amp, j)) :
-                          _expand_refs!(io, rep, ents, depth + 1, literal)
+        if rep === nothing
+            Base.write(io, SubString(s, amp, j))
+        elseif !literal && d !== nothing && occursin('<', rep)
+            _rewrite_walk!(io, rep, d, depth + 1, name)
+        else
+            _expand_refs!(io, rep, ents, depth + 1, literal, d)
+        end
         io.size > _MAX_ENTITY_EXPANSION &&
             error("entity expansion exceeded $(_MAX_ENTITY_EXPANSION) bytes")
         i = nextind(s, j)
@@ -543,9 +556,25 @@ _rebuild_source(::SubString{String}, bytes::Vector{UInt8}) = SubString(String(by
 # copy; the output buffer is created at the first change, so a walk that changes nothing
 # allocates none.
 function _rewritten_bytes(s::AbstractString, d::_Declarations)
+    out = _rewrite_walk!(nothing, s, d, 1)
+    out === nothing ? nothing : take!(out)
+end
+
+# The walk itself, over the document (`depth` 1) or over the replacement text of an entity
+# included in content that carries markup (`depth` > 1), which it reads the same way: the tags
+# that text brings receive their defaults and reduction, and a reference in one of their values
+# is included in literal. Every character of such a value is an entity's, so its white space
+# reads as spaces even where it names no entity. The text must be balanced content (§4.3.2).
+function _rewrite_walk!(out::Union{Nothing, IOBuffer}, s::AbstractString, d::_Declarations,
+                        depth::Int, entity::AbstractString = "")
+    fragment = depth > 1
+    if fragment
+        depth > _MAX_ENTITY_DEPTH &&
+            error("entity expansion exceeded $(_MAX_ENTITY_DEPTH) levels of nesting")
+        _is_balanced(s) || _unbalanced(entity)
+    end
     ents = d.entities
     attrs = d.attributes
-    out = nothing
     # Token offsets are root-relative, so a source that is itself a view over a larger string
     # reports positions past its own start; subtracting its offset returns them to the index
     # space of `s`, which is what the copied spans below are indexed in.
@@ -584,7 +613,7 @@ function _rewritten_bytes(s::AbstractString, d::_Declarations)
             Base.write(out, SubString(s, pos, prevind(s, start)))
             q = codeunit(span, 1)
             Base.write(out, q)
-            _write_reduced!(out, inner, ents, q, 1)
+            _write_reduced!(out, inner, ents, q, depth)
             Base.write(out, q)
             pos = start + tok.ncodeunits
             continue
@@ -604,9 +633,13 @@ function _rewritten_bytes(s::AbstractString, d::_Declarations)
         end
         ents === nothing && continue
         (k === XMLTokenizer.TokenKinds.TEXT || k === XMLTokenizer.TokenKinds.ATTR_VALUE) || continue
-        tok.has_entities || continue
         span = XMLTokenizer.raw(tok, s)
-        _references_declared(span, ents) || continue
+        if !(tok.has_entities && _references_declared(span, ents))
+            # nothing to include; in a replacement text a value is still rewritten for its
+            # white space
+            (fragment && k === XMLTokenizer.TokenKinds.ATTR_VALUE && _attr_ws_dirty(span)) ||
+                continue
+        end
         start = tok.offset - base + 1
         out === nothing && (out = IOBuffer(sizehint = ncodeunits(s)))
         Base.write(out, SubString(s, pos, prevind(s, start)))
@@ -615,17 +648,50 @@ function _rewritten_bytes(s::AbstractString, d::_Declarations)
             q = span[firstindex(span)]
             Base.write(out, q)
             _expand_refs!(out, SubString(span, nextind(span, firstindex(span)), prevind(span, lastindex(span))),
-                          ents, 1, true)
+                          ents, depth, true)
             Base.write(out, q)
         else
-            _expand_refs!(out, span, ents, 1)
+            _expand_refs!(out, span, ents, depth, false, d)
         end
         pos = start + tok.ncodeunits
     end
     out === nothing && return nothing
     pos <= ncodeunits(s) && Base.write(out, SubString(s, pos))
-    take!(out)
+    out
 end
+
+# Whether a replacement text is balanced content (§4.3.2): every element it opens is closed
+# within it, it closes none it did not open, and it ends outside any tag. A tag cut at its end
+# either stops the tokenizer at the cut, or raises its `ArgumentError`: both are a no.
+function _is_balanced(s::AbstractString)
+    level = 0
+    start_tag = false                                # inside a start tag
+    end_tag = false                                  # inside an end tag
+    try
+        for tok in XMLTokenizer.tokenize(s, 1)
+            k = tok.kind
+            if k === XMLTokenizer.TokenKinds.OPEN_TAG
+                start_tag = true
+            elseif k === XMLTokenizer.TokenKinds.CLOSE_TAG
+                level -= 1
+                level < 0 && return false
+                end_tag = true
+            elseif k === XMLTokenizer.TokenKinds.TAG_CLOSE
+                start_tag && (level += 1)
+                start_tag = end_tag = false
+            elseif k === XMLTokenizer.TokenKinds.SELF_CLOSE
+                start_tag = false
+            end
+        end
+    catch e
+        e isa ArgumentError || rethrow()
+        return false
+    end
+    level == 0 && !start_tag && !end_tag
+end
+
+@noinline _unbalanced(name::AbstractString) = error("not well-formed: the replacement text of " *
+    "entity \"$name\" is not balanced content (XML 1.0 §4.3.2)")
 
 """
     _entity_wfc_applies(xml) -> Bool
