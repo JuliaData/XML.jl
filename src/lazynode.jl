@@ -653,13 +653,10 @@ end
 end
 
 #-----------------------------------------------------------------------------# is_simple / simple_value
-function is_simple(n::LazyNode)
-    n.nodetype === Element || return false
-    attrs = attributes(n)
-    (!isnothing(attrs) && !isempty(attrs)) && return false
-    ch = children(n)
-    length(ch) == 1 && ch[1].nodetype in (Text, CData)
-end
+# Answered by the walk of `is_simple_value`, which reads the element's tokens once and builds
+# nothing: the conditions are the same, an element without attributes whose one child is a
+# text or a CDATA section.
+is_simple(n::LazyNode) = is_simple_value(n) !== nothing
 
 # Delegates to the single-pass token walk of `is_simple_value` — materializing
 # `attributes` + `children` just to validate simplicity costs ~10× the walk (#105).

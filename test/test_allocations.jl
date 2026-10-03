@@ -30,6 +30,7 @@ measure_unescape(x)  = @allocations _use(unescape(x))
 measure_value(x)     = @allocated _use(value(x))
 measure_simple(x)    = @allocated _use(simple_value(x))
 measure_is_simple(x) = @allocated _use(is_simple_value(x))
+measure_simple_test(x) = @allocated is_simple(x)
 function measure_eachattr(x)
     @allocated begin
         s = 0
@@ -102,6 +103,7 @@ end
         end
         for x in (slz, sfl, snd)
             @test simple_value(x) == "hello"
+            @test is_simple(x)
         end
         for x in (slz, sfl, scu, snd)
             @test is_simple_value(x) == "hello"
@@ -116,6 +118,7 @@ end
     foreach(measure_value, (tlz, tfl, tcu, tnd))
     foreach(measure_simple, (slz, sfl, snd))
     foreach(measure_is_simple, (slz, sfl, scu, snd))
+    foreach(measure_simple_test, (slz, sfl, snd))
 
     if _NO_COVERAGE
         @testset "by-key attribute reads" begin
@@ -147,7 +150,10 @@ end
             @test measure_value(tnd) == 0
         end
 
-        @testset "simple_value / is_simple_value" begin
+        @testset "is_simple / simple_value / is_simple_value" begin
+            @test measure_simple_test(slz) == 0
+            @test measure_simple_test(sfl) == 0
+            @test measure_simple_test(snd) == 0
             @test measure_simple(slz) == 0
             @test measure_simple(sfl) == 0
             @test measure_simple(snd) == 0
