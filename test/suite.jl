@@ -1006,6 +1006,31 @@ end
         @test ents("<!DOCTYPE d [<!ELEMENT d (#PCDATA)><!ENTITY e \"v\"><!ATTLIST d a CDATA #IMPLIED>]><d/>").values == Dict("e" => "v")
         # parameter entities are not general entities
         @test ents("<!DOCTYPE d [<!ENTITY % p \"<foo>\"><!ENTITY e \"ok\">]><d/>").values == Dict("e" => "ok")
+
+        @testset "comments and processing instructions are stepped over whole" begin
+            # A quote or a `>` in a comment, a quote or a `]` in a processing instruction: none
+            # hides the declaration that follows or makes one of its own. Each reader, at each
+            # level, reads `&e;` as the "x" the subset declares.
+            function root_text(xml)
+                readings = Any[simple_value(only(elements(parse(xml, R; wellformed = w))))
+                               for w in (:lenient, :structural, :strict) for R in (Node, FlatNode)]
+                push!(readings, simple_value(only(elements(parse(xml, LazyNode)))))
+                cursor = parse(xml, Cursor)
+                while next!(cursor) !== nothing && nodetype(cursor) !== Element end
+                push!(readings, is_simple_value(cursor))
+            end
+            for skipped in ("<!-- it's -->", "<!-- \" -->", "<!-- a > b <!ENTITY e \"fake\"> -->",
+                            "<?pi it's?>", "<?pi ]> ?>")
+                @test root_text("<!DOCTYPE d [" * skipped * "<!ENTITY e \"x\">]><d>&e;</d>") == fill("x", 8)
+            end
+            # a processing instruction never closed is refused at every level (W3C ibm29n05)
+            unclosed = "<!DOCTYPE d [<!ENTITY % p \"x ?>\"><?music %p;\n]><d/>"
+            for w in (:lenient, :structural, :strict), R in (Node, FlatNode)
+                @test_throws ArgumentError parse(unclosed, R; wellformed = w)
+            end
+            @test_throws ArgumentError parse(unclosed, LazyNode)
+            @test_throws ArgumentError parse(unclosed, Cursor)
+        end
     end
 
     @testset "references are included before the parse (§4.4.2)" begin
