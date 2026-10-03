@@ -417,7 +417,8 @@ function _changes_when_reduced(s::AbstractString, ents::Union{Nothing, InternalE
             if b == UInt8('&')
                 _space_ref_end(cu, i, n) > 0 && return true
                 j = _name_end(cu, i + 1, n)
-                j > 0 && _replacement(ents, SubString(s, i + 1, j - 1)) !== nothing && return true
+                j > 0 && _replacement(ents, SubString(s, i + 1, prevind(s, j))) !== nothing &&
+                    return true
             end
         end
     end
@@ -450,7 +451,7 @@ function _write_reduced!(io::IOBuffer, s::AbstractString, ents::Union{Nothing, I
                 continue
             end
             j = _name_end(cu, i + 1, n)
-            rep = j > 0 ? _replacement(ents, SubString(s, i + 1, j - 1)) : nothing
+            rep = j > 0 ? _replacement(ents, SubString(s, i + 1, prevind(s, j))) : nothing
             if rep !== nothing
                 started, pending =
                     _write_reduced!(io, rep, ents, q, depth + 1, started, pending)

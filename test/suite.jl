@@ -4250,6 +4250,11 @@ end
                                  "<d a=\"&e;\"/>", "a") == four("p q")
             @test attr_by_reader("<!DOCTYPE d [<!ENTITY e \" p  q \"><!ATTLIST d a NMTOKENS \"&e;\">]>" *
                                  "<d/>", "a") == four("p q")
+            # an entity's name may hold non-ASCII characters, as in content (§2.3)
+            @test attr_by_reader("<!DOCTYPE d [<!ENTITY é \" p  q \"><!ATTLIST d a NMTOKENS #IMPLIED>]>" *
+                                 "<d a=\"&é;\"/>", "a") == four("p q")
+            @test attr_by_reader("<!DOCTYPE d [<!ENTITY é \" p  q \"><!ATTLIST d a NMTOKENS \"&é;\">]>" *
+                                 "<d/>", "a") == four("p q")
             # every tokenized and enumerated type
             for type in ("ID", "IDREF", "IDREFS", "ENTITY", "ENTITIES", "NMTOKEN", "NMTOKENS",
                          "(x|y)", "NOTATION (n)")
