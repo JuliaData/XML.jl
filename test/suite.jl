@@ -1463,6 +1463,41 @@ end
         @test is_simple(el)
         @test simple_value(el) == "data"
     end
+
+    # `is_simple`, `is_simple_value` and `simple_value` take a different path in each reader:
+    # the `attributes` field of `Node`, the attribute count of a `FlatNode` record, a walk
+    # over the tag's tokens in `LazyNode` and in `Cursor`, which has only `is_simple_value`.
+    # Whatever the element holds, the four readers must give the same answers.
+    @testset "the four readers give the same answers" begin
+        docs = ["<a>x</a>", "<a> </a>", "<a></a>", "<a/>", "<a x=\"1\">x</a>", "<a >x</a>",
+                "<a><![CDATA[c]]></a>", "<a><![CDATA[]]></a>", "<a>x<![CDATA[c]]></a>",
+                "<a>x<!--c--></a>", "<a><!--c-->x</a>", "<a>x<b/></a>", "<a><?p d?>x</a>",
+                "<a>&amp;</a>", "<a>\r\nx</a>",
+                "<!DOCTYPE a [<!ENTITY e \"y\">]><a>&e;</a>",
+                "<!DOCTYPE a [<!ENTITY e \"<b/>\">]><a>&e;</a>",
+                "<!DOCTYPE a [<!ATTLIST a t CDATA \"v\">]><a>x</a>"]
+        for xml in docs
+            @testset "$(repr(xml))" begin
+                node = only(elements(parse(xml, Node)))
+                flat = only(elements(parse(xml, FlatNode)))
+                lazy = only(elements(parse(xml, LazyNode)))
+                cursor = parse(xml, Cursor)
+                while next!(cursor) !== nothing && nodetype(cursor) !== Element end
+                v = is_simple_value(node)
+                simple = v !== nothing
+                @test is_simple_value(flat) == is_simple_value(lazy) == v
+                @test is_simple_value(cursor) == v
+                @test is_simple(node) == is_simple(flat) == is_simple(lazy) == simple
+                if !simple
+                    @test_throws ErrorException simple_value(node)
+                    @test_throws ErrorException simple_value(flat)
+                    @test_throws ErrorException simple_value(lazy)
+                else
+                    @test simple_value(node) == simple_value(flat) == simple_value(lazy) == v
+                end
+            end
+        end
+    end
 end
 
 #==============================================================================#
