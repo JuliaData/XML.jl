@@ -106,6 +106,17 @@ function _subset_entities(body::AbstractString)
             name, np = _dtd_read_name(s, nextind(s, pos))
             name in declared_pe || break
             pos = np <= n && s[np] == ';' ? nextind(s, np) : np
+        elseif c == '<' && startswith(SubString(s, pos), "<!--")
+            # A comment's text is free (§2.5): a quote in it opens no literal, and a `>` in it
+            # ends nothing, so it is stepped over to its own `-->`
+            stop = findnext("-->", s, pos + 4)
+            stop === nothing && break
+            pos = last(stop) + 1
+        elseif c == '<' && startswith(SubString(s, pos), "<?")
+            # and so is a processing instruction's (§2.6), to its `?>`
+            stop = findnext("?>", s, pos + 2)
+            stop === nothing && break
+            pos = last(stop) + 1
         elseif c == '<' && startswith(SubString(s, pos), "<!ENTITY")
             decl, pos = _dtd_parse_entity(s, pos + ncodeunits("<!ENTITY"))
             if decl.parameter
@@ -114,7 +125,7 @@ function _subset_entities(body::AbstractString)
                 out[decl.name] = _resolve_charrefs(decl.value)   # §4.2: the first declaration binds
             end
         elseif c == '<'
-            pos = _dtd_skip_to_close(s, pos)                     # ELEMENT / ATTLIST / NOTATION / comment
+            pos = _dtd_skip_to_close(s, pos)                     # ELEMENT / ATTLIST / NOTATION
         else
             pos = nextind(s, pos)
         end
