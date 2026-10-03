@@ -139,7 +139,7 @@ notwf_tests = filter(t -> t.type == "not-wf", xml10_tests)
         # attribute types, content models). It therefore does not reject all 1257 in-scope not-wf
         # cases of the pinned xmlts20130923 suite. Assert a no-regression floor on the count it does
         # reject, and raise it as coverage grows.
-        @test n_pass >= 408
+        @test n_pass >= 433
         n_fail > 0 && @info "W3C not-wf: $n_fail not yet rejected (out-of-scope validity errors: DTD/entity)" examples=first(failures, 20)
         @info "W3C not-well-formed: $n_pass / $(n_pass + n_fail) rejected"
     end
