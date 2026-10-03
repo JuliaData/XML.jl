@@ -822,13 +822,15 @@ function _subset_open(s::String)
 end
 
 # One declaration, from its `<!` to its `>`, checked for a parameter-entity reference. An
-# entity's first literal is its value unless SYSTEM or PUBLIC comes before it; every other
-# literal is an identifier or a default value. Returns the position after the `>`.
+# entity's first literal is its value unless SYSTEM or PUBLIC comes before it, as a word after
+# the declared name, which may itself be spelled SYSTEM; every other literal is an identifier
+# or a default value. Returns the position after the `>`.
 function _check_declaration(s::String, pos::Int)
     n = ncodeunits(s)
     entity = startswith(SubString(s, pos), "<!ENTITY")
     identifiers = false
     literals = 0
+    words = 0                                        # ENTITY, then the name, then a keyword
     i = pos + 2
     while i <= n
         c = s[i]
@@ -855,7 +857,8 @@ function _check_declaration(s::String, pos::Int)
             i = nextind(s, i)
         elseif _dtd_is_name_char(c)
             word, i = _dtd_name_at(s, i)
-            (word == "SYSTEM" || word == "PUBLIC") && (identifiers = true)
+            words += 1
+            words > 2 && (word == "SYSTEM" || word == "PUBLIC") && (identifiers = true)
         else
             i = nextind(s, i)
         end

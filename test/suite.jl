@@ -673,7 +673,9 @@ end
                        "<!ENTITY % e1 \"\"><!ENTITY % e2 \"%e1;\">",
                        "<!ENTITY % p \"leopard EMPTY>\"><!ELEMENT %p;>",
                        "<!ENTITY % p \"color\"><!ATTLIST doc %p; CDATA #IMPLIED>",
-                       "<!ENTITY % p \"cat SYSTEM\"><!NOTATION %p; \"cat.txt\">")
+                       "<!ENTITY % p \"cat SYSTEM\"><!NOTATION %p; \"cat.txt\">",
+                       # an entity may be named SYSTEM: its literal is still its value
+                       "<!ENTITY % p \"x\"><!ENTITY SYSTEM \"%p;\">")
             xml = "<!DOCTYPE doc [" * subset * "]><doc/>"
             @test_throws "not well-formed" parse(xml, Node; wellformed = :strict)
             @test_throws "not well-formed" parse(xml, FlatNode; wellformed = :strict)
