@@ -507,43 +507,6 @@ end
         @test nodetype(parse("<root><? data?></root>", Node; wellformed=:lenient)) == Document
     end
 
-    @testset ":strict rejects a reference to an undeclared entity (§4.1)" begin
-        # WFC: Entity Declared. `_expand_entities` has already replaced every reference it could
-        # resolve, so a name that reaches the check with no replacement text behind it has no
-        # declaration behind it either.
-        @test_throws Exception parse("<a>&foo;</a>", Node; wellformed=:strict)
-        @test_throws Exception parse("<a x=\"&foo;\"/>", Node; wellformed=:strict)
-        @test_throws Exception parse("<!DOCTYPE a [<!ENTITY e \"x\">]><a>&nope;</a>", Node; wellformed=:strict)
-        @test_throws Exception parse("<a>&foo;</a>", FlatNode; wellformed=:strict)
-        # the five predefined names and character references name no declaration to look up
-        @test nodetype(parse("<a>&amp;&lt;&gt;&apos;&quot;</a>", Node; wellformed=:strict)) == Document
-        @test nodetype(parse("<a>&#65;&#x42;</a>", Node; wellformed=:strict)) == Document
-        # The name is read as the tokenizer reads names, case-sensitive, up to its `;`: the ASCII
-        # name characters and every non-ASCII character (§2.3). A `&` that starts no such name is
-        # left as written, and a name that is not one of the five is named by the message.
-        @test_throws "reference to undeclared entity \"&AMP;\"" parse("<a>&AMP;</a>", Node; wellformed=:strict)
-        @test_throws "reference to undeclared entity \"&_x.y-z:1;\"" parse("<a>&_x.y-z:1;</a>", Node; wellformed=:strict)
-        @test nodetype(parse("<a>&; & &1a; &-a; &amp &&amp;</a>", Node; wellformed=:strict)) == Document
-        for name in ("é", "café", "été"), R in (Node, FlatNode)
-            msg = "reference to undeclared entity \"&$name;\""
-            @test_throws msg parse("<a>&$name;</a>", R; wellformed = :strict)
-            @test_throws msg parse("<a x=\"&$name;\"/>", R; wellformed = :strict)
-        end
-        # a declared entity resolves, so nothing of it reaches the check
-        @test nodetype(parse("<!DOCTYPE a [<!ENTITY e \"x\">]><a>&e;</a>", Node; wellformed=:strict)) == Document
-        # The constraint binds only where the document carries every declaration that could name
-        # an entity. An external subset, an external entity declaration, and a parameter-entity
-        # reference each put one out of reach, so an unknown name is not a defect under them.
-        for shape in ("<!DOCTYPE a SYSTEM \"a.dtd\"><a>&foo;</a>",
-                      "<!DOCTYPE a [<!ENTITY e SYSTEM \"e.ent\">]><a>&foo;</a>",
-                      "<!DOCTYPE a [%pe;<!ENTITY e \"x\">]><a>&foo;</a>")
-            @test nodetype(parse(shape, Node; wellformed=:strict)) == Document
-        end
-        # below :strict the reference stays literal — the graceful degradation
-        @test value(children(parse("<a>&foo;</a>", Node)[end])[1]) == "&foo;"
-        @test value(children(parse("<a>&foo;</a>", Node; wellformed=:lenient)[end])[1]) == "&foo;"
-    end
-
     @testset "every short span gets the verdict and message of the pattern-based check" begin
         # The reference is the check as it read with a pattern, kept here as the specification:
         # one `eachmatch` with three groups, a `tryparse` of the digit run against the character
@@ -921,6 +884,19 @@ end
         doc = parse("""<x a = "1" />""", Node)
         @test doc[1]["a"] == "1"
     end
+
+    @testset ":strict rejects an external entity in an attribute value (§3.1)" begin
+        # WFC: No External Entity References, whether the value names the entity or reaches it
+        # through an internal one (W3C ibm41n10, ibm41n11).
+        x = "<!DOCTYPE a [<!ENTITY x SYSTEM \"x.ent\"><!ENTITY i \"&x;\">]>"
+        for body in ("<a b=\"&x;\"/>", "<a b=\"&i;\"/>"), R in (Node, FlatNode)
+            @test_throws "reference to external entity \"&x;\" in an attribute value" parse(x * body, R; wellformed=:strict)
+        end
+        # in content the reference is allowed, and stays as written
+        @test simple_value(only(elements(parse(x * "<a>&x;</a>", Node; wellformed=:strict)))) == "&x;"
+        # below :strict the attribute value keeps it as written
+        @test only(elements(parse(x * "<a b=\"&x;\"/>", Node)))["b"] == "&x;"
+    end
 end
 
 #==============================================================================#
@@ -952,6 +928,80 @@ end
     @testset "multiple entity references in one text node" begin
         doc = parse("<root>&lt;tag&gt; &amp; &quot;value&quot;</root>", Node)
         @test simple_value(doc[1]) == "<tag> & \"value\""
+    end
+
+    @testset ":strict rejects a reference to an undeclared entity (§4.1)" begin
+        # WFC: Entity Declared. Every reference to a declared internal entity is included before
+        # the check, which knows the names declared external or unparsed: a name that reaches it
+        # with neither behind it has no declaration behind it.
+        @test_throws Exception parse("<a>&foo;</a>", Node; wellformed=:strict)
+        @test_throws Exception parse("<a x=\"&foo;\"/>", Node; wellformed=:strict)
+        @test_throws Exception parse("<!DOCTYPE a [<!ENTITY e \"x\">]><a>&nope;</a>", Node; wellformed=:strict)
+        @test_throws Exception parse("<a>&foo;</a>", FlatNode; wellformed=:strict)
+        # the five predefined names and character references name no declaration to look up
+        @test nodetype(parse("<a>&amp;&lt;&gt;&apos;&quot;</a>", Node; wellformed=:strict)) == Document
+        @test nodetype(parse("<a>&#65;&#x42;</a>", Node; wellformed=:strict)) == Document
+        # The name is read as the tokenizer reads names, case-sensitive, up to its `;`: the ASCII
+        # name characters and every non-ASCII character (§2.3). A `&` that starts no such name is
+        # left as written, and a name that is not one of the five is named by the message.
+        @test_throws "reference to undeclared entity \"&AMP;\"" parse("<a>&AMP;</a>", Node; wellformed=:strict)
+        @test_throws "reference to undeclared entity \"&_x.y-z:1;\"" parse("<a>&_x.y-z:1;</a>", Node; wellformed=:strict)
+        @test nodetype(parse("<a>&; & &1a; &-a; &amp &&amp;</a>", Node; wellformed=:strict)) == Document
+        for name in ("é", "café", "été"), R in (Node, FlatNode)
+            msg = "reference to undeclared entity \"&$name;\""
+            @test_throws msg parse("<a>&$name;</a>", R; wellformed = :strict)
+            @test_throws msg parse("<a x=\"&$name;\"/>", R; wellformed = :strict)
+        end
+        # a declared entity resolves, so nothing of it reaches the check
+        @test nodetype(parse("<!DOCTYPE a [<!ENTITY e \"x\">]><a>&e;</a>", Node; wellformed=:strict)) == Document
+        # The constraint binds only where the document carries every declaration that could name
+        # an entity. An external subset, or a parameter-entity reference between declarations,
+        # puts one out of reach, so an unknown name is a validity error there, not a defect of
+        # form (W3C rmt-e3e-13).
+        for shape in ("<!DOCTYPE a SYSTEM \"a.dtd\"><a>&foo;</a>",
+                      "<!DOCTYPE a [%pe;<!ENTITY e \"x\">]><a>&foo;</a>",
+                      "<!DOCTYPE a [<!ENTITY % pe \"<!ENTITY e 'x'>\">%pe;]><a>&foo;</a>")
+            @test nodetype(parse(shape, Node; wellformed=:strict)) == Document
+        end
+        # The declarations are read, not the text searched: a declared external entity, a
+        # NOTATION or a comment that names SYSTEM, a `%` in a default value, a parameter entity
+        # declared and never referenced: none puts a declaration out of reach.
+        for shape in ("<!DOCTYPE a [<!ENTITY e SYSTEM \"e.ent\">]><a>&foo;</a>",
+                      "<!DOCTYPE a [<!NOTATION n SYSTEM \"n\">]><a>&foo;</a>",
+                      "<!DOCTYPE a [<!-- SYSTEM --><!ENTITY e \"x\">]><a>&foo;</a>",
+                      "<!DOCTYPE a [<!ATTLIST a b CDATA \"50%\">]><a>&foo;</a>",
+                      "<!DOCTYPE a [<!ENTITY % p \"x\">]><a>&foo;</a>")
+            @test_throws "reference to undeclared entity \"&foo;\"" parse(shape, Node; wellformed=:strict)
+        end
+        # an entity declared external is declared: its reference stays as written
+        ext = "<!DOCTYPE a [<!ENTITY x SYSTEM \"x.ent\">]><a>&x;</a>"
+        @test simple_value(only(elements(parse(ext, Node; wellformed=:strict)))) == "&x;"
+        # In a standalone document the constraint binds whatever the DTD holds (W3C not-wf-sa-185,
+        # not-sa03, ibm68n06, ibm32n09), and an entity declared external still counts.
+        sa = "<?xml version=\"1.0\" standalone=\"yes\"?>"
+        for shape in ("<!DOCTYPE a SYSTEM \"a.dtd\"><a>&foo;</a>",
+                      "<!DOCTYPE a [%pe;<!ENTITY e \"x\">]><a>&foo;</a>",
+                      "<!DOCTYPE a SYSTEM \"a.dtd\"><a b=\"&foo;\"/>")
+            @test_throws "reference to undeclared entity \"&foo;\"" parse(sa * shape, Node; wellformed=:strict)
+            @test_throws "reference to undeclared entity \"&foo;\"" parse(sa * shape, FlatNode; wellformed=:strict)
+        end
+        @test simple_value(only(elements(parse(sa * ext, Node; wellformed=:strict)))) == "&x;"
+        # below :strict the reference stays literal — the graceful degradation
+        @test value(children(parse("<a>&foo;</a>", Node)[end])[1]) == "&foo;"
+        @test value(children(parse("<a>&foo;</a>", Node; wellformed=:lenient)[end])[1]) == "&foo;"
+    end
+
+    @testset ":strict rejects a reference to an unparsed entity (§4.1)" begin
+        # WFC: Parsed Entity. An unparsed entity is named by the value of an ENTITY attribute,
+        # never by a reference (W3C not-wf-sa-083, ibm68n08, ibm41n12).
+        un = "<!DOCTYPE a [<!NOTATION n SYSTEM \"n\"><!ENTITY u SYSTEM \"u.jpg\" NDATA n>]>"
+        for R in (Node, FlatNode)
+            @test_throws "reference to unparsed entity \"&u;\"" parse(un * "<a>&u;</a>", R; wellformed=:strict)
+            @test_throws "not well-formed" parse(un * "<a b=\"&u;\"/>", R; wellformed=:strict)
+        end
+        @test nodetype(parse(un * "<a b=\"u\"/>", Node; wellformed=:strict)) == Document
+        # below :strict the reference stays as written
+        @test simple_value(only(elements(parse(un * "<a>&u;</a>", Node)))) == "&u;"
     end
 end
 
