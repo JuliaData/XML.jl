@@ -1204,6 +1204,16 @@ end
         # a source that is not a String takes the same exits
         sub = SubString("<a>plain</a>", 1)
         @test XML._expand_entities(sub) === sub
+        # Declarations that change nothing leave the document as it stands: a CDATA attribute
+        # without a default asks for no walk, and an ID value already reduced is walked and kept.
+        apply(x) = XML._apply_declarations(x)
+        for src in ("<!DOCTYPE d [<!ATTLIST d a CDATA #IMPLIED>]><d a=\" x \"/>",
+                    "<!DOCTYPE d [<!ATTLIST d id ID #IMPLIED>]><d id=\"x\"/>")
+            @test apply(src) === src
+        end
+        # a value to reduce, or a default to supply, is a change, made on a copy
+        @test occursin("<d a=\"x\"/>", apply("<!DOCTYPE d [<!ATTLIST d a NMTOKENS #IMPLIED>]><d a=\" x \"/>"))
+        @test occursin("<d a=\"v\"/>", apply("<!DOCTYPE d [<!ATTLIST d a CDATA \"v\">]><d/>"))
     end
 
     @testset "sources that are not a `String`" begin
@@ -1261,10 +1271,26 @@ end
             end
         end
 
-        # a `StringView` over anything but a `Vector{UInt8}` cannot be rebuilt as its own type,
-        # so it keeps its references literal rather than changing the reader's type parameter
-        odd = StringView(view(Vector{UInt8}(doc), 1:ncodeunits(doc)))
-        @test XML._expand_entities(odd) === odd
+        # A `StringView` over a view of a `Vector{UInt8}` is rebuilt as its own type too, so its
+        # document receives entities, defaults and reduction, and the reader keeps its type
+        # parameter; with an encoding signature it comes back as a `SubString` of that type.
+        dd = "<!DOCTYPE r [<!ENTITY t \"hi\"><!ATTLIST r d CDATA \"v\" n NMTOKENS #IMPLIED>]>" *
+             "<r a=\"&t;\" n=\" p  q \">&t;</r>"
+        for bom in ("", "\ufeff")
+            sv(text) = (bytes = Vector{UInt8}(bom * text); StringView(view(bytes, 1:length(bytes))))
+            lazy = parse(sv(dd), LazyNode)
+            @test typeof(lazy) === typeof(parse(sv("<r/>"), LazyNode))   # as if it declared nothing
+            r = only(elements(lazy))
+            @test collect(attributes(r)) == ["a" => "hi", "n" => "p q", "d" => "v"]
+            @test value(only(children(r))) == "hi"
+        end
+        # Any other source type that the document needs rewritten for is refused, with a message
+        # that says how to pass it; one with nothing to rewrite is read as it stands.
+        other = StringView(codeunits(dd))
+        @test_throws ArgumentError parse(other, LazyNode)
+        @test_throws ArgumentError parse(other, Cursor)
+        plain = StringView(codeunits("<!DOCTYPE r [<!ELEMENT r ANY>]><r>&amp;</r>"))
+        @test simple_value(only(elements(parse(plain, LazyNode)))) == "&"
     end
 
     @testset "expansion is bounded, at every wellformed level" begin

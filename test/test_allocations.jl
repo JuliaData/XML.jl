@@ -261,6 +261,25 @@ measure_eol_rewrite(s) = Base.@allocations XML._rewrite_content_eol(s)
     end
 end
 
+# Entry rewrite — the contract that follows it: a document without a DTD is returned after one
+# probe of its prolog, allocating nothing, and a walk that changes nothing creates no output
+# buffer, so it allocates what reading the internal subset costs and nothing per element.
+measure_entry_allocs(s) = Base.@allocations XML._apply_declarations(s)
+measure_entry_bytes(s)  = @allocated XML._apply_declarations(s)
+
+@testset "Entry rewrite: nothing without a DTD, no buffer when nothing changes" begin
+    plain = "<?xml version=\"1.0\"?><d>" * repeat("<e a=\"x\"/>", 20_000) * "</d>"
+    walked = "<!DOCTYPE d [<!ATTLIST e id ID #IMPLIED>]><d>" *
+             join("<e id=\"x$i\"/>" for i in 1:20_000) * "</d>"
+    @test XML._apply_declarations(plain) === plain
+    @test XML._apply_declarations(walked) === walked   # every ID value is already reduced
+    measure_entry_allocs(plain); measure_entry_bytes(walked)   # warm-up
+    if _NO_COVERAGE
+        @test measure_entry_allocs(plain) == 0
+        @test measure_entry_bytes(walked) < ncodeunits(walked) ÷ 10
+    end
+end
+
 # `:strict` reference check — the contract: on a token that carries a `&`, the check reads the
 # code units and copies nothing on a span it accepts, so the level allocates exactly what
 # `:structural` allocates on a document full of references. The direct guard holds the check
