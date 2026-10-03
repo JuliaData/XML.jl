@@ -2658,13 +2658,15 @@ end
 
         @testset "a malformed ATTLIST is ignored, never refused" begin
             # A misspelled keyword, `#FIXED` without its value or the space before it, the
-            # default before the keyword, two keywords (W3C ibm60n01 to ibm60n08): the
-            # declaration cannot be read, so none of its definitions supplies anything.
+            # default before the keyword, two keywords (W3C ibm60n01 to ibm60n08), an
+            # enumeration still open where the subset ends: the declaration cannot be read,
+            # so none of its definitions supplies anything.
             for subset in ("<!ATTLIST d a CDATA #required>", "<!ATTLIST d a CDATA #Implied>",
                            "<!ATTLIST d a CDATA !IMPLIED>", "<!ATTLIST d a CDATA #FIXED >",
                            """<!ATTLIST d a CDATA #FIXED"v">""", """<!ATTLIST d a CDATA "v" #FIXED>""",
                            "<!ATTLIST d a CDATA #REQUIRED #IMPLIED>",
-                           """<!ATTLIST d b CDATA "2" a CDATA #required>""")
+                           """<!ATTLIST d b CDATA "2" a CDATA #required>""",
+                           "<!ATTLIST d a (x|y")
                 @test reported(withsubset(subset)) == fill(none, 8)
             end
         end
@@ -2693,14 +2695,18 @@ end
                          "<r><![CDATA[<e n=' p '/>]]><e n=\" p  q \" /></r>",
                          "<r><?pi <e n=' z '/> ?><e\n  n = ' p\tq '\n/></r>",
                          "<r i=\"a>b\" ><e k='x > y' n=\"1/>2\"></e></r>",
-                         "<r><é/><e n='é  à '/></r>", "<r>text > more <e/> tail</r>", "<r/>")
+                         "<r><é/><e n='é  à '/></r>", "<r>text > more <e/> tail</r>", "<r/>",
+                         "<r><!-- a-b --><?p a?b?><![CDATA[x]y]]><e/></r>")
                 s = dt * body
                 d = XML._declarations(s)
                 @test XML._rewrite_tags(s, d.attributes) == (true, full(s, d))
             end
-            # a form the walk does not expect hands the document to the full walk
-            s = dt * "<r><e n=unquoted/></r>"
-            @test XML._rewrite_tags(s, XML._declarations(s).attributes) == (false, nothing)
+            # on a form it does not expect, the walk returns `(false, nothing)`, and the
+            # full walk reads the document
+            for body in ("<r><e n=unquoted/></r>", "<r><!FOO><e/></r>")
+                s = dt * body
+                @test XML._rewrite_tags(s, XML._declarations(s).attributes) == (false, nothing)
+            end
         end
 
         @testset "names that are not ASCII" begin
@@ -4280,6 +4286,11 @@ end
             @test attr_by_reader(nmtokens("  x &#9; y  "), "a") == four("x \t y")
             @test attr_by_reader(nmtokens("x&#10;y"), "a") == four("x\ny")
             @test attr_by_reader(nmtokens(" &#xA0;x é  ü "), "a") == four("\u00a0x é ü")
+            # another reference in a value already reduced is written as it stands, for the
+            # readers to decode, whether or not the DTD declares an entity
+            @test attr_by_reader(nmtokens("a&amp;b"), "a") == four("a&b")
+            @test attr_by_reader("<!DOCTYPE d [<!ENTITY e \"z\"><!ATTLIST d a NMTOKENS #IMPLIED>]>" *
+                                 "<d a=\"a&amp;b\"/>", "a") == four("a&b")
             # at every level, and once written out
             @test [only(elements(parse(nmtokens(" 1  2 "), R; wellformed = w)))["a"]
                    for R in (Node, FlatNode), w in (:lenient, :strict)] == fill("1 2", 2, 2)
