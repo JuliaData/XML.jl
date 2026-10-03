@@ -16,25 +16,7 @@
 using XML
 using XML: Node, nodetype, Document
 using Test
-using Downloads: download
-using Tar
-
-const W3C_URL = "https://www.w3.org/XML/Test/xmlts20130923.tar"
-const W3C_DIR = joinpath(@__DIR__, "data", "w3c")
-const W3C_TAR = joinpath(@__DIR__, "data", "xmlts20130923.tar")
-
-function ensure_w3c_suite()
-    isdir(joinpath(W3C_DIR, "xmlconf")) && return
-    mkpath(W3C_DIR)
-    if !isfile(W3C_TAR)
-        @info "Downloading W3C XML Conformance Test Suite..."
-        download(W3C_URL, W3C_TAR)
-    end
-    @info "Extracting W3C XML Conformance Test Suite..."
-    open(W3C_TAR) do io
-        Tar.extract(io, W3C_DIR)
-    end
-end
+@isdefined(ensure_w3c_suite) || include("w3c_suite.jl")   # `suite.jl` includes it first
 
 # Parse a test catalog XML and extract TEST entries
 function parse_catalog(catalog_path::String)
