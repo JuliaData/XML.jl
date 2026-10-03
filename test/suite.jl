@@ -5,6 +5,15 @@ using XML: ParsedDTD, ElementDecl, AttDecl, EntityDecl, NotationDecl
 using Mmap, StringViews
 using Test
 
+# The W3C XML Conformance Test Suite is not in the repository, and several testsets walk the
+# fixtures on disk, the first long before `test_w3c.jl` runs. It is fetched before them all:
+# CI restores it from a cache only when one exists.
+include("w3c_suite.jl")
+@testset "W3C conformance suite on disk" begin
+    ensure_w3c_suite()
+    @test isdir(joinpath(W3C_DIR, "xmlconf"))
+end
+
 #==============================================================================#
 #                              ESCAPE / UNESCAPE                               #
 #==============================================================================#
