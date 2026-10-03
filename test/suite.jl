@@ -2669,6 +2669,40 @@ end
             end
         end
 
+        @testset "the walk over start tags writes what the full walk writes" begin
+            # Without a general entity the entry rewrite reads start tags only. Every document on
+            # disk that declares attributes and no entity, and forms that walk steps over, get the
+            # same bytes from both walks.
+            full(s, d) = (out = XML._rewrite_walk!(nothing, s, d, 1);
+                          out === nothing ? nothing : take!(out))
+            handled = 0
+            for (dir, _, fs) in walkdir(joinpath(@__DIR__, "data")), f in fs
+                endswith(f, ".xml") || continue
+                s = try read(joinpath(dir, f), String) catch; continue end
+                isvalid(s) || continue
+                d = try XML._declarations(s) catch; continue end
+                (d === nothing || d.entities !== nothing) && continue
+                want = try full(s, d) catch; continue end
+                done, got = XML._rewrite_tags(s, d.attributes)
+                @test !done || got == want
+                handled += done
+            end
+            @test handled > 100
+            dt = "<!DOCTYPE r [<!ATTLIST r i ID #IMPLIED><!ATTLIST e n NMTOKENS ' a  b ' k CDATA \"v\">]>"
+            for body in ("<r i=' x '><!-- <e n=' p  q '/> --><e/></r>",
+                         "<r><![CDATA[<e n=' p '/>]]><e n=\" p  q \" /></r>",
+                         "<r><?pi <e n=' z '/> ?><e\n  n = ' p\tq '\n/></r>",
+                         "<r i=\"a>b\" ><e k='x > y' n=\"1/>2\"></e></r>",
+                         "<r><é/><e n='é  à '/></r>", "<r>text > more <e/> tail</r>", "<r/>")
+                s = dt * body
+                d = XML._declarations(s)
+                @test XML._rewrite_tags(s, d.attributes) == (true, full(s, d))
+            end
+            # a form the walk does not expect hands the document to the full walk
+            s = dt * "<r><e n=unquoted/></r>"
+            @test XML._rewrite_tags(s, XML._declarations(s).attributes) == (false, nothing)
+        end
+
         @testset "names that are not ASCII" begin
             @test reported("""<!DOCTYPE r [<!ATTLIST r a (é|b) "b">]><r/>""") == fill(["a" => "b"], 8)
             @test reported("""<!DOCTYPE données [<!ATTLIST données é CDATA "à">]><données/>""") ==

@@ -580,10 +580,149 @@ _rebuild_source(::SubString{String}, bytes::Vector{UInt8}) = SubString(String(by
 # attribute it leaves out that a default supplies (§3.3.2), after the ones it writes. Returns
 # `nothing` when nothing was rewritten, so the caller returns its own argument instead of an equal
 # copy; the output buffer is created at the first change, so a walk that changes nothing
-# allocates none.
+# allocates none. A DTD that declares no general entity leaves nothing in content to rewrite:
+# the walk over start tags alone then does the same work in less time.
 function _rewritten_bytes(s::AbstractString, d::_Declarations)
+    if d.entities === nothing
+        done, bytes = _rewrite_tags(s, d.attributes)
+        done && return bytes
+    end
     out = _rewrite_walk!(nothing, s, d, 1)
     out === nothing ? nothing : take!(out)
+end
+
+# The walk over start tags, for a DTD that declares attributes and no general entity. The bytes
+# between two tags are stepped over by a search for `<`; a comment, a CDATA section and a
+# processing instruction to their ends; the start tag of an element the table does not name to
+# its `>`, past its quoted values. A start tag of a named element has its values reduced and its
+# defaults supplied as `_rewrite_walk!` does. The DOCTYPE is read by the tokenizer. Any form this
+# walk does not expect hands the document to `_rewrite_walk!`: `(false, nothing)`; otherwise
+# `(true, bytes)`, `bytes` being `nothing` when nothing was rewritten.
+function _rewrite_tags(s::AbstractString, attrs::Dict{String, Vector{_DeclaredAttr}})
+    cu = codeunits(s)
+    n = length(cu)
+    out = nothing
+    pos = 1
+    written = Bool[]
+    i = findnext(==(UInt8('<')), cu, _after_doctype(s))
+    while i !== nothing && i < n
+        b = cu[i + 1]
+        if b == UInt8('/')                                   # an end tag: nothing in it counts
+            i = findnext(==(UInt8('<')), cu, i + 2)
+            continue
+        elseif b == UInt8('?')                               # a processing instruction
+            j = _find_bytes(cu, (UInt8('?'), UInt8('>')), i + 2)
+            j == 0 && return (false, nothing)
+            i = findnext(==(UInt8('<')), cu, j + 2)
+            continue
+        elseif b == UInt8('!')
+            if i + 3 <= n && _spells(cu, i + 2, (UInt8('-'), UInt8('-')))
+                j = _find_bytes(cu, (UInt8('-'), UInt8('-'), UInt8('>')), i + 4)
+            elseif i + 8 <= n && _spells(cu, i + 2, _CDATA_OPENING)
+                j = _find_bytes(cu, (UInt8(']'), UInt8(']'), UInt8('>')), i + 9)
+            else
+                return (false, nothing)
+            end
+            j == 0 && return (false, nothing)
+            i = findnext(==(UInt8('<')), cu, j + 3)
+            continue
+        end
+        _is_name_start_byte(b) || return (false, nothing)
+        j = i + 1                                            # a start tag: its name
+        while j <= n && XMLTokenizer.is_name_byte(cu[j])
+            j += 1
+        end
+        current = get(attrs, SubString(s, i + 1, prevind(s, j)), nothing)
+        if current !== nothing
+            resize!(written, length(current))
+            fill!(written, false)
+        end
+        k = j                                                # then its attributes, to its end
+        while true
+            while k <= n && XMLTokenizer.is_whitespace(cu[k])
+                k += 1
+            end
+            k > n && return (false, nothing)
+            c = cu[k]
+            if c == UInt8('>') || (c == UInt8('/') && k < n && cu[k + 1] == UInt8('>'))
+                if current !== nothing
+                    for a in eachindex(current)
+                        att = current[a]
+                        (written[a] || att.supplied === nothing) && continue
+                        out === nothing && (out = IOBuffer(sizehint = n))
+                        Base.write(out, SubString(s, pos, prevind(s, k)))
+                        Base.write(out, ' ', att.name, "=\"", att.supplied, '"')
+                        pos = k
+                    end
+                end
+                k += c == UInt8('>') ? 1 : 2
+                break
+            end
+            XMLTokenizer.is_name_byte(c) || return (false, nothing)
+            a0 = k
+            while k <= n && XMLTokenizer.is_name_byte(cu[k])
+                k += 1
+            end
+            a1 = k
+            while k <= n && XMLTokenizer.is_whitespace(cu[k])
+                k += 1
+            end
+            (k <= n && cu[k] == UInt8('=')) || return (false, nothing)
+            k += 1
+            while k <= n && XMLTokenizer.is_whitespace(cu[k])
+                k += 1
+            end
+            (k <= n && (cu[k] == UInt8('"') || cu[k] == UInt8('\''))) || return (false, nothing)
+            q = cu[k]
+            v0 = k
+            v1 = findnext(==(q), cu, k + 1)
+            v1 === nothing && return (false, nothing)
+            k = v1 + 1
+            current === nothing && continue
+            name = SubString(s, a0, prevind(s, a1))
+            reduce_value = false
+            for a in eachindex(current)
+                current[a].name == name || continue
+                written[a] = true
+                reduce_value = current[a].normalize
+            end
+            reduce_value || continue
+            inner = SubString(s, v0 + 1, prevind(s, v1))
+            _changes_when_reduced(inner, nothing) || continue
+            out === nothing && (out = IOBuffer(sizehint = n))
+            Base.write(out, SubString(s, pos, v0))
+            _write_reduced!(out, inner, nothing, q, 1)
+            pos = v1
+        end
+        i = findnext(==(UInt8('<')), cu, k)
+    end
+    out === nothing && return (true, nothing)
+    pos <= n && Base.write(out, SubString(s, pos))
+    (true, take!(out))
+end
+
+# The position after the DOCTYPE, which the tokenizer reads over the prolog; 1 when the root
+# element comes first.
+function _after_doctype(s::AbstractString)
+    for tok in XMLTokenizer.tokenize(s, 1)
+        tok.kind === XMLTokenizer.TokenKinds.DOCTYPE_CLOSE &&
+            return XMLTokenizer._data_stop(tok, s) + 1
+        tok.kind === XMLTokenizer.TokenKinds.OPEN_TAG && return 1
+    end
+    1
+end
+
+const _CDATA_OPENING = Tuple(codeunits("[CDATA["))   # after the `<!`
+
+# The index at or after `i` where the bytes `seq` start, or 0.
+function _find_bytes(cu, seq::NTuple{N, UInt8}, i::Int) where {N}
+    n = length(cu)
+    while true
+        j = findnext(==(seq[1]), cu, i)
+        (j === nothing || j + N - 1 > n) && return 0
+        _spells(cu, j, seq) && return j
+        i = j + 1
+    end
 end
 
 # The walk itself, over the document (`depth` 1) or over the replacement text of an entity
