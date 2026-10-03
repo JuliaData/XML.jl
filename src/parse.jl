@@ -229,17 +229,18 @@ end
 
 # `:strict` only, one pass over a span's references, character and named alike. Gated + DCE'd off
 # the :strict path and called only when a token carries entities, so :lenient/:structural cost
-# nothing. The pass reads code units: every byte it decides on — `&`, `#`, `x`, a digit, a letter
-# of a name, `;` — is ASCII, hence a character boundary, and a span it accepts allocates nothing;
-# only a rejected reference is copied, into its message. A character reference is rejected when
-# its digit run denotes no code point of the XML Char range; the run is read on the hexadecimal
-# alphabet in both forms, so a decimal form carrying a letter is rejected too. A named reference
+# nothing. The pass reads code units: every byte where it stops — `&`, `#`, `x`, a digit, `;`, the
+# byte after a name — is ASCII, hence a character boundary, since a name takes every byte at or
+# above 0x80 as its own; a span it accepts allocates nothing, and only a rejected reference is
+# copied, into its message. A character reference is rejected when its digit run denotes no code
+# point of the XML Char range; the run is read on the hexadecimal alphabet in both forms, so a
+# decimal form carrying a letter is rejected too. A named reference
 # is checked only when `names` holds, and the test is then a membership one: `_expand_entities`
 # has already replaced every reference it could resolve, so a name arriving here that is not
 # predefined has no replacement text behind it (XML 1.0 §4.1, the "Entity Declared"
-# well-formedness constraint). A `&` that starts neither form — a name outside the ASCII set the
-# pass accepts, a digit run without its `;` — goes unchecked, which costs a missed rejection and
-# never a wrong one.
+# well-formedness constraint). A `&` that starts neither form — one followed by no name, or by a
+# name or a digit run without its `;` — goes unchecked, which costs a missed rejection and never
+# a wrong one.
 function _check_refs_strict(s::AbstractString, names::Bool)
     cu = codeunits(s)
     n = length(cu)

@@ -37,8 +37,8 @@ end
 # The reference lexer, shared by the decoder below and by the `:strict` reference check in
 # parse.jl. Each helper reads the bytes of one form from a `&` and reports where the form ends
 # and what it denotes; what a caller does with a form it cannot resolve — keep the `&` as
-# written, or reject the document — is the caller's. Every byte a helper decides on is ASCII,
-# hence a character boundary in UTF-8.
+# written, or reject the document — is the caller's. Every byte where a helper stops is ASCII,
+# hence a character boundary in UTF-8: a name takes every byte at or above 0x80 as its own.
 
 # The character reference whose `&#` sits at `i`: `(j, cp)`, the index of its `;` and the code
 # point its digit run denotes, or `j == 0` when the bytes form no reference. `x` or `X` selects
@@ -68,19 +68,20 @@ end
 end
 
 # The named reference whose name would start at `a`: the index of its `;`, or 0 when the bytes
-# form no reference. The name is read on the ASCII subset of the Name production (XML 1.0 §2.3).
+# form no reference. The name is read as the tokenizer reads names (XML 1.0 §2.3, leniently): an
+# ASCII letter, `_` or `:` first, then name characters, every byte of a non-ASCII character
+# counting as one, the first one included.
 @inline function _name_end(cu, a::Int, n::Int)
-    (a <= n && _is_ascii_name_start(@inbounds(cu[a]))) || return 0
+    (a <= n && _is_name_start_byte(@inbounds(cu[a]))) || return 0
     j = a + 1
-    while j <= n && _is_ascii_name_char(@inbounds(cu[j]))
+    while j <= n && XMLTokenizer.is_name_byte(@inbounds(cu[j]))
         j += 1
     end
     return (j <= n && @inbounds(cu[j]) == UInt8(';')) ? j : 0
 end
-@inline _is_ascii_name_start(b::UInt8) =
-    (UInt8('a') <= b <= UInt8('z')) || (UInt8('A') <= b <= UInt8('Z')) || b == UInt8('_') || b == UInt8(':')
-@inline _is_ascii_name_char(b::UInt8) =
-    _is_ascii_name_start(b) || (UInt8('0') <= b <= UInt8('9')) || b == UInt8('.') || b == UInt8('-')
+@inline _is_name_start_byte(b::UInt8) =
+    (UInt8('a') <= b <= UInt8('z')) || (UInt8('A') <= b <= UInt8('Z')) || b == UInt8('_') ||
+    b == UInt8(':') || b >= 0x80
 
 # The predefined reference at `i`, where `cu[i]` is `&`: `(cp, len)`, the character it denotes
 # and its length in code units from the `&` to the `;`, or `len == 0` when the bytes spell none

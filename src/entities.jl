@@ -122,7 +122,9 @@ function _subset_entities(body::AbstractString)
     isempty(out) ? nothing : out
 end
 
-const _GENREF_RE = r"&([A-Za-z_:][A-Za-z0-9._:-]*);"
+# A reference to a general entity, its name read as the tokenizer reads names: every non-ASCII
+# character is a name character (§2.3).
+const _GENREF_RE = r"&([A-Za-z_:[:^ascii:]][A-Za-z0-9._:[:^ascii:]-]*);"
 
 # Well-formedness constraint "No Recursion" — a cycle is a termination hazard, refused at
 # every `wellformed` level.
@@ -183,10 +185,11 @@ const _MAX_ENTITY_EXPANSION = 64 * 1024 * 1024   # bytes an expanded document ma
 # Unlike the line-end rewrite, whose output is bounded by its source, an expansion's length is
 # not known until it ends — amplification is the point of the bounds above. A growable buffer is
 # therefore the right shape here, where a sized one was right there.
-@inline _is_name_byte(b::UInt8) =
-    (b >= UInt8('a') && b <= UInt8('z')) || (b >= UInt8('A') && b <= UInt8('Z')) ||
-    (b >= UInt8('0') && b <= UInt8('9')) || b == UInt8('_') || b == UInt8(':') ||
-    b == UInt8('.') || b == UInt8('-') || b == UInt8('#')
+#
+# A name is read as the tokenizer reads names (`XMLTokenizer.NAME_BYTE_TABLE`): ASCII name
+# characters, and every byte of a non-ASCII character (§2.3). `#` passes too, so a character
+# reference reads as a name that no declaration binds, and is copied through.
+@inline _is_name_byte(b::UInt8) = XMLTokenizer.is_name_byte(b) || b == UInt8('#')
 
 # §4.4.5 Included in Literal: when the reference stands in an attribute value, the quotation
 # marks of the replacement text "are not recognized as delimiters". A pass that writes into the
