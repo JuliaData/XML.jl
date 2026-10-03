@@ -518,12 +518,17 @@ end
         # the five predefined names and character references name no declaration to look up
         @test nodetype(parse("<a>&amp;&lt;&gt;&apos;&quot;</a>", Node; wellformed=:strict)) == Document
         @test nodetype(parse("<a>&#65;&#x42;</a>", Node; wellformed=:strict)) == Document
-        # The name is read on the ASCII subset of the Name production, case-sensitive, up to its `;`:
-        # a `&` that starts no such name is left as written, and a name that is not one of the five
-        # is named by the message.
+        # The name is read as the tokenizer reads names, case-sensitive, up to its `;`: the ASCII
+        # name characters and every non-ASCII character (§2.3). A `&` that starts no such name is
+        # left as written, and a name that is not one of the five is named by the message.
         @test_throws "reference to undeclared entity \"&AMP;\"" parse("<a>&AMP;</a>", Node; wellformed=:strict)
         @test_throws "reference to undeclared entity \"&_x.y-z:1;\"" parse("<a>&_x.y-z:1;</a>", Node; wellformed=:strict)
-        @test nodetype(parse("<a>&; & &1a; &-a; &é; &amp &&amp;</a>", Node; wellformed=:strict)) == Document
+        @test nodetype(parse("<a>&; & &1a; &-a; &amp &&amp;</a>", Node; wellformed=:strict)) == Document
+        for name in ("é", "café", "été"), R in (Node, FlatNode)
+            msg = "reference to undeclared entity \"&$name;\""
+            @test_throws msg parse("<a>&$name;</a>", R; wellformed = :strict)
+            @test_throws msg parse("<a x=\"&$name;\"/>", R; wellformed = :strict)
+        end
         # a declared entity resolves, so nothing of it reaches the check
         @test nodetype(parse("<!DOCTYPE a [<!ENTITY e \"x\">]><a>&e;</a>", Node; wellformed=:strict)) == Document
         # The constraint binds only where the document carries every declaration that could name
@@ -544,8 +549,11 @@ end
         # one `eachmatch` with three groups, a `tryparse` of the digit run against the character
         # range, a membership test of the name against the five predefined ones. Its verdict —
         # accepted, or the message it raises — is what the byte scan reproduces, `names` on and off.
+        # Its name class admits every non-ASCII character, as the tokenizer does in a name.
+        name = raw"[A-Za-z_:[:^ascii:]][A-Za-z0-9._:[:^ascii:]-]*"
+        reference = Regex(raw"&(?:#([xX]?)([0-9a-fA-F]+)|(" * name * raw"));")
         function pattern_check(s, names)
-            for m in eachmatch(r"&(?:#([xX]?)([0-9a-fA-F]+)|([A-Za-z_:][A-Za-z0-9._:-]*));", s)
+            for m in eachmatch(reference, s)
                 if m[3] === nothing
                     cp = tryparse(UInt32, m[2]; base = isempty(m[1]) ? 10 : 16)
                     (cp === nothing || !XML._is_xml_char(cp)) &&
@@ -983,6 +991,12 @@ end
             @test_throws ErrorException ents("<!DOCTYPE d [<!ENTITY a \"&a;\">]><d>&a;</d>")
             @test_throws ErrorException ents("<!DOCTYPE d [<!ENTITY a \"&b;\"><!ENTITY b \"&a;\">]><d>&a;</d>")
         end
+        # a name with non-ASCII characters is read like any other (§2.3)
+        rec = "<!DOCTYPE d [<!ENTITY é \"&é;\">]><d>&é;</d>"
+        @test_throws "No Recursion" ents(rec)
+        for w in (:lenient, :structural, :strict)
+            @test_throws "No Recursion" parse(rec, Node; wellformed = w)
+        end
     end
 
     @testset "the subset is read as markup, not scanned for text" begin
@@ -1015,6 +1029,16 @@ end
         @test exp(doc("<!ENTITY e \"a&amp;b\">", "&e;")) == doc("<!ENTITY e \"a&amp;b\">", "a&amp;b")
         # attribute values are rewritten too
         @test occursin("x=\"ev\"", exp("<!DOCTYPE a [<!ENTITY e \"ev\">]><a x=\"&e;\"/>"))
+        # A name is read as the tokenizer reads names: every non-ASCII character is a name
+        # character, the first one included (§2.3).
+        readers = (Node, LazyNode, FlatNode)
+        for name in ("café", "été")
+            sub = "<!ENTITY $name \"x\">"
+            @test exp(doc(sub, "&$name;")) == doc(sub, "x")
+            @test occursin("a=\"x\"", exp("<!DOCTYPE d [$sub]><d a=\"&$name;\"/>"))
+            @test [simple_value(only(elements(parse(doc(sub, "&$name;"), R)))) for R in readers] ==
+                  fill("x", 3)
+        end
     end
 
     @testset "a reference is only a reference in content and attribute values" begin
