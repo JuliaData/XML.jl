@@ -1125,7 +1125,7 @@ end
     @testset "references are included before the parse (§4.4.2)" begin
         # Inclusion happens on the document, not on each reported value: replacement text
         # carrying markup then produces structure, because the parser reads what this wrote.
-        exp(x) = XML._expand_entities(x)
+        exp(x) = XML._apply_declarations(x)
         doc(sub, body) = "<!DOCTYPE d [" * sub * "]><d>" * body * "</d>"
 
         @test exp("<a>texte &amp; suite</a>") == "<a>texte &amp; suite</a>"   # nothing declared
@@ -1156,7 +1156,7 @@ end
     end
 
     @testset "a reference is only a reference in content and attribute values" begin
-        exp(x) = XML._expand_entities(x)
+        exp(x) = XML._apply_declarations(x)
         for body in ("<!--&e;-->", "<![CDATA[&e;]]>", "<?pi &e;?>")
             src = "<!DOCTYPE d [<!ENTITY e \"X\">]><d>" * body * "</d>"
             @test exp(src) == src
@@ -1194,7 +1194,7 @@ end
     end
 
     @testset "a document that needs no rewrite is returned as it stands" begin
-        exp(x) = XML._expand_entities(x)
+        exp(x) = XML._apply_declarations(x)
         for src in ("<a>plain</a>",
                     "<!DOCTYPE d [<!ELEMENT d EMPTY>]><d/>",              # declarations, no entity
                     "<!DOCTYPE d [<!ENTITY e \"X\">]><d>no use</d>",      # declared, never referenced
@@ -1203,17 +1203,16 @@ end
         end
         # a source that is not a String takes the same exits
         sub = SubString("<a>plain</a>", 1)
-        @test XML._expand_entities(sub) === sub
+        @test XML._apply_declarations(sub) === sub
         # Declarations that change nothing leave the document as it stands: a CDATA attribute
         # without a default asks for no walk, and an ID value already reduced is walked and kept.
-        apply(x) = XML._apply_declarations(x)
         for src in ("<!DOCTYPE d [<!ATTLIST d a CDATA #IMPLIED>]><d a=\" x \"/>",
                     "<!DOCTYPE d [<!ATTLIST d id ID #IMPLIED>]><d id=\"x\"/>")
-            @test apply(src) === src
+            @test exp(src) === src
         end
         # a value to reduce, or a default to supply, is a change, made on a copy
-        @test occursin("<d a=\"x\"/>", apply("<!DOCTYPE d [<!ATTLIST d a NMTOKENS #IMPLIED>]><d a=\" x \"/>"))
-        @test occursin("<d a=\"v\"/>", apply("<!DOCTYPE d [<!ATTLIST d a CDATA \"v\">]><d/>"))
+        @test occursin("<d a=\"x\"/>", exp("<!DOCTYPE d [<!ATTLIST d a NMTOKENS #IMPLIED>]><d a=\" x \"/>"))
+        @test occursin("<d a=\"v\"/>", exp("<!DOCTYPE d [<!ATTLIST d a CDATA \"v\">]><d/>"))
     end
 
     @testset "sources that are not a `String`" begin
@@ -1221,9 +1220,9 @@ end
         # past its own start; a view beginning after byte one is what catches the correction.
         root = "padding<!DOCTYPE d [<!ENTITY e \"<b>x</b>\">]><d>&e;</d>"
         sub = SubString(root, ncodeunits("padding") + 1)
-        @test XML._expand_entities(sub) == "<!DOCTYPE d [<!ENTITY e \"<b>x</b>\">]><d><b>x</b></d>"
-        @test XML._expand_entities(sub) isa SubString{String}
-        @test @inferred(XML._expand_entities(sub)) isa SubString{String}
+        @test XML._apply_declarations(sub) == "<!DOCTYPE d [<!ENTITY e \"<b>x</b>\">]><d><b>x</b></d>"
+        @test XML._apply_declarations(sub) isa SubString{String}
+        @test @inferred(XML._apply_declarations(sub)) isa SubString{String}
 
         doc = "<!DOCTYPE r [<!ENTITY e \"<b>x</b>\"><!ENTITY t \"hi\">]><r a=\"&t;\">&e;&t;</r>"
         mktemp() do path, io
@@ -1231,7 +1230,7 @@ end
             close(io)
             open(path) do f
                 sv = StringView(Mmap.mmap(f))
-                @test @inferred(XML._expand_entities(sv)) isa StringView{Vector{UInt8}}
+                @test @inferred(XML._apply_declarations(sv)) isa StringView{Vector{UInt8}}
                 # §4.4.2 inclusion reaches a mapped document: markup in replacement text is
                 # structure, not a text node holding `<`
                 r = last(collect(children(parse(sv, LazyNode))))
@@ -1267,7 +1266,7 @@ end
             close(io)
             open(path) do f
                 sv = StringView(Mmap.mmap(f))
-                @test XML._expand_entities(sv) === sv
+                @test XML._apply_declarations(sv) === sv
             end
         end
 
@@ -1298,13 +1297,13 @@ end
         # ten entities each naming the previous one ten times reach 10^10 bytes at depth ten
         laughs = "<!ENTITY a0 \"" * repeat("a", 1000) * "\">" *
                  join(["<!ENTITY a$i \"" * repeat("&a$(i-1);", 10) * "\">" for i in 1:9])
-        @test_throws ErrorException XML._expand_entities("<!DOCTYPE d [" * laughs * "]><d>&a9;</d>")
+        @test_throws ErrorException XML._apply_declarations("<!DOCTYPE d [" * laughs * "]><d>&a9;</d>")
         # nesting alone is bounded too, without amplification
         deep = join(["<!ENTITY b$i \"&b$(i-1);\">" for i in 1:60])
-        @test_throws ErrorException XML._expand_entities(
+        @test_throws ErrorException XML._apply_declarations(
             "<!DOCTYPE d [<!ENTITY b0 \"x\">" * deep * "]><d>&b60;</d>")
         # and a modest nesting is not
-        @test occursin("<d>xxxx</d>", XML._expand_entities(
+        @test occursin("<d>xxxx</d>", XML._apply_declarations(
             "<!DOCTYPE d [<!ENTITY c0 \"x\"><!ENTITY c1 \"&c0;&c0;\"><!ENTITY c2 \"&c1;&c1;\">]><d>&c2;</d>"))
     end
 

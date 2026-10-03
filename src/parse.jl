@@ -46,11 +46,11 @@ _drop_bom(s::AbstractString) = startswith(s, Char(0xFEFF)) ? SubString(s, nextin
 Base.parse(::Type{Node}, xml::AbstractString; wellformed::Symbol=:structural) = parse(xml, Node; wellformed)
 
 function Base.parse(xml::AbstractString, ::Type{Node}; wellformed::Symbol=:structural)
-    _parse(_expand_entities(_normalize_input_eol(_drop_bom(String(xml)))), String, unescape, Val(wellformed))
+    _parse(_apply_declarations(_normalize_input_eol(_drop_bom(String(xml)))), String, unescape, Val(wellformed))
 end
 
 function Base.parse(xml::AbstractString, ::Type{Node{SubString{String}}}; wellformed::Symbol=:structural)
-    _parse(_expand_entities(_normalize_input_eol(_drop_bom(String(xml)))), SubString{String}, identity, Val(wellformed))
+    _parse(_apply_declarations(_normalize_input_eol(_drop_bom(String(xml)))), SubString{String}, identity, Val(wellformed))
 end
 
 # Convert a parser substring to the requested storage type — copy to a fresh String, or
@@ -235,7 +235,7 @@ end
 # copied, into its message. A character reference is rejected when its digit run denotes no code
 # point of the XML Char range; the run is read on the hexadecimal alphabet in both forms, so a
 # decimal form carrying a letter is rejected too. A named reference
-# is checked only when `names` holds, and the test is then a membership one: `_expand_entities`
+# is checked only when `names` holds, and the test is then a membership one: `_apply_declarations`
 # has already replaced every reference it could resolve, so a name arriving here that is not
 # predefined has no replacement text behind it (XML 1.0 §4.1, the "Entity Declared"
 # well-formedness constraint). A `&` that starts neither form — one followed by no name, or by a

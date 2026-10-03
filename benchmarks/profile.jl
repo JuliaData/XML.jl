@@ -266,7 +266,7 @@ row("parse, no declarations",    @benchmark parse($S, Node))
 row("parse, entities included",  @benchmark parse($SE, Node))
 row("parse :strict, no decl",    @benchmark parse($S, Node; wellformed = :strict))
 row("parse :strict, entities",   @benchmark parse($SE, Node; wellformed = :strict))
-row("expansion pass alone",      @benchmark XML._expand_entities($SE))
+row("expansion pass alone",      @benchmark XML._apply_declarations($SE))
 row("prolog probe, no decl",     @benchmark XML._internal_entities($S))
 #--------------------------------------------------------------# (7) CONSTRUCTIONS THE PLAIN DOCUMENT LACKS
 # The plain document carries no reference, no attribute value that needs normalizing, no comment, no
