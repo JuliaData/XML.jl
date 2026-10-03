@@ -234,14 +234,30 @@ end
 # above 0x80 as its own; a span it accepts allocates nothing, and only a rejected reference is
 # copied, into its message. A character reference is rejected when its digit run denotes no code
 # point of the XML Char range; the run is read on the hexadecimal alphabet in both forms, so a
-# decimal form carrying a letter is rejected too. A named reference
-# is checked only when `names` holds, and the test is then a membership one: `_apply_declarations`
-# has already replaced every reference it could resolve, so a name arriving here that is not
-# predefined has no replacement text behind it (XML 1.0 §4.1, the "Entity Declared"
-# well-formedness constraint). A `&` that starts neither form — one followed by no name, or by a
-# name or a digit run without its `;` — goes unchecked, which costs a missed rejection and never
-# a wrong one.
-function _check_refs_strict(s::AbstractString, names::Bool)
+# decimal form carrying a letter is rejected too. A named reference that is not predefined is
+# checked against what the DTD declares: `_apply_declarations` has already replaced every
+# reference to an internal entity, so a name arriving here is external, unparsed, or has no
+# declaration behind it (XML 1.0 §4.1, the "Entity Declared" well-formedness constraint), which
+# is refused only when `names` holds. A `&` that starts neither form — one followed by no name, or
+# by a name or a digit run without its `;` — goes unchecked, which costs a missed rejection and
+# never a wrong one.
+_check_refs_strict(s::AbstractString, names::Bool) = _check_refs(s, names, nothing, nothing, false)
+
+# What the check knows of the DTD (`_strict_context`): whether "Entity Declared" binds, and the
+# general entities declared external or unparsed, whose references the inclusion leaves as
+# written. `in_attr` says the span is an attribute value. A document without DTD shares one
+# value, `_NO_DTD`, so that the check costs it nothing beyond the flag.
+struct _StrictContext
+    names::Bool
+    external::Union{Nothing, Set{String}}
+    unparsed::Union{Nothing, Set{String}}
+end
+const _NO_DTD = _StrictContext(true, nothing, nothing)
+
+_check_refs_strict(s::AbstractString, ctx::_StrictContext, in_attr::Bool) =
+    _check_refs(s, ctx.names, ctx.external, ctx.unparsed, in_attr)
+
+function _check_refs(s::AbstractString, names::Bool, external, unparsed, in_attr::Bool)
     cu = codeunits(s)
     n = length(cu)
     i = findnext(==(UInt8('&')), cu, 1)
@@ -257,9 +273,9 @@ function _check_refs_strict(s::AbstractString, names::Bool)
         else
             j = _name_end(cu, i + 1, n)
             if j > 0
-                if names
+                if names || external !== nothing || unparsed !== nothing
                     _, len = _predefined_at(cu, i, n)
-                    len == 0 && error("not well-formed: reference to undeclared entity \"", String(cu[i:j]), "\" (XML 1.0 §4.1)")
+                    len == 0 && _check_named(s, cu, i, j, names, external, unparsed, in_attr)
                 end
                 next = j + 1
             end
@@ -268,14 +284,33 @@ function _check_refs_strict(s::AbstractString, names::Bool)
     end
 end
 
+# A named reference that is not predefined. An unparsed entity is refused anywhere (WFC: Parsed
+# Entity, §4.1), an external one in an attribute value (WFC: No External Entity References,
+# §3.1) and left as written in content; any other name has no declaration behind it.
+@noinline function _check_named(s::AbstractString, cu, i::Int, j::Int, names::Bool, external,
+                                unparsed, in_attr::Bool)
+    name = SubString(s, i + 1, prevind(s, j))
+    if unparsed !== nothing && name in unparsed
+        error("not well-formed: reference to unparsed entity \"", String(cu[i:j]),
+              "\" (XML 1.0 §4.1)")
+    elseif external !== nothing && name in external
+        in_attr && error("not well-formed: reference to external entity \"", String(cu[i:j]),
+                         "\" in an attribute value (XML 1.0 §3.1)")
+    elseif names
+        error("not well-formed: reference to undeclared entity \"", String(cu[i:j]),
+              "\" (XML 1.0 §4.1)")
+    end
+    nothing
+end
+
 # Token-stream → Node{S} builder. `convert_text` is `unescape` for parsed content (with entity
 # decoding) and `identity` for zero-copy SubString parsing where the caller keeps raw escapes.
 # `Val{W}` is the well-formedness level (:lenient / :structural / :strict); its checks compile
 # away on :lenient.
 function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, W}
-    # `:strict` decides whether the named-reference check compiles in at all; the document's
-    # own shape decides whether it may fire (§4.1).
-    check_names = W === :strict && _entity_wfc_applies(xml)
+    # `:strict` reads what the DTD declares before the parse, and refuses what it violates
+    # (`_strict_context`); a document without DTD costs it nothing.
+    strict = W === :strict ? _strict_context(xml) : _NO_DTD
     tags = S[]
     # The value-stack discipline of stack parsers (#107): constituents accumulate on two
     # parse-wide scratch vectors, integer marks delimit the currently-open element's run,
@@ -297,7 +332,7 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
         if k === TokenKinds.TEXT
             rawtext = raw(token, xml)
             W === :strict && _check_chars_strict(rawtext)
-            W === :strict && token.has_entities && _check_refs_strict(rawtext, check_names)
+            W === :strict && token.has_entities && _check_refs_strict(rawtext, strict, false)
             v = _text_value(S, rawtext, token.has_entities, convert_text)
             push!(scratch_children, Node{S}(Text, nothing, nothing, v, nothing))
 
@@ -331,7 +366,7 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
             rawval = attr_value(token, xml)
             W !== :lenient && occursin('<', rawval) && error("not well-formed: '<' in attribute value (XML 1.0 §3.1)")
             W === :strict && _check_chars_strict(rawval)
-            W === :strict && token.has_entities && _check_refs_strict(rawval, check_names)
+            W === :strict && token.has_entities && _check_refs_strict(rawval, strict, true)
             val = _text_value(S, _normalize_attr_ws(rawval), token.has_entities, convert_text)
             name = _to(S, pending_attr_name)
             if decl_attrs !== nothing

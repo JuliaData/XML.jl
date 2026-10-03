@@ -99,6 +99,20 @@ struct _DeclaredAttr
     supplied::Union{Nothing, String}
 end
 
+# What `:strict` needs from the subset beyond what the readers use (§4.1, §3.1): whether a
+# parameter-entity reference stands between two declarations, the general entities in the order
+# they are declared, the external and unparsed ones apart, and each default value with the
+# number of general entities declared before it.
+mutable struct _StrictRecord
+    pe_refs::Bool
+    const order::Dict{String, Int}           # general entity => rank, first declaration binding
+    const external::Set{String}
+    const unparsed::Set{String}
+    const defaults::Vector{Tuple{String, String, String, Int}}   # element, attribute, literal, rank
+end
+_StrictRecord() = _StrictRecord(false, Dict{String, Int}(), Set{String}(), Set{String}(),
+                                Tuple{String, String, String, Int}[])
+
 mutable struct _SubsetReader
     const entities::Dict{String, String}     # general entities: name => replacement text
     const parameters::Dict{String, String}   # internal parameter entities: name => replacement text
@@ -107,14 +121,16 @@ mutable struct _SubsetReader
     const including::Vector{String}          # parameter entities being included, outermost first
     included::Int                            # bytes of replacement text read so far
     cut::Bool                                # §5.1's cutoff has been reached
+    const strict::Union{Nothing, _StrictRecord}   # filled only when `:strict` reads the subset
 end
 
-function _subset_declarations(body::AbstractString, standalone::Bool = false)
+function _subset_declarations(body::AbstractString, standalone::Bool = false,
+                              strict::Union{Nothing, _StrictRecord} = nothing)
     lb = findfirst('[', body)
     lb === nothing && return nothing
     s = String(body)
     r = _SubsetReader(Dict{String, String}(), Dict{String, String}(),
-                      Dict{String, Vector{_DeclaredAttr}}(), standalone, String[], 0, false)
+                      Dict{String, Vector{_DeclaredAttr}}(), standalone, String[], 0, false, strict)
     _read_subset!(r, s, nextind(s, lb), true)
     r
 end
@@ -160,6 +176,7 @@ function _read_subset!(r::_SubsetReader, s::String, pos::Int, subset::Bool)
         elseif c == '%'
             name, np = _dtd_read_name(s, nextind(s, pos))
             pos = np <= n && s[np] == ';' ? nextind(s, np) : np
+            r.strict === nothing || (r.strict.pe_refs = true)
             text = get(r.parameters, name, nothing)
             if text === nothing
                 r.standalone || (r.cut = true)          # §5.1: an entity the processor has not read
@@ -188,6 +205,7 @@ function _read_subset!(r::_SubsetReader, s::String, pos::Int, subset::Bool)
             stop === nothing && break
             pos = last(stop) + 1
         elseif c == '<' && startswith(SubString(s, pos), "<!ENTITY")
+            start = pos
             decl, pos = _dtd_parse_entity(s, pos + ncodeunits("<!ENTITY"))
             # the replacement text is the literal with its character references resolved (§4.5);
             # an entity declared external has none, and for a parameter entity it is not read
@@ -195,9 +213,17 @@ function _read_subset!(r::_SubsetReader, s::String, pos::Int, subset::Bool)
             if decl.value !== nothing && !haskey(table, decl.name)
                 table[decl.name] = _resolve_charrefs(decl.value)  # §4.2: the first declaration binds
             end
+            r.strict === nothing || decl.parameter || _record_entity!(r.strict, decl, s, start, pos)
         elseif c == '<' && startswith(SubString(s, pos), "<!ATTLIST")
             element, defs, pos = _read_attlist(s, pos + ncodeunits("<!ATTLIST"))
             defs === nothing || _declare_attributes!(r, element, defs)
+            if r.strict !== nothing && defs !== nothing
+                rank = length(r.strict.order)
+                for d in defs
+                    d.literal === nothing ||
+                        push!(r.strict.defaults, (element, d.name, d.literal, rank))
+                end
+            end
         elseif c == '<'
             pos = _dtd_skip_to_close(s, pos)                      # ELEMENT / NOTATION
         else
@@ -693,28 +719,217 @@ end
 @noinline _unbalanced(name::AbstractString) = error("not well-formed: the replacement text of " *
     "entity \"$name\" is not balanced content (XML 1.0 §4.3.2)")
 
+#-----------------------------------------------------------------------------# :strict (§2.8, §3.1, §4.1)
 """
-    _entity_wfc_applies(xml) -> Bool
+    _strict_context(xml) -> _StrictContext
 
-XML 1.0 §4.1's well-formedness constraint "Entity Declared" binds a processor only where a
-missing name is certain, which needs every declaration the document has to be one this reader
-sees. Two shapes qualify. A document with no DTD has none to miss. A DOCTYPE qualifies when
-its declarations all sit in the internal subset and nothing points outside it: no external
-subset named by SYSTEM or PUBLIC, no parameter-entity reference — which could expand into
-further declarations — and no entity declared as external, whose replacement text is in
-another file. Under any other shape a declaration this reader never reads could supply the
-name, so a name it does not know is not a defect.
+What `:strict` checks of the DTD before the parse, and what it hands the reference check. The
+declarations are read, by the reader the inclusion uses, never searched as text.
 
-The specification also binds the constraint under `standalone="yes"` even with external parts.
-`false` there means a missed rejection and never a wrong one, which is the direction to err in.
+A parameter-entity reference inside a markup declaration of the internal subset is refused
+(§2.8, PEs in Internal Subset). A default value is refused when it holds a `<`, written or
+through an entity (§3.1), or names an external or an unparsed entity (§3.1, §4.1), whether a
+tag ever receives it or not.
+
+The constraint "Entity Declared" (§4.1) binds only where a missing name is certain: in a
+document without DTD, in one whose DTD is an internal subset with no parameter-entity reference
+between its declarations, and in a standalone document, whatever its DTD holds. Where it binds,
+a default value that names an entity not declared before it is refused as well. An entity
+declared external or unparsed is declared: the reference check refuses an unparsed one anywhere
+and an external one in an attribute value, and leaves an external one in content as written.
 """
-function _entity_wfc_applies(xml::AbstractString)
+function _strict_context(xml::AbstractString)
+    _has_doctype(xml) || return _NO_DTD
     body = _doctype_body(xml)
-    body === nothing && return true
-    # One test covers both shapes that put a declaration out of reach: an external subset named
-    # in the DOCTYPE head, and an external entity declared inside the internal subset.
-    occursin(r"\bSYSTEM\b|\bPUBLIC\b", body) && return false
-    lb = findfirst('[', body)
-    lb === nothing && return true
-    !occursin('%', SubString(body, lb))
+    body === nothing && return _NO_DTD
+    _check_pe_refs_in_markup(body)
+    standalone = _declares_standalone(xml)
+    rec = _StrictRecord()
+    r = _subset_declarations(body, standalone, rec)
+    names = standalone || (!_names_external_subset(body) && !rec.pe_refs)
+    r === nothing || _check_defaults(rec, r.entities, names)
+    _StrictContext(names, isempty(rec.external) ? nothing : rec.external,
+                   isempty(rec.unparsed) ? nothing : rec.unparsed)
 end
+
+# A general entity's rank, and whether it is declared external or unparsed, the first
+# declaration binding (§4.2). `s[start:stop - 1]` is the declaration: an external one that
+# names a notation after its last literal is unparsed.
+function _record_entity!(rec::_StrictRecord, decl, s::String, start::Int, stop::Int)
+    haskey(rec.order, decl.name) && return
+    rec.order[decl.name] = length(rec.order) + 1
+    decl.value === nothing || return
+    gt = prevind(s, stop)
+    q = findprev(c -> c == '"' || c == '\'', s, gt)
+    ndata = q !== nothing && q > start && occursin("NDATA", SubString(s, q, gt))
+    push!(ndata ? rec.unparsed : rec.external, decl.name)
+end
+
+# Whether the DOCTYPE names an external subset: `SYSTEM` or `PUBLIC` after the root's name.
+function _names_external_subset(body::AbstractString)
+    s = String(body)
+    name, pos = _dtd_name_at(s, _dtd_skip_ws(s, 1))
+    name === nothing && return false
+    rest = SubString(s, _dtd_skip_ws(s, pos))
+    startswith(rest, "SYSTEM") || startswith(rest, "PUBLIC")
+end
+
+# WFC: PEs in Internal Subset (§2.8). Between two declarations a parameter-entity reference is
+# allowed; inside one it is not: in the literal of an entity, nor anywhere in the body of an
+# ELEMENT, ATTLIST or NOTATION outside a literal. A default value, a system or public literal, a
+# comment and a processing instruction read `%` as a character.
+function _check_pe_refs_in_markup(body::AbstractString)
+    s = String(body)
+    n = ncodeunits(s)
+    pos = _subset_open(s)
+    while pos <= n
+        if s[pos] == ']'
+            return
+        elseif startswith(SubString(s, pos), "<!--")
+            stop = findnext("-->", s, pos + 4)
+            stop === nothing && return
+            pos = last(stop) + 1
+        elseif startswith(SubString(s, pos), "<?")
+            stop = findnext("?>", s, pos + 2)
+            stop === nothing && return
+            pos = last(stop) + 1
+        elseif startswith(SubString(s, pos), "<!")
+            pos = _check_declaration(s, pos)
+        else
+            pos = nextind(s, pos)
+        end
+    end
+end
+
+# The position after the `[` that opens the internal subset, read past the literals of the
+# DOCTYPE's head; past the end when it has none.
+function _subset_open(s::String)
+    n = ncodeunits(s)
+    pos = 1
+    while pos <= n
+        c = s[pos]
+        if c == '"' || c == '\''
+            stop = findnext(c, s, nextind(s, pos))
+            stop === nothing && return n + 1
+            pos = nextind(s, stop)
+        elseif c == '['
+            return nextind(s, pos)
+        else
+            pos = nextind(s, pos)
+        end
+    end
+    n + 1
+end
+
+# One declaration, from its `<!` to its `>`, checked for a parameter-entity reference. An
+# entity's first literal is its value unless SYSTEM or PUBLIC comes before it; every other
+# literal is an identifier or a default value. Returns the position after the `>`.
+function _check_declaration(s::String, pos::Int)
+    n = ncodeunits(s)
+    entity = startswith(SubString(s, pos), "<!ENTITY")
+    identifiers = false
+    literals = 0
+    i = pos + 2
+    while i <= n
+        c = s[i]
+        if c == '>'
+            return i + 1
+        elseif c == '"' || c == '\''
+            stop = findnext(c, s, nextind(s, i))
+            stop === nothing && return n + 1
+            if entity && !identifiers && literals == 0
+                k = nextind(s, i)
+                while k < stop
+                    if s[k] == '%'
+                        j = _pe_ref_end(s, k, prevind(s, stop))
+                        j > 0 && _pe_in_markup(SubString(s, k, j))
+                    end
+                    k = nextind(s, k)
+                end
+            end
+            literals += 1
+            i = nextind(s, stop)
+        elseif c == '%'
+            j = _pe_ref_end(s, i, n)
+            j > 0 && _pe_in_markup(SubString(s, i, j))
+            i = nextind(s, i)
+        elseif _dtd_is_name_char(c)
+            word, i = _dtd_name_at(s, i)
+            (word == "SYSTEM" || word == "PUBLIC") && (identifiers = true)
+        else
+            i = nextind(s, i)
+        end
+    end
+    n + 1
+end
+
+# The `;` that ends a parameter-entity reference opening at `s[i] == '%'`, no later than
+# `stop`, or 0: a `%` followed by space is the mark of a parameter-entity declaration.
+function _pe_ref_end(s::String, i::Int, stop::Int)
+    j = nextind(s, i)
+    (j <= stop && _dtd_is_name_char(s[j])) || return 0
+    while j <= stop && _dtd_is_name_char(s[j])
+        j = nextind(s, j)
+    end
+    j <= stop && s[j] == ';' ? j : 0
+end
+
+@noinline _pe_in_markup(ref::AbstractString) = error("not well-formed: parameter-entity ",
+    "reference \"", ref, "\" inside a markup declaration of the internal subset (XML 1.0 §2.8)")
+
+# The constraints on each default value (§3.1, §4.1), checked with the declarations, whether
+# a tag receives the value or not. `rank` counts the general entities declared before the
+# ATTLIST, among which an entity the value names must be where "Entity Declared" binds. An
+# entity's text is checked through, as an attribute value that names it would include it.
+function _check_defaults(rec::_StrictRecord, values::Dict{String, String}, names::Bool)
+    for (element, attribute, literal, rank) in rec.defaults
+        occursin('<', literal) && _bad_default(element, attribute, "holds a `<`", "§3.1")
+        _check_default_refs(literal, rec, values, names, rank, element, attribute, 1)
+    end
+end
+
+function _check_default_refs(text::AbstractString, rec::_StrictRecord, values::Dict{String, String},
+                             names::Bool, rank::Int, element::String, attribute::String, depth::Int)
+    depth > _MAX_ENTITY_DEPTH && return              # a cycle is refused before the parse
+    cu = codeunits(text)
+    n = length(cu)
+    i = findnext(==(UInt8('&')), cu, 1)
+    while i !== nothing
+        next = i + 1
+        if i + 1 <= n && cu[i + 1] == UInt8('#')
+            j, _ = _charref_at(cu, i, n)
+            j > 0 && (next = j + 1)
+        elseif (j = _name_end(cu, i + 1, n)) > 0
+            next = j + 1
+            _, len = _predefined_at(cu, i, n)
+            if len == 0
+                name = SubString(text, i + 1, prevind(text, j))
+                ref = String(cu[i:j])
+                name in rec.unparsed &&
+                    _bad_default(element, attribute, "names unparsed entity \"$ref\"", "§4.1")
+                name in rec.external &&
+                    _bad_default(element, attribute, "names external entity \"$ref\"", "§3.1")
+                r = get(rec.order, name, 0)
+                if names && r == 0
+                    _bad_default(element, attribute, "names undeclared entity \"$ref\"", "§4.1")
+                elseif names && depth == 1 && r > rank
+                    _bad_default(element, attribute, "names entity \"$ref\", declared after it",
+                                 "§4.1")
+                end
+                rep = get(values, name, nothing)
+                if rep !== nothing
+                    occursin('<', rep) &&
+                        _bad_default(element, attribute, "holds a `<` through entity \"$ref\"",
+                                     "§3.1")
+                    _check_default_refs(rep, rec, values, names, rank, element, attribute,
+                                        depth + 1)
+                end
+            end
+        end
+        i = findnext(==(UInt8('&')), cu, next)
+    end
+end
+
+@noinline _bad_default(element, attribute, what, section) = error("not well-formed: the default ",
+    "value of attribute \"", attribute, "\" of \"", element, "\" ", what, " (XML 1.0 ", section,
+    ")")
