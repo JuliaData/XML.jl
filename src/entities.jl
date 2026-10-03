@@ -83,28 +83,61 @@ function _doctype_body(xml::AbstractString)
     end
 end
 
-# `<!ENTITY name "value">` declarations of the internal subset, in document order, the first
-# declaration of a name binding (§4.2). A reference to an internal parameter entity between two
-# declarations is included (§4.4.8): the declarations its replacement text carries are read where
-# the reference stands. A reference to one the processor has not read — external, or never
-# declared — triggers §5.1's cutoff: the declarations that follow must not be used, unless the
-# document is standalone, where they must. XML.jl reads no external parameter entity.
+# The declarations of the internal subset that the readers use, read in document order:
+# `<!ENTITY name "value">` and `<!ATTLIST element …>`, the first declaration of a name binding
+# (§4.2, §3.3). A reference to an internal parameter entity between two declarations is included
+# (§4.4.8): the declarations its replacement text carries are read where the reference stands. A
+# reference to one the processor has not read — external, or never declared — triggers §5.1's
+# cutoff: the declarations that follow must not be used, unless the document is standalone,
+# where they must. XML.jl reads no external parameter entity.
+
+# What an ATTLIST declares for one attribute of an element: whether its values are reduced (a
+# type other than CDATA, §3.3.3), and the text written for it when a tag leaves it out (§3.3.2).
+struct _DeclaredAttr
+    name::String
+    normalize::Bool
+    supplied::Union{Nothing, String}
+end
+
 mutable struct _SubsetReader
     const entities::Dict{String, String}     # general entities: name => replacement text
     const parameters::Dict{String, String}   # internal parameter entities: name => replacement text
+    const attributes::Dict{String, Vector{_DeclaredAttr}}   # element => its attributes, in order
     const standalone::Bool
     const including::Vector{String}          # parameter entities being included, outermost first
     included::Int                            # bytes of replacement text read so far
     cut::Bool                                # §5.1's cutoff has been reached
 end
 
-function _subset_entities(body::AbstractString, standalone::Bool = false)
+function _subset_declarations(body::AbstractString, standalone::Bool = false)
     lb = findfirst('[', body)
     lb === nothing && return nothing
     s = String(body)
-    r = _SubsetReader(Dict{String, String}(), Dict{String, String}(), standalone, String[], 0, false)
+    r = _SubsetReader(Dict{String, String}(), Dict{String, String}(),
+                      Dict{String, Vector{_DeclaredAttr}}(), standalone, String[], 0, false)
     _read_subset!(r, s, nextind(s, lb), true)
-    isempty(r.entities) ? nothing : r.entities
+    r
+end
+
+# The first declaration of an attribute binds, type and default together, even when it supplies
+# nothing (§3.3).
+function _declare_attributes!(r::_SubsetReader, element::String, defs::Vector{_AttDef})
+    declared = get!(() -> _DeclaredAttr[], r.attributes, element)
+    for d in defs
+        any(a -> a.name == d.name, declared) && continue
+        supplied = d.literal === nothing ? nothing : _supplied_text(d.literal, r.entities)
+        push!(declared, _DeclaredAttr(d.name, d.tokenized, supplied))
+    end
+end
+
+# The text written for a supplied attribute: its default value with the references to entities
+# declared so far — before the ATTLIST — included as in an attribute value (§4.4.5), and its
+# quotes written as character references, so that it can stand between double quotes. Character
+# references and the five predefined entities stay as written, for the readers to decode.
+function _supplied_text(literal::String, entities::Dict{String, String})
+    io = IOBuffer()
+    _expand_refs!(io, literal, InternalEntities(entities, false), 1, true)
+    String(take!(io))
 end
 
 # Reads `s` from `pos`: the internal subset itself, up to its `]`, or the replacement text of a
@@ -155,8 +188,11 @@ function _read_subset!(r::_SubsetReader, s::String, pos::Int, subset::Bool)
             if decl.value !== nothing && !haskey(table, decl.name)
                 table[decl.name] = _resolve_charrefs(decl.value)  # §4.2: the first declaration binds
             end
+        elseif c == '<' && startswith(SubString(s, pos), "<!ATTLIST")
+            element, defs, pos = _read_attlist(s, pos + ncodeunits("<!ATTLIST"))
+            defs === nothing || _declare_attributes!(r, element, defs)
         elseif c == '<'
-            pos = _dtd_skip_to_close(s, pos)                      # ELEMENT / ATTLIST / NOTATION
+            pos = _dtd_skip_to_close(s, pos)                      # ELEMENT / NOTATION
         else
             pos = nextind(s, pos)
         end
@@ -214,19 +250,49 @@ function _check_and_scan(values::Dict{String, String})
 end
 
 """
-    _internal_entities(xml) -> Union{Nothing, InternalEntities}
+    _declarations(xml) -> Union{Nothing, _Declarations}
 
-The general entities the document's internal subset declares, or `nothing` when it declares
-none — the case that must cost nothing beyond the prolog walk.
+What the document's internal subset declares that the entry rewrite applies: its general
+entities, and the attributes that ask for work, by element — a value to supply or to reduce.
+`nothing` when it declares neither, the case that must cost nothing beyond the prolog walk.
 """
-function _internal_entities(xml::AbstractString)
+struct _Declarations
+    entities::Union{Nothing, InternalEntities}
+    attributes::Union{Nothing, Dict{String, Vector{_DeclaredAttr}}}
+end
+
+function _declarations(xml::AbstractString)
     _has_doctype(xml) || return nothing
     body = _doctype_body(xml)
     body === nothing && return nothing
-    values = _subset_entities(body, _declares_standalone(xml))
-    values === nothing && return nothing
-    InternalEntities(values, _check_and_scan(values))
+    r = _subset_declarations(body, _declares_standalone(xml))
+    r === nothing && return nothing
+    ents = isempty(r.entities) ? nothing : InternalEntities(r.entities, _check_and_scan(r.entities))
+    attrs = _working_attributes(r.attributes)
+    ents === nothing && attrs === nothing && return nothing
+    _Declarations(ents, attrs)
 end
+
+# The declared attributes that ask for work; an attribute declared CDATA with no default asks
+# for none, and an element left with none is dropped, so that a walk looks up only what counts.
+function _working_attributes(declared::Dict{String, Vector{_DeclaredAttr}})
+    out = nothing
+    for (element, attrs) in declared
+        work = filter(a -> a.normalize || a.supplied !== nothing, attrs)
+        isempty(work) && continue
+        out === nothing && (out = Dict{String, Vector{_DeclaredAttr}}())
+        out[element] = work
+    end
+    out
+end
+
+"""
+    _internal_entities(xml) -> Union{Nothing, InternalEntities}
+
+The general entities the document's internal subset declares, or `nothing` when it declares
+none.
+"""
+_internal_entities(xml::AbstractString) = (d = _declarations(xml); d === nothing ? nothing : d.entities)
 
 #-----------------------------------------------------------------------------# inclusion (§4.4.2)
 # Nested declarations amplify without any cycle — ten entities each naming the previous one ten
@@ -342,9 +408,9 @@ type the reader was given (`_rebuild_source`); a source of a type that cannot be
 is refused with an `ArgumentError`, only when its document needs the rewrite.
 """
 function _apply_declarations(s::AbstractString)
-    ents = _internal_entities(s)
-    (ents === nothing || isempty(ents)) && return s
-    bytes = _expanded_bytes(s, ents)
+    d = _declarations(s)
+    d === nothing && return s
+    bytes = _rewritten_bytes(s, d)
     bytes === nothing && return s
     rebuilt = _rebuild_source(s, bytes)
     rebuilt === nothing && _unrebuildable(s)
@@ -371,19 +437,54 @@ _rebuild_source(::String, bytes::Vector{UInt8}) = String(bytes)
 _rebuild_source(::SubString{String}, bytes::Vector{UInt8}) = SubString(String(bytes))
 
 # One walk of the document: spans that need no work are copied, references to declared names are
-# expanded. Returns `nothing` when nothing was rewritten, so the caller returns its own argument
-# instead of an equal copy; the output buffer is created at the first change, so a walk that
-# changes nothing allocates none.
-function _expanded_bytes(s::AbstractString, ents::InternalEntities)
+# expanded, and a start tag of a declared element receives, just before its `>` or `/>`, each
+# attribute it leaves out that a default supplies (§3.3.2), after the ones it writes. Returns
+# `nothing` when nothing was rewritten, so the caller returns its own argument instead of an equal
+# copy; the output buffer is created at the first change, so a walk that changes nothing
+# allocates none.
+function _rewritten_bytes(s::AbstractString, d::_Declarations)
+    ents = d.entities
+    attrs = d.attributes
     out = nothing
     # Token offsets are root-relative, so a source that is itself a view over a larger string
     # reports positions past its own start; subtracting its offset returns them to the index
     # space of `s`, which is what the copied spans below are indexed in.
     base = XMLTokenizer._data_offset(s)
     pos = 1                                          # 1-based byte position of the next byte to copy
+    current = nothing                                # the declared attributes of the open start tag
+    written = Bool[]                                 # which of them the tag writes
     for tok in XMLTokenizer.tokenize(s, 1)
-        (tok.kind === XMLTokenizer.TokenKinds.TEXT ||
-         tok.kind === XMLTokenizer.TokenKinds.ATTR_VALUE) || continue
+        k = tok.kind
+        if k === XMLTokenizer.TokenKinds.OPEN_TAG
+            attrs === nothing && continue
+            current = get(attrs, XMLTokenizer.tag_name(tok, s), nothing)
+            current === nothing && continue
+            resize!(written, length(current))
+            fill!(written, false)
+            continue
+        elseif k === XMLTokenizer.TokenKinds.ATTR_NAME
+            current === nothing && continue
+            name = XMLTokenizer.raw(tok, s)
+            for i in eachindex(current)
+                current[i].name == name && (written[i] = true)
+            end
+            continue
+        elseif k === XMLTokenizer.TokenKinds.TAG_CLOSE || k === XMLTokenizer.TokenKinds.SELF_CLOSE
+            current === nothing && continue
+            start = tok.offset - base + 1
+            for i in eachindex(current)
+                a = current[i]
+                (written[i] || a.supplied === nothing) && continue
+                out === nothing && (out = IOBuffer(sizehint = ncodeunits(s)))
+                Base.write(out, SubString(s, pos, prevind(s, start)))
+                Base.write(out, ' ', a.name, "=\"", a.supplied, '"')
+                pos = start
+            end
+            current = nothing
+            continue
+        end
+        ents === nothing && continue
+        (k === XMLTokenizer.TokenKinds.TEXT || k === XMLTokenizer.TokenKinds.ATTR_VALUE) || continue
         tok.has_entities || continue
         span = XMLTokenizer.raw(tok, s)
         _references_declared(span, ents) || continue
