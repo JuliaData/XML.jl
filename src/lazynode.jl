@@ -43,13 +43,14 @@ LazyNode(data::AbstractString, nt::NodeType) = _lazynode_at(_expand_entities(_no
 
 # `d` arrives with §2.11 already applied — see `_cursor_at` for the same split.
 # No scan here. Parametric on `d`'s own type, so a rewritten document (always a `String`)
-# builds `LazyNode{String}`.
+# builds `LazyNode{String}`. The empty token sits at the start of `d` in the root's index
+# space, which an empty `SubString` of a view would not keep.
 @inline _lazynode_at(d::S, nt::NodeType) where {S <: AbstractString} =
-    LazyNode{S}(d, Token(TokenKinds.TEXT, SubString(d, 1, 0)), nt)
+    LazyNode{S}(d, XMLTokenizer.no_token(d), nt)
 
 nodetype(n::LazyNode) = n.nodetype
 
-_lazy_pos(n::LazyNode) = n.token.offset + 1
+_lazy_pos(n::LazyNode) = XMLTokenizer._data_start(n.token, n.data)
 _lazy_tokenizer(n::LazyNode) = tokenize(n.data, _lazy_pos(n))
 # Entity-decode a TEXT/ATTR_VALUE token only when the tokenizer actually saw a `&`. When
 # `has_entities` is false the raw `SubString{String}` view is returned with no allocation
@@ -373,11 +374,11 @@ function _skip_element(t::Tokenizer, st::TokenizerState)
     end
 end
 
-_token_end(tok) = tok.offset + tok.ncodeunits
+_token_end(tok, data) = XMLTokenizer._data_stop(tok, data)
 
-function _scan_to_close(iter, close_kind::TokenKinds.Kind)
+function _scan_to_close(iter, data, close_kind::TokenKinds.Kind)
     for tok in iter
-        tok.kind === close_kind && return _token_end(tok)
+        tok.kind === close_kind && return _token_end(tok, data)
     end
     error("Could not find closing token")
 end
@@ -403,7 +404,7 @@ function sourcetext(n::LazyNode)
     if nt === Element
         iter = _lazy_tokenizer(n)
         for tok in iter
-            tok.kind === TokenKinds.SELF_CLOSE && return SubString(n.data, start, _token_end(tok))
+            tok.kind === TokenKinds.SELF_CLOSE && return SubString(n.data, start, _token_end(tok, n.data))
             tok.kind === TokenKinds.TAG_CLOSE && break
         end
         depth = 1
@@ -418,21 +419,21 @@ function sourcetext(n::LazyNode)
                 if depth == 0
                     result = iterate(iter)
                     result === nothing && error("Could not find closing '>'")
-                    return SubString(n.data, start, _token_end(result[1]))
+                    return SubString(n.data, start, _token_end(result[1], n.data))
                 end
             end
         end
         error("Could not find closing tag")
     elseif nt === Comment
-        return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), TokenKinds.COMMENT_CLOSE))
+        return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), n.data, TokenKinds.COMMENT_CLOSE))
     elseif nt === CData
-        return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), TokenKinds.CDATA_CLOSE))
+        return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), n.data, TokenKinds.CDATA_CLOSE))
     elseif nt === ProcessingInstruction
-        return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), TokenKinds.PI_CLOSE))
+        return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), n.data, TokenKinds.PI_CLOSE))
     elseif nt === Declaration
-        return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), TokenKinds.XML_DECL_CLOSE))
+        return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), n.data, TokenKinds.XML_DECL_CLOSE))
     elseif nt === DTD
-        return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), TokenKinds.DOCTYPE_CLOSE))
+        return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), n.data, TokenKinds.DOCTYPE_CLOSE))
     elseif nt === Text
         return raw(n.token, n.data)
     elseif nt === Document
@@ -462,9 +463,9 @@ it does not apply to `Node`, which retains no source.
 """
 function sourcespan(n::LazyNode)
     ss = sourcetext(n)
-    o = ss.offset
+    o = ss.offset - XMLTokenizer._data_offset(n.data)   # `ss` hangs off the root of `n.data`
     isempty(ss) && return (o + 1):o
-    (o + 1):prevind(ss.string, o + ncodeunits(ss) + 1)
+    (o + 1):prevind(n.data, o + ncodeunits(ss) + 1)
 end
 
 # the multi-byte-safe splice around a character-index span (shared by the two handle readers)
