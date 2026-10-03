@@ -3993,6 +3993,59 @@ end
                 @test measure(clean) == 0
             end
         end
+
+        @testset "a type other than CDATA drops outer spaces and repeated ones" begin
+            # Once white space reads as spaces, a value declared with a type other than CDATA
+            # loses its leading and trailing spaces and keeps one space of each run. Only #x20
+            # counts: `&#32;` does, `&#9;` and `&#10;` do not (W3C valid-sa-058, 096, 111).
+            four(v) = (v, v, v, v)
+            nmtokens(value) = "<!DOCTYPE d [<!ATTLIST d a NMTOKENS #IMPLIED>]><d a=\"$value\"/>"
+            @test attr_by_reader(nmtokens(" 1  \t2 \t"), "a") == four("1 2")
+            @test attr_by_reader(nmtokens("&#32;x&#32;&#32;y&#32;"), "a") == four("x y")
+            @test attr_by_reader(nmtokens("  x &#9; y  "), "a") == four("x \t y")
+            @test attr_by_reader(nmtokens("x&#10;y"), "a") == four("x\ny")
+            @test attr_by_reader(nmtokens(" &#xA0;x é  ü "), "a") == four("\u00a0x é ü")
+            # at every level, and once written out
+            @test [only(elements(parse(nmtokens(" 1  2 "), R; wellformed = w)))["a"]
+                   for R in (Node, FlatNode), w in (:lenient, :strict)] == fill("1 2", 2, 2)
+            @test occursin("a=\"1 2\"", XML.write(parse(nmtokens(" 1  2 "), Node)))
+            # a default value, and the replacement text of an entity, are reduced the same way
+            @test attr_by_reader("<!DOCTYPE d [<!ATTLIST d a NMTOKENS \" 1  \t2 \t\">]><d/>", "a") ==
+                  four("1 2")
+            @test attr_by_reader("<!DOCTYPE d [<!ENTITY e \" p  q \"><!ATTLIST d a NMTOKENS #IMPLIED>]>" *
+                                 "<d a=\"&e;\"/>", "a") == four("p q")
+            @test attr_by_reader("<!DOCTYPE d [<!ENTITY e \" p  q \"><!ATTLIST d a NMTOKENS \"&e;\">]>" *
+                                 "<d/>", "a") == four("p q")
+            # every tokenized and enumerated type
+            for type in ("ID", "IDREF", "IDREFS", "ENTITY", "ENTITIES", "NMTOKEN", "NMTOKENS",
+                         "(x|y)", "NOTATION (n)")
+                @test attr_by_reader("<!DOCTYPE d [<!ATTLIST d a $type #IMPLIED>]><d a=\" x  y \"/>", "a") ==
+                      four("x y")
+            end
+        end
+
+        @testset "CDATA and undeclared attributes keep their spaces" begin
+            four(v) = (v, v, v, v)
+            xml = "<!DOCTYPE d [<!ATTLIST d a CDATA #IMPLIED>]><d a=\" x  y \" b=\" x  y \"/>"
+            @test attr_by_reader(xml, "a") == four(" x  y ")
+            @test attr_by_reader(xml, "b") == four(" x  y ")
+            # the first declaration of an attribute decides its type (§3.3)
+            @test attr_by_reader("<!DOCTYPE d [<!ATTLIST d a CDATA #IMPLIED><!ATTLIST d a NMTOKENS #IMPLIED>]>" *
+                                 "<d a=\" x  y \"/>", "a") == four(" x  y ")
+            @test attr_by_reader("<!DOCTYPE d [<!ATTLIST d a NMTOKENS #IMPLIED><!ATTLIST d a CDATA #IMPLIED>]>" *
+                                 "<d a=\" x  y \"/>", "a") == four("x y")
+            # a declaration names one element type: another element's attribute of that name is CDATA
+            xml = "<!DOCTYPE d [<!ATTLIST e a NMTOKENS #IMPLIED>]><d a=\" x  y \"><e a=\" x  y \"/></d>"
+            @testset "$R" for R in (Node, FlatNode, LazyNode)
+                d = only(elements(parse(xml, R)))
+                @test (d["a"], only(elements(d))["a"]) == (" x  y ", "x y")
+            end
+            cur, seen = Cursor(xml), Pair{String, String}[]
+            while next!(cur) !== nothing
+                nodetype(cur) === Element && push!(seen, String(tag(cur)) => String(cur["a"]))
+            end
+            @test seen == ["d" => " x  y ", "e" => "x y"]
+        end
     end
 
     @testset "line-end normalization (XML 1.0 §2.11)" begin
