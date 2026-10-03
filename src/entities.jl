@@ -83,29 +83,59 @@ function _doctype_body(xml::AbstractString)
     end
 end
 
-# `<!ENTITY name "value">` declarations of the internal subset, in document order. Parameter
-# entities are skipped, and §5.1's cutoff applies: once a reference to a parameter entity the
-# processor has not read appears, the declarations that follow must not be used. XML.jl reads no
-# external parameter entities, so the cutoff is the first reference to one it did not declare.
-function _subset_entities(body::AbstractString)
+# `<!ENTITY name "value">` declarations of the internal subset, in document order, the first
+# declaration of a name binding (§4.2). A reference to an internal parameter entity between two
+# declarations is included (§4.4.8): the declarations its replacement text carries are read where
+# the reference stands. A reference to one the processor has not read — external, or never
+# declared — triggers §5.1's cutoff: the declarations that follow must not be used, unless the
+# document is standalone, where they must. XML.jl reads no external parameter entity.
+mutable struct _SubsetReader
+    const entities::Dict{String, String}     # general entities: name => replacement text
+    const parameters::Dict{String, String}   # internal parameter entities: name => replacement text
+    const standalone::Bool
+    const including::Vector{String}          # parameter entities being included, outermost first
+    included::Int                            # bytes of replacement text read so far
+    cut::Bool                                # §5.1's cutoff has been reached
+end
+
+function _subset_entities(body::AbstractString, standalone::Bool = false)
     lb = findfirst('[', body)
     lb === nothing && return nothing
     s = String(body)
-    pos = nextind(s, lb)
+    r = _SubsetReader(Dict{String, String}(), Dict{String, String}(), standalone, String[], 0, false)
+    _read_subset!(r, s, nextind(s, lb), true)
+    isempty(r.entities) ? nothing : r.entities
+end
+
+# Reads `s` from `pos`: the internal subset itself, up to its `]`, or the replacement text of a
+# parameter entity, to its end.
+function _read_subset!(r::_SubsetReader, s::String, pos::Int, subset::Bool)
     n = ncodeunits(s)
-    out = Dict{String, String}()
-    declared_pe = Set{String}()
-    while pos <= n
+    while pos <= n && !r.cut
         pos = _dtd_skip_ws(s, pos)
         pos > n && break
         c = s[pos]
-        if c == ']'
+        if c == ']' && subset
             break
         elseif c == '%'
-            # a parameter-entity reference between declarations: §5.1 cutoff unless we read it
             name, np = _dtd_read_name(s, nextind(s, pos))
-            name in declared_pe || break
             pos = np <= n && s[np] == ';' ? nextind(s, np) : np
+            text = get(r.parameters, name, nothing)
+            if text === nothing
+                r.standalone || (r.cut = true)          # §5.1: an entity the processor has not read
+            else
+                name in r.including && error("not well-formed: parameter entity `%$name;` refers to " *
+                    "itself (XML 1.0 well-formedness constraint: No Recursion), through " *
+                    join([r.including; name], " -> "))
+                length(r.including) >= _MAX_ENTITY_DEPTH &&
+                    error("entity expansion exceeded $(_MAX_ENTITY_DEPTH) levels of nesting")
+                r.included += ncodeunits(text)
+                r.included > _MAX_ENTITY_EXPANSION &&
+                    error("entity expansion exceeded $(_MAX_ENTITY_EXPANSION) bytes")
+                push!(r.including, name)
+                _read_subset!(r, text, 1, false)
+                pop!(r.including)
+            end
         elseif c == '<' && startswith(SubString(s, pos), "<!--")
             # A comment's text is free (§2.5): a quote in it opens no literal, and a `>` in it
             # ends nothing, so it is stepped over to its own `-->`
@@ -119,18 +149,38 @@ function _subset_entities(body::AbstractString)
             pos = last(stop) + 1
         elseif c == '<' && startswith(SubString(s, pos), "<!ENTITY")
             decl, pos = _dtd_parse_entity(s, pos + ncodeunits("<!ENTITY"))
-            if decl.parameter
-                decl.value === nothing || push!(declared_pe, decl.name)
-            elseif decl.value !== nothing && !haskey(out, decl.name)
-                out[decl.name] = _resolve_charrefs(decl.value)   # §4.2: the first declaration binds
+            # the replacement text is the literal with its character references resolved (§4.5);
+            # an entity declared external has none, and for a parameter entity it is not read
+            table = decl.parameter ? r.parameters : r.entities
+            if decl.value !== nothing && !haskey(table, decl.name)
+                table[decl.name] = _resolve_charrefs(decl.value)  # §4.2: the first declaration binds
             end
         elseif c == '<'
-            pos = _dtd_skip_to_close(s, pos)                     # ELEMENT / ATTLIST / NOTATION
+            pos = _dtd_skip_to_close(s, pos)                      # ELEMENT / ATTLIST / NOTATION
         else
             pos = nextind(s, pos)
         end
     end
-    isempty(out) ? nothing : out
+    pos
+end
+
+# Whether the XML declaration says `standalone="yes"` (§2.9). It is the prolog's first construct,
+# so the first tokens settle it.
+function _declares_standalone(xml::AbstractString)
+    st = XMLTokenizer.tokenize(xml, 1)
+    r = iterate(st)
+    (r === nothing || r[1].kind !== XMLTokenizer.TokenKinds.XML_DECL_OPEN) && return false
+    standalone = false
+    for tok in st
+        k = tok.kind
+        k === XMLTokenizer.TokenKinds.XML_DECL_CLOSE && break
+        if k === XMLTokenizer.TokenKinds.ATTR_NAME
+            standalone = XMLTokenizer.raw(tok, xml) == "standalone"
+        elseif k === XMLTokenizer.TokenKinds.ATTR_VALUE && standalone
+            return XMLTokenizer.attr_value(tok, xml) == "yes"
+        end
+    end
+    false
 end
 
 # A reference to a general entity, its name read as the tokenizer reads names: every non-ASCII
@@ -173,7 +223,7 @@ function _internal_entities(xml::AbstractString)
     _has_doctype(xml) || return nothing
     body = _doctype_body(xml)
     body === nothing && return nothing
-    values = _subset_entities(body)
+    values = _subset_entities(body, _declares_standalone(xml))
     values === nothing && return nothing
     InternalEntities(values, _check_and_scan(values))
 end
