@@ -1195,20 +1195,23 @@ end
 
     @testset "a document that needs no rewrite is returned as it stands" begin
         exp(x) = XML._apply_declarations(x)
+        # The same bytes, not an equal copy: `===` compares two `String`s, and two `SubString`s
+        # of them, by content, so the address of the bytes is compared as well.
+        same(x, y) = x === y && pointer(x) == pointer(y)
         for src in ("<a>plain</a>",
                     "<!DOCTYPE d [<!ELEMENT d EMPTY>]><d/>",              # declarations, no entity
                     "<!DOCTYPE d [<!ENTITY e \"X\">]><d>no use</d>",      # declared, never referenced
                     "<!DOCTYPE d [<!ENTITY e \"X\">]><d>&other;</d>")     # only undeclared names
-            @test exp(src) === src                                        # the same object, not a copy
+            @test same(exp(src), src)
         end
         # a source that is not a String takes the same exits
         sub = SubString("<a>plain</a>", 1)
-        @test XML._apply_declarations(sub) === sub
+        @test same(XML._apply_declarations(sub), sub)
         # Declarations that change nothing leave the document as it stands: a CDATA attribute
         # without a default asks for no walk, and an ID value already reduced is walked and kept.
         for src in ("<!DOCTYPE d [<!ATTLIST d a CDATA #IMPLIED>]><d a=\" x \"/>",
                     "<!DOCTYPE d [<!ATTLIST d id ID #IMPLIED>]><d id=\"x\"/>")
-            @test exp(src) === src
+            @test same(exp(src), src)
         end
         # a value to reduce, or a default to supply, is a change, made on a copy
         @test occursin("<d a=\"x\"/>", exp("<!DOCTYPE d [<!ATTLIST d a NMTOKENS #IMPLIED>]><d a=\" x \"/>"))

@@ -271,8 +271,10 @@ measure_entry_bytes(s)  = @allocated XML._apply_declarations(s)
     plain = "<?xml version=\"1.0\"?><d>" * repeat("<e a=\"x\"/>", 20_000) * "</d>"
     walked = "<!DOCTYPE d [<!ATTLIST e id ID #IMPLIED>]><d>" *
              join("<e id=\"x$i\"/>" for i in 1:20_000) * "</d>"
-    @test XML._apply_declarations(plain) === plain
-    @test XML._apply_declarations(walked) === walked   # every ID value is already reduced
+    # the same bytes, not an equal copy, which `===` would accept since it compares two
+    # `String`s by content; every ID value of `walked` is already reduced
+    @test pointer(XML._apply_declarations(plain)) == pointer(plain)
+    @test pointer(XML._apply_declarations(walked)) == pointer(walked)
     measure_entry_allocs(plain); measure_entry_bytes(walked)   # warm-up
     if _NO_COVERAGE
         @test measure_entry_allocs(plain) == 0
