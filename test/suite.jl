@@ -2284,6 +2284,164 @@ end
         @test pd.attributes[2].name == "isbn"
         @test pd.attributes[3].name == "format"
     end
+
+    @testset "attribute defaults (§3.3.2)" begin
+        # An attribute that a tag leaves out, but that an ATTLIST gives a default value, is
+        # reported with that value as if the tag wrote it: by all four readers, at every
+        # `wellformed` level, after the written attributes and in declaration order.
+        withsubset(subset, root = "<d/>") = "<!DOCTYPE d [" * subset * "]>" * root
+        pairsof(el) = (a = attributes(el); a === nothing ? Pair{String, String}[] : collect(a))
+        function cursor_on_root(xml)
+            cursor = parse(xml, Cursor)
+            while next!(cursor) !== nothing && nodetype(cursor) !== Element end
+            cursor
+        end
+        # the root's attributes from `Node` and `FlatNode` at each level, then from `LazyNode`
+        # and `Cursor`, which have no levels: eight readings when all three levels read it
+        function reported(xml; levels = (:lenient, :structural, :strict))
+            readings = [pairsof(only(elements(parse(xml, R; wellformed = w))))
+                        for w in levels for R in (Node, FlatNode)]
+            push!(readings, pairsof(only(elements(parse(xml, LazyNode)))),
+                  pairsof(cursor_on_root(xml)))
+        end
+        none = Pair{String, String}[]
+
+        @testset "supplied after the written attributes, in declaration order" begin
+            @test reported("""<!DOCTYPE d [<!ATTLIST d a2 CDATA "def">]><d a1="x"/>""") ==
+                  fill(["a1" => "x", "a2" => "def"], 8)
+            @test reported(withsubset("""<!ATTLIST d z CDATA "1" b CDATA "2" a CDATA "3">""",
+                                      """<d b="w"/>""")) == fill(["b" => "w", "z" => "1", "a" => "3"], 8)
+        end
+
+        @testset "#FIXED supplies its value; #IMPLIED and #REQUIRED supply nothing" begin
+            @test reported(withsubset("""<!ATTLIST d f CDATA #FIXED "v" i CDATA #IMPLIED r CDATA #REQUIRED>""")) ==
+                  fill(["f" => "v"], 8)
+        end
+
+        @testset "the first declaration of an attribute binds (§3.3)" begin
+            @test reported(withsubset("""<!ATTLIST d a CDATA "1"><!ATTLIST d b CDATA "2">""")) ==
+                  fill(["a" => "1", "b" => "2"], 8)
+            @test reported(withsubset("""<!ATTLIST d a CDATA "first"><!ATTLIST d a CDATA "second">""")) ==
+                  fill(["a" => "first"], 8)
+            @test reported(withsubset("""<!ATTLIST d a CDATA "first" a CDATA "second">""")) ==
+                  fill(["a" => "first"], 8)
+            # even when it supplies nothing
+            @test reported(withsubset("""<!ATTLIST d a CDATA #IMPLIED><!ATTLIST d a CDATA "late">""")) ==
+                  fill(none, 8)
+        end
+
+        @testset "references in a default value" begin
+            # an entity declared before the ATTLIST is included as in a written value (§4.4.5)
+            @test reported(withsubset("""<!ENTITY e "ev"><!ATTLIST d a CDATA "[&e;]">""")) ==
+                  fill(["a" => "[ev]"], 8)
+            @test reported(withsubset("""<!ENTITY q '"'><!ATTLIST d a CDATA "&q;">""")) ==
+                  fill(["a" => "\""], 8)
+            @test reported(withsubset("""<!ATTLIST d a CDATA 'say "hi"'>""")) ==
+                  fill(["a" => "say \"hi\""], 8)
+            # character and predefined references decode; white space reads as in §3.3.3
+            @test reported(withsubset("""<!ATTLIST d a CDATA "&lt;&#65;&amp;">""")) ==
+                  fill(["a" => "<A&"], 8)
+            @test reported(withsubset("<!ATTLIST d a CDATA \"x\ty&#9;z\">")) ==
+                  fill(["a" => "x y\tz"], 8)
+            # `%e;` is no reference in an attribute value (§4.4, W3C valid-sa-094)
+            @test reported(withsubset("""<!ENTITY % e "foo"><!ATTLIST d a CDATA "%e;">""")) ==
+                  fill(["a" => "%e;"], 8)
+        end
+
+        @testset "every accessor sees a supplied attribute" begin
+            xml = withsubset("""<!ATTLIST d a CDATA "v">""")
+            flat = only(elements(parse(xml, FlatNode)))
+            lazy = only(elements(parse(xml, LazyNode)))
+            cursor = cursor_on_root(xml)
+            @testset "$(nameof(typeof(el)))" for el in (only(elements(parse(xml, Node))), flat, lazy, cursor)
+                @test el["a"] == "v"
+                @test get(el, "a", nothing) == "v"
+                @test haskey(el, "a")
+                @test collect(keys(el)) == ["a"]
+            end
+            @test collect(eachattribute(lazy)) == ["a" => "v"]
+            @test pairsof(Node(flat)) == ["a" => "v"]
+            @test pairsof(LazyNode(cursor)) == ["a" => "v"]
+        end
+
+        @testset "an element given an attribute is no longer simple" begin
+            # `is_simple` asks for an element with no attributes, and a supplied one counts
+            xml = """<!DOCTYPE title [<!ATTLIST title type CDATA "text">]><title>Hello</title>"""
+            @testset "$R" for R in (Node, FlatNode, LazyNode)
+                el = only(elements(parse(xml, R)))
+                @test !is_simple(el)
+                @test is_simple_value(el) === nothing
+                @test_throws ErrorException simple_value(el)
+            end
+            @test is_simple_value(cursor_on_root(xml)) === nothing
+        end
+
+        @testset "the document read is the document rewritten" begin
+            xml = """<!DOCTYPE d [<!ATTLIST d a2 CDATA "def">]><d a1="x"/>"""
+            @test sourcetext(only(elements(parse(xml, LazyNode)))) == """<d a1="x" a2="def"/>"""
+            @test sourcetext(only(elements(parse(xml, FlatNode)))) == """<d a1="x" a2="def"/>"""
+            # written out, a supplied attribute is an attribute like any other
+            out = XML.write(parse(xml, Node))
+            @test occursin("""<d a1="x" a2="def"/>""", out)
+            @test pairsof(only(elements(parse(out, Node)))) == ["a1" => "x", "a2" => "def"]
+        end
+
+        @testset ":strict checks every default value as it reads the ATTLIST" begin
+            # Rule [60] and the constraints on references (§3.1, §4.1): `:strict` refuses a
+            # default value naming an undeclared entity (W3C not-wf-sa-078), one declared after
+            # the ATTLIST (180, ibm68n07), an external one (082, rmt-e3e-12) or an unparsed one
+            # (084), and a `<`, written or through an entity, whether the value is supplied or
+            # not. Below `:strict`, a supplied value keeps those references as written.
+            for (subset, root, below) in (
+                    ("""<!ATTLIST d a CDATA "&foo;">""", "<d/>", ["a" => "&foo;"]),
+                    ("""<!ATTLIST d a CDATA "&e;"><!ENTITY e "v">""", "<d/>", ["a" => "&e;"]),
+                    ("""<!ENTITY e SYSTEM "nul"><!ATTLIST d a CDATA "&e;">""", "<d/>", ["a" => "&e;"]),
+                    ("""<!ENTITY e SYSTEM "e"><!ATTLIST d a CDATA "x &e; y">""", """<d a="w"/>""",
+                     ["a" => "w"]),
+                    ("""<!ENTITY e SYSTEM "nul" NDATA n><!ATTLIST d a CDATA "&e;">""", "<d/>",
+                     ["a" => "&e;"]),
+                    ("""<!ATTLIST d a CDATA "<">""", """<d a="w"/>""", ["a" => "w"]),
+                    ("""<!ENTITY l "&#60;"><!ATTLIST d a CDATA "&l;">""", """<d a="w"/>""",
+                     ["a" => "w"]))
+                xml = withsubset(subset, root)
+                @test_throws "not well-formed" parse(xml, Node; wellformed = :strict)
+                @test_throws "not well-formed" parse(xml, FlatNode; wellformed = :strict)
+                @test reported(xml; levels = (:lenient, :structural)) == fill(below, 6)
+            end
+            # a supplied `<` is refused from `:structural` up, like a written one
+            xml = withsubset("""<!ATTLIST d a CDATA "<">""")
+            @test_throws "not well-formed" parse(xml, Node; wellformed = :structural)
+            @test_throws "not well-formed" parse(xml, FlatNode; wellformed = :structural)
+            @test reported(xml; levels = (:lenient,)) == fill(["a" => "<"], 4)
+        end
+
+        @testset "a malformed ATTLIST is ignored, never refused" begin
+            # A misspelled keyword, `#FIXED` without its value or the space before it, the
+            # default before the keyword, two keywords (W3C ibm60n01 to ibm60n08): the
+            # declaration cannot be read, so none of its definitions supplies anything.
+            for subset in ("<!ATTLIST d a CDATA #required>", "<!ATTLIST d a CDATA #Implied>",
+                           "<!ATTLIST d a CDATA !IMPLIED>", "<!ATTLIST d a CDATA #FIXED >",
+                           """<!ATTLIST d a CDATA #FIXED"v">""", """<!ATTLIST d a CDATA "v" #FIXED>""",
+                           "<!ATTLIST d a CDATA #REQUIRED #IMPLIED>",
+                           """<!ATTLIST d b CDATA "2" a CDATA #required>""")
+                @test reported(withsubset(subset)) == fill(none, 8)
+            end
+        end
+
+        @testset "names that are not ASCII" begin
+            @test reported("""<!DOCTYPE r [<!ATTLIST r a (é|b) "b">]><r/>""") == fill(["a" => "b"], 8)
+            @test reported("""<!DOCTYPE données [<!ATTLIST données é CDATA "à">]><données/>""") ==
+                  fill(["é" => "à"], 8)
+        end
+
+        @testset "§5.1: an ATTLIST after an unread parameter entity is not used" begin
+            subset = """<!ENTITY % ext SYSTEM "ext.ent"><!ATTLIST d a CDATA "1">%ext;<!ATTLIST d b CDATA "2">"""
+            @test reported(withsubset(subset)) == fill(["a" => "1"], 8)
+            # except in a standalone document, where it MUST be used
+            @test reported("""<?xml version="1.0" standalone="yes"?>""" * withsubset(subset)) ==
+                  fill(["a" => "1", "b" => "2"], 8)
+        end
+    end
 end
 
 #==============================================================================#
