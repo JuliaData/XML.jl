@@ -1332,6 +1332,55 @@ end
             @test_throws ErrorException parse(xml, Cursor)
         end
     end
+
+    @testset "white space from an entity's text reads as spaces in an attribute value (§3.3.3)" begin
+        # Each white space character of the replacement text becomes one space, so a CR LF pair
+        # gives two (W3C valid-sa-110), while white space written in the value keeps its own
+        # rule. A character reference in the replacement text still gives its character.
+        function a_by_reader(xml)
+            cursor = parse(xml, Cursor)
+            while next!(cursor) !== nothing && nodetype(cursor) !== Element end
+            (only(elements(parse(xml, Node)))["a"], only(elements(parse(xml, Node{SubString{String}})))["a"],
+             only(elements(parse(xml, LazyNode)))["a"], only(elements(parse(xml, FlatNode)))["a"], cursor["a"])
+        end
+        five(v) = (v, v, v, v, v)
+        crlf = "<!DOCTYPE d [<!ENTITY e \"&#13;&#10;\">]>"
+        @test a_by_reader(crlf * "<d a=\"x&e;y\"/>") == five("x  y")
+        @test a_by_reader(crlf * "<d a=\"p\tq&e;r\"/>") == five("p q  r")
+        # `&#38;#10;` declares the text `&#10;`; `Node{SubString{String}}` reports it as written
+        @test a_by_reader("<!DOCTYPE d [<!ENTITY e \"&#38;#10;&#13;&#10;\">]><d a=\"p&e;q\"/>") ==
+              ("p\n  q", "p&#10;  q", "p\n  q", "p\n  q", "p\n  q")
+    end
+
+    @testset "markup in an entity's text is read as markup (§4.4.2)" begin
+        # A tag that an entity brings is read like a written one: a reference in its attribute
+        # value follows the attribute-value rules, and it receives its defaults and reduction.
+        function e_attrs(xml)
+            pairsof(el) = collect(attributes(el))
+            readings = Any[pairsof(only(elements(only(elements(parse(xml, R; wellformed = w))))))
+                           for w in (:lenient, :structural, :strict) for R in (Node, FlatNode)]
+            push!(readings, pairsof(only(elements(only(elements(parse(xml, LazyNode)))))))
+            cursor = parse(xml, Cursor)
+            while next!(cursor) !== nothing && !(nodetype(cursor) === Element && tag(cursor) == "e") end
+            push!(readings, pairsof(cursor))
+        end
+        @test e_attrs("<!DOCTYPE d [<!ENTITY y \"it's\"><!ENTITY x \"<e a='&y;'/>\">]><d>&x;</d>") ==
+              fill(["a" => "it's"], 8)
+        @test e_attrs("<!DOCTYPE d [<!ENTITY x \"<e a='p&#13;&#10;q'/>\">]><d>&x;</d>") ==
+              fill(["a" => "p  q"], 8)
+        @test e_attrs("<!DOCTYPE d [<!ATTLIST e a CDATA \"v\" n NMTOKENS #IMPLIED>" *
+                      "<!ENTITY x \"<e n=' p  q '/>\">]><d>&x;</d>") == fill(["n" => "p q", "a" => "v"], 8)
+        # A replacement text that cuts a tag or an element is not balanced content: refused at
+        # every level, by every reader.
+        for xml in ("<!DOCTYPE d [<!ENTITY s \"<e a='\">]><d>&s;x'/></d>",
+                    "<!DOCTYPE d [<!ENTITY s \"<p>\">]><d>&s;x</p></d>")
+            for w in (:lenient, :structural, :strict), R in (Node, FlatNode)
+                @test_throws "is not balanced content" parse(xml, R; wellformed = w)
+            end
+            @test_throws "is not balanced content" parse(xml, LazyNode)
+            @test_throws "is not balanced content" parse(xml, Cursor)
+        end
+    end
 end
 
 #==============================================================================#

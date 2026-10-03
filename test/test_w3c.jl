@@ -217,12 +217,9 @@ let
     # Line-end normalization (§2.11) is implemented, so its cases are absent from this
     # ledger; a case that combined it with another gap is listed under that remaining gap.
     # Internal general entities are included before the parse (§4.4.2), so their cases are absent
-    # from this ledger; what remains of that class is one attribute value where §3.3.3 has to
-    # normalize the white space a character reference contributes through an entity.
-    avn = "§3.3.3 normalization through an entity (#130): `&#13;&#10;` reaching an attribute value inside replacement text"
+    # from this ledger.
     ntn = "notation declarations: Second Canonical Form prepends a DOCTYPE carrying <!NOTATION …>"
     for (reason, ids) in (
-        avn => ["valid-sa-110"],
         ntn => ["valid-sa-069", "valid-sa-076", "valid-sa-090", "valid-sa-091", "sa02",
                 "ibm-valid-P29-ibm29v01.xml",
                 "ibm-valid-P56-ibm56v08.xml", "ibm-valid-P57-ibm57v01.xml", "ibm-valid-P58-ibm58v01.xml",
