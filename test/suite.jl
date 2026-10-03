@@ -1702,7 +1702,7 @@ end
 
     # `is_simple`, `is_simple_value` and `simple_value` take a different path in each reader:
     # the `attributes` field of `Node`, the attribute count of a `FlatNode` record, a walk
-    # over the tag's tokens in `LazyNode` and in `Cursor`, which has only `is_simple_value`.
+    # over the tag's tokens in `LazyNode` and in `Cursor`.
     # Whatever the element holds, the four readers must give the same answers.
     @testset "the four readers give the same answers" begin
         docs = ["<a>x</a>", "<a> </a>", "<a></a>", "<a/>", "<a x=\"1\">x</a>", "<a >x</a>",
@@ -1723,13 +1723,16 @@ end
                 simple = v !== nothing
                 @test is_simple_value(flat) == is_simple_value(lazy) == v
                 @test is_simple_value(cursor) == v
-                @test is_simple(node) == is_simple(flat) == is_simple(lazy) == simple
+                @test is_simple(node) == is_simple(flat) == is_simple(lazy) == is_simple(cursor) ==
+                      simple
                 if !simple
                     @test_throws ErrorException simple_value(node)
                     @test_throws ErrorException simple_value(flat)
                     @test_throws ErrorException simple_value(lazy)
+                    @test_throws ErrorException simple_value(cursor)
                 else
-                    @test simple_value(node) == simple_value(flat) == simple_value(lazy) == v
+                    @test simple_value(node) == simple_value(flat) == simple_value(lazy) ==
+                          simple_value(cursor) == v
                 end
             end
         end
@@ -2610,6 +2613,8 @@ end
                 @test_throws ErrorException simple_value(el)
             end
             @test is_simple_value(cursor_on_root(xml)) === nothing
+            @test !is_simple(cursor_on_root(xml))
+            @test_throws ErrorException simple_value(cursor_on_root(xml))
         end
 
         @testset "the document read is the document rewritten" begin

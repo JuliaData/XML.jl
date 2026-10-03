@@ -101,7 +101,7 @@ end
         for x in (tlz, tfl, tcu, tnd)
             @test value(x) == "hello"
         end
-        for x in (slz, sfl, snd)
+        for x in (slz, sfl, scu, snd)
             @test simple_value(x) == "hello"
             @test is_simple(x)
         end
@@ -116,9 +116,9 @@ end
     end
     measure_eachattr(lz)
     foreach(measure_value, (tlz, tfl, tcu, tnd))
-    foreach(measure_simple, (slz, sfl, snd))
+    foreach(measure_simple, (slz, sfl, scu, snd))
     foreach(measure_is_simple, (slz, sfl, scu, snd))
-    foreach(measure_simple_test, (slz, sfl, snd))
+    foreach(measure_simple_test, (slz, sfl, scu, snd))
 
     if _NO_COVERAGE
         @testset "by-key attribute reads" begin
@@ -153,9 +153,11 @@ end
         @testset "is_simple / simple_value / is_simple_value" begin
             @test measure_simple_test(slz) == 0
             @test measure_simple_test(sfl) == 0
+            @test measure_simple_test(scu) == 0
             @test measure_simple_test(snd) == 0
             @test measure_simple(slz) == 0
             @test measure_simple(sfl) == 0
+            @test measure_simple(scu) == 0
             @test measure_simple(snd) == 0
             @test measure_is_simple(slz) == 0
             @test measure_is_simple(sfl) == 0

@@ -277,7 +277,7 @@ function Base.keys(c::Cursor)
     result
 end
 
-#-----------------------------------------------------------------------------# is_simple_value
+#-----------------------------------------------------------------------------# simple elements
 # Cursor mirror of `is_simple_value(::LazyNode)`: combined predicate+accessor that
 # returns the lone Text/CData value of the current element (or `nothing` if it has
 # attributes / isn't a single-text element). Non-destructive — reads via `_rescan`,
@@ -311,6 +311,26 @@ end
         return content
     end
     nothing
+end
+
+"""
+    is_simple(c::Cursor) -> Bool
+
+Whether the cursor's current node is a simple element (see [`is_simple`](@ref)), answered by
+the walk of [`is_simple_value`](@ref), without moving the cursor.
+"""
+is_simple(c::Cursor) = is_simple_value(c) !== nothing
+
+"""
+    simple_value(c::Cursor) -> SubString
+
+The textual content of the cursor's current element when it is simple (see
+[`simple_value`](@ref)), read without moving the cursor. Errors if the element is not simple.
+"""
+@inline function simple_value(c::Cursor)
+    v = is_simple_value(c)
+    v === nothing && error("`simple_value` is only defined for simple nodes.")
+    v
 end
 
 #-----------------------------------------------------------------------------# snapshot (bridge to DOM)
