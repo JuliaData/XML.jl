@@ -4712,6 +4712,54 @@ Base.thisind(w::WrappedSource, i::Int) = thisind(w.s, i)
             @test value(cur) == "x\ry\nz"
         end
     end
+
+    @testset "a source at an offset reads like the same text held as a String" begin
+        # A token records its position in the root of the string it is cut from, so a reader
+        # walking a view takes the view's own offset back out. A `SubString` the caller
+        # passes starts past its root, and so does any other source a byte-order mark is
+        # dropped from. Positions are those of the source the reader holds, as for a String.
+        doc = "<?pi d?><r a=\"1\"><!--c--><e b=\"2\">t</e><f/><g>v</g>u</r>"
+        bytes = Vector{UInt8}("\ufeff" * doc)
+        pairsof(a) = a === nothing ? nothing : collect(a)
+        function lazy_walk(n)
+            out = Any[(nodetype(n), tag(n), pairsof(attributes(n)), value(n),
+                       is_simple_value(n), String(sourcetext(n)), sourcespan(n),
+                       splicetext(n, "#"))]
+            for child in children(n)
+                append!(out, lazy_walk(child))
+            end
+            out
+        end
+        function cursor_walk(c)
+            out = Any[]
+            while next!(c) !== nothing
+                push!(out, (nodetype(c), tag(c), pairsof(attributes(c)), value(c),
+                            is_simple_value(c)))
+            end
+            out
+        end
+        e_of(lazy) = first(elements(only(elements(lazy))))
+        function at_e(src)
+            c = parse(src, Cursor)
+            while next!(c) !== nothing && tag(c) != "e" end
+            c
+        end
+        ref = parse(doc, LazyNode)
+        @testset "$(typeof(src))" for src in (SubString("xyz" * doc, 4), StringView(bytes),
+                                              StringView(view(bytes, 1:length(bytes))))
+            lazy = parse(src, LazyNode)
+            @test lazy_walk(lazy) == lazy_walk(ref)
+            @test cursor_walk(parse(src, Cursor)) == cursor_walk(parse(doc, Cursor))
+            # the crossings between the two readers, and the accessors that read a tag again
+            @test lazy_walk(LazyNode(parse(src, Cursor))) == lazy_walk(ref)
+            @test cursor_walk(Cursor(e_of(lazy))) == cursor_walk(Cursor(e_of(ref)))
+            c = at_e(src)
+            @test get(c, "b", nothing) == "2"
+            @test pairsof(attributes(LazyNode(c))) == ["b" => "2"]
+            skip_element!(c)
+            @test cursor_walk(c) == cursor_walk(skip_element!(at_e(doc)))
+        end
+    end
 end
 
 # Each included suite is wrapped in a @testset so a load-time error in one file can't skip the rest.

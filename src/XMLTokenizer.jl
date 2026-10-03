@@ -133,6 +133,10 @@ end
 @inline function _span_view(data::AbstractString, start::Int, stop::Int)
     @inbounds _noshift_substring(_token_root(data), _data_offset(data) + start - 1, stop - start)
 end
+# The way back, for a reader that resumes a scan at a token it holds: the positions in `data`
+# of the token's first and last bytes.
+@inline _data_start(t::Token, data::AbstractString) = t.offset - _data_offset(data) + 1
+@inline _data_stop(t::Token, data::AbstractString)  = t.offset - _data_offset(data) + t.ncodeunits
 
 function Base.show(io::IO, t::Token)
     print(io, t.kind, " @", t.offset, "+", t.ncodeunits)
@@ -159,8 +163,9 @@ struct TokenizerState
     pending::Token  # buffered token for constructs that emit two tokens at once (e.g. content + close)
 end
 
-# The empty sentinel token (no pending token buffered): kind TEXT, empty span.
-@inline no_token(::AbstractString) = Token(TokenKinds.TEXT, false, 0, 0)
+# The empty sentinel token (no pending token buffered): kind TEXT, empty span at the start of
+# `data`, in the root's index space like every token — a reader resumes a scan from it.
+@inline no_token(data::AbstractString) = Token(TokenKinds.TEXT, false, _data_offset(data), 0)
 # Check whether the state has a buffered pending token (the sentinel has ncodeunits 0;
 # every real pending token — COMMENT/CDATA/PI/DOCTYPE close — is non-empty).
 @inline has_pending(st::TokenizerState) = st.pending.ncodeunits != 0

@@ -114,12 +114,12 @@ scan the raw-string constructors run on their argument; it is the only place `Cu
 `LazyNode`, and it is an optional, removable convenience (a consumer that tracks
 subtree start offsets directly can call the primitive `Cursor(data, startpos)`).
 """
-Cursor(node::LazyNode) = _cursor_at(node.data, node.token.offset + 1)
+Cursor(node::LazyNode) = _cursor_at(node.data, _CURSOR_XT._data_start(node.token, node.data))
 
 @inline _data(c::Cursor) = c.st.t.data
 # A fresh token stream positioned at the current node — mirrors LazyNode's
 # `_lazy_tokenizer`, but built directly on the token layer (no LazyNode).
-@inline _rescan(c::Cursor) = tokenize(_data(c), c.token.offset + 1)
+@inline _rescan(c::Cursor) = tokenize(_data(c), _CURSOR_XT._data_start(c.token, _data(c)))
 
 #-----------------------------------------------------------------------------# next!
 """
@@ -388,7 +388,7 @@ discovery) that classify a node but don't need its contents — far cheaper than
 function skip_element!(c::Cursor)
     c.nodetype === Element || return c
     data = _data(c)
-    after = _CURSOR_XT._skip_element_raw(data, c.token.offset + 1)
+    after = _CURSOR_XT._skip_element_raw(data, _CURSOR_XT._data_start(c.token, data))
     if after > ncodeunits(data)
         c.done = true
         c.held = false
