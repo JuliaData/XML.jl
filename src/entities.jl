@@ -125,7 +125,8 @@ function _declare_attributes!(r::_SubsetReader, element::String, defs::Vector{_A
     declared = get!(() -> _DeclaredAttr[], r.attributes, element)
     for d in defs
         any(a -> a.name == d.name, declared) && continue
-        supplied = d.literal === nothing ? nothing : _supplied_text(d.literal, r.entities)
+        supplied = d.literal === nothing ? nothing :
+                   _supplied_text(d.literal, r.entities, d.tokenized)
         push!(declared, _DeclaredAttr(d.name, d.tokenized, supplied))
     end
 end
@@ -133,10 +134,16 @@ end
 # The text written for a supplied attribute: its default value with the references to entities
 # declared so far — before the ATTLIST — included as in an attribute value (§4.4.5), and its
 # quotes written as character references, so that it can stand between double quotes. Character
-# references and the five predefined entities stay as written, for the readers to decode.
-function _supplied_text(literal::String, entities::Dict{String, String})
+# references and the five predefined entities stay as written, for the readers to decode. A
+# value of a type other than CDATA is written reduced, as a value written in a tag is (§3.3.3).
+function _supplied_text(literal::String, entities::Dict{String, String}, tokenized::Bool)
     io = IOBuffer()
-    _expand_refs!(io, literal, InternalEntities(entities, false), 1, true)
+    ents = InternalEntities(entities, false)
+    if tokenized
+        _write_reduced!(io, literal, ents, UInt8('"'), 1)
+    else
+        _expand_refs!(io, literal, ents, 1, true)
+    end
     String(take!(io))
 end
 
@@ -371,6 +378,97 @@ function _expand_refs!(io::IOBuffer, s::AbstractString, ents::InternalEntities, 
     io
 end
 
+#-----------------------------------------------------------------------------# reduction (§3.3.3)
+# A value of a type other than CDATA is reported with its spaces reduced: none at either end, one
+# for each run. Only #x20 counts. Each white space character reads as one, whether the value
+# writes it or an entity's text does, and so does a reference to #x20; `&#9;` and `&#10;` stand
+# for characters that are kept (W3C valid-sa-058, 096, 111). The rewrite writes the reduced
+# value back in a form the readers report unchanged: a space as a space, any other reference as
+# it stands, for them to decode.
+
+# The `;` of the character reference at `i`, where `cu[i]` is `&`, when it stands for #x20, or
+# 0. It is read by the readers' own lexer, so a reference counts as a space exactly where they
+# would decode one.
+@inline function _space_ref_end(cu, i::Int, n::Int)
+    (i + 1 <= n && cu[i + 1] == UInt8('#')) || return 0
+    j, cp = _charref_at(cu, i, n)
+    cp == 0x00000020 ? j : 0
+end
+
+@inline _replacement(::Nothing, name::AbstractString) = nothing
+@inline _replacement(e::InternalEntities, name::AbstractString) = get(e.values, name, nothing)
+
+# Whether the reduction changes a value's bytes: white space other than single spaces within it,
+# a reference to #x20, or a reference to a declared entity. Answered without writing, so that a
+# document whose values are already reduced is walked without a copy.
+function _changes_when_reduced(s::AbstractString, ents::Union{Nothing, InternalEntities})
+    cu = codeunits(s)
+    n = length(cu)
+    space = true                                     # a space here would be a leading one
+    for i in 1:n
+        b = cu[i]
+        if b == UInt8(' ')
+            space && return true                     # leading, or the second of a run
+            space = true
+        elseif b == UInt8('\t') || b == UInt8('\n') || b == UInt8('\r')
+            return true
+        else
+            space = false
+            if b == UInt8('&')
+                _space_ref_end(cu, i, n) > 0 && return true
+                j = _name_end(cu, i + 1, n)
+                j > 0 && _replacement(ents, SubString(s, i + 1, j - 1)) !== nothing && return true
+            end
+        end
+    end
+    space && n > 0                                   # a trailing space
+end
+
+# Writes `s` reduced. A reference to a declared entity is replaced by its text, reduced the same
+# way and with the value around it: a space that ends the text and one that follows it make one
+# run. Any other byte is written as it stands, a reference included, for the readers to decode;
+# a quote that would close the value (`q`) is written as a character reference (§4.4.5).
+# Returns whether something has been written, and whether a space waits for what follows.
+function _write_reduced!(io::IOBuffer, s::AbstractString, ents::Union{Nothing, InternalEntities},
+                         q::UInt8, depth::Int, started::Bool = false, pending::Bool = false)
+    depth > _MAX_ENTITY_DEPTH &&
+        error("entity expansion exceeded $(_MAX_ENTITY_DEPTH) levels of nesting")
+    cu = codeunits(s)
+    n = length(cu)
+    i = 1
+    while i <= n
+        b = cu[i]
+        if b == UInt8(' ') || b == UInt8('\t') || b == UInt8('\n') || b == UInt8('\r')
+            pending = started                        # written only if something follows
+            i += 1
+            continue
+        elseif b == UInt8('&')
+            j = _space_ref_end(cu, i, n)
+            if j > 0
+                pending = started
+                i = j + 1
+                continue
+            end
+            j = _name_end(cu, i + 1, n)
+            rep = j > 0 ? _replacement(ents, SubString(s, i + 1, j - 1)) : nothing
+            if rep !== nothing
+                started, pending =
+                    _write_reduced!(io, rep, ents, q, depth + 1, started, pending)
+                io.size > _MAX_ENTITY_EXPANSION &&
+                    error("entity expansion exceeded $(_MAX_ENTITY_EXPANSION) bytes")
+                i = j + 1
+                continue
+            end
+        end
+        pending && Base.write(io, UInt8(' '))
+        pending = false
+        started = true
+        b == q ? Base.write(io, q == UInt8('"') ? "&#34;" : "&#39;") : Base.write(io, b)
+        i += 1
+    end
+    started, pending
+end
+
 # Whether a span holds a reference to a name the subset declares — the test that decides whether
 # it is rewritten at all, so that a document declaring entities it never uses is copied verbatim.
 function _references_declared(s::AbstractString, ents::InternalEntities)
@@ -437,7 +535,8 @@ _rebuild_source(::String, bytes::Vector{UInt8}) = String(bytes)
 _rebuild_source(::SubString{String}, bytes::Vector{UInt8}) = SubString(String(bytes))
 
 # One walk of the document: spans that need no work are copied, references to declared names are
-# expanded, and a start tag of a declared element receives, just before its `>` or `/>`, each
+# expanded, the value of an attribute declared with a type other than CDATA is written reduced
+# (§3.3.3), and a start tag of a declared element receives, just before its `>` or `/>`, each
 # attribute it leaves out that a default supplies (§3.3.2), after the ones it writes. Returns
 # `nothing` when nothing was rewritten, so the caller returns its own argument instead of an equal
 # copy; the output buffer is created at the first change, so a walk that changes nothing
@@ -453,6 +552,7 @@ function _rewritten_bytes(s::AbstractString, d::_Declarations)
     pos = 1                                          # 1-based byte position of the next byte to copy
     current = nothing                                # the declared attributes of the open start tag
     written = Bool[]                                 # which of them the tag writes
+    reduce_value = false                             # the next value is of a type other than CDATA
     for tok in XMLTokenizer.tokenize(s, 1)
         k = tok.kind
         if k === XMLTokenizer.TokenKinds.OPEN_TAG
@@ -463,11 +563,29 @@ function _rewritten_bytes(s::AbstractString, d::_Declarations)
             fill!(written, false)
             continue
         elseif k === XMLTokenizer.TokenKinds.ATTR_NAME
+            reduce_value = false
             current === nothing && continue
             name = XMLTokenizer.raw(tok, s)
             for i in eachindex(current)
-                current[i].name == name && (written[i] = true)
+                current[i].name == name || continue
+                written[i] = true
+                reduce_value = current[i].normalize
             end
+            continue
+        elseif k === XMLTokenizer.TokenKinds.ATTR_VALUE && reduce_value
+            reduce_value = false
+            span = XMLTokenizer.raw(tok, s)
+            inner = SubString(span, nextind(span, firstindex(span)),
+                              prevind(span, lastindex(span)))
+            _changes_when_reduced(inner, ents) || continue
+            start = tok.offset - base + 1
+            out === nothing && (out = IOBuffer(sizehint = ncodeunits(s)))
+            Base.write(out, SubString(s, pos, prevind(s, start)))
+            q = codeunit(span, 1)
+            Base.write(out, q)
+            _write_reduced!(out, inner, ents, q, 1)
+            Base.write(out, q)
+            pos = start + tok.ncodeunits
             continue
         elseif k === XMLTokenizer.TokenKinds.TAG_CLOSE || k === XMLTokenizer.TokenKinds.SELF_CLOSE
             current === nothing && continue
