@@ -324,7 +324,9 @@ end
 
 The node's exact raw source slice, markup included — `<tag …>…</tag>` for an element,
 `<!--…-->` for a comment, and the whole document for the Document node. Zero-copy: the
-store keeps per-record source spans.
+store keeps per-record source spans. The slice is taken from the document the reader holds,
+which is rewritten when its internal subset declares something to apply (see the `LazyNode`
+method).
 """
 function sourcetext(n::FlatNode)
     so, se = @inbounds n.store.spans[n.i]

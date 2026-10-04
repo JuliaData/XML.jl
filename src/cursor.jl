@@ -36,9 +36,13 @@ end
 
 A forward, in-place [`StAX`-style] pull cursor over the XML `data`. Advance it
 with [`next!`](@ref); read the current position with [`nodetype`](@ref),
-[`tag`](@ref), [`value`](@ref), [`attributes`](@ref), [`depth`](@ref).
+[`tag`](@ref), [`value`](@ref), [`attributes`](@ref), [`depth`](@ref),
+[`is_simple`](@ref), [`simple_value`](@ref).
 (`parse(Cursor, data)` also works.) The `read` forms apply the same byte-level
 BOM normalization as the tree readers: UTF-8 BOM strip, UTF-16 LE/BE transcoding.
+Like [`LazyNode`](@ref), the cursor reads a document whose internal subset declares
+something to apply from a rewritten copy of the same string type; for a source type that
+cannot be rebuilt, such a document raises an `ArgumentError`.
 
 The cursor is a single mutable object reused across the whole walk. See the
 aliasing-contract note on [`next!`](@ref).

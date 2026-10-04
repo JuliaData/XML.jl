@@ -2,7 +2,7 @@ module XMLStringViewsExt
 
 # `Cursor` and `LazyNode` keep whatever string type the document arrives as, so a document read
 # through a `StringView` over `Mmap` — the recipe the README gives for files too large for the
-# heap — needs the expanded bytes returned as a `StringView` too. `Mmap.mmap` returns an
+# heap — needs the rewritten bytes returned as a `StringView` too. `Mmap.mmap` returns an
 # ordinary `Vector{UInt8}`, so a mapping and a heap vector are the same concrete type and the
 # substitution stays invisible to inference: the reader's type parameter is what it would have
 # been for a document that declares nothing.

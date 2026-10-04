@@ -530,15 +530,17 @@ end
     _apply_declarations(src) -> src, or a rewritten copy of the same type
 
 The entry rewrite the four readers share: the document is rewritten once, before any reader
-reads it, so that what the internal subset declares applies the same way in all four. XML 1.0
-§4.4.2 includes a general entity's replacement text "as though it were part of the document at
-the location the reference was recognized" — so a reference whose replacement text carries
-markup produces STRUCTURE, not a text node holding `<`: the parser reads the rewritten document
-and builds the nodes itself.
+reads it, so that what the internal subset declares applies the same way in all four. A
+start tag receives each attribute it leaves out that an ATTLIST gives a default value
+(XML 1.0 §3.3.2), after the ones it writes, and the value of an attribute declared with a
+type other than CDATA is written reduced (§3.3.3). §4.4.2 includes a general entity's
+replacement text "as though it were part of the document at the location the reference was
+recognized" — so a reference whose replacement text carries markup produces STRUCTURE, not a
+text node holding `<`: the parser reads the rewritten document and builds the nodes itself.
 
-Only content and attribute values are rewritten. A reference inside a comment, a CDATA section,
-a processing instruction or the internal subset is not a reference (§4.4.2 recognises them in
-content and in attribute values), so those spans are copied byte for byte.
+Only content, start tags and attribute values are rewritten. A reference inside a comment, a
+CDATA section, a processing instruction or the internal subset is not a reference (§4.4.2
+recognises them in content and in attribute values), so those spans are copied byte for byte.
 
 A document that declares nothing costs one probe of its prolog and is returned as it stands, and
 so is one whose walk changes nothing: no copy is made. A rewritten document comes back as the
@@ -595,9 +597,10 @@ end
 # between two tags are stepped over by a search for `<`; a comment, a CDATA section and a
 # processing instruction to their ends; the start tag of an element the table does not name to
 # its `>`, past its quoted values. A start tag of a named element has its values reduced and its
-# defaults supplied as `_rewrite_walk!` does. The DOCTYPE is read by the tokenizer. Any form this
-# walk does not expect hands the document to `_rewrite_walk!`: `(false, nothing)`; otherwise
-# `(true, bytes)`, `bytes` being `nothing` when nothing was rewritten.
+# defaults supplied as `_rewrite_walk!` does. The DOCTYPE is read by the tokenizer. On any
+# form this walk does not expect it returns `(false, nothing)`, and `_rewrite_walk!` reads
+# the document instead; otherwise `(true, bytes)`, `bytes` being `nothing` when nothing was
+# rewritten.
 function _rewrite_tags(s::AbstractString, attrs::Dict{String, Vector{_DeclaredAttr}})
     cu = codeunits(s)
     n = length(cu)
@@ -862,8 +865,8 @@ end
 """
     _strict_context(xml) -> _StrictContext
 
-What `:strict` checks of the DTD before the parse, and what it hands the reference check. The
-declarations are read, by the reader the inclusion uses, never searched as text.
+What `:strict` checks of the DTD before the parse, and what it passes to the reference
+check. The declarations are read, by the reader the inclusion uses, never searched as text.
 
 A parameter-entity reference inside a markup declaration of the internal subset is refused
 (§2.8, PEs in Internal Subset). A default value is refused when it holds a `<`, written or

@@ -15,6 +15,12 @@ document was handed in as — so navigating a large document through `LazyNode` 
 its text data. The materialized [`attributes`](@ref) dict is the one exception: its pairs are
 always `SubString{String}`, so a non-`String` document has each attribute's own bytes copied.
 
+A document whose internal subset declares something to apply is first rewritten into a copy of
+the same string type (see [`sourcetext`](@ref)), and the views point into that copy. `String`,
+`SubString{String}` and, with StringViews.jl loaded, a `StringView` over a `Vector{UInt8}` or
+over a view of a whole one can be rebuilt; for any other source type, such a document raises
+an `ArgumentError`.
+
 # Performance — which reader to use
 
 `LazyNode` holds **no materialized tree**, only the source string, so its resident footprint is
@@ -393,10 +399,12 @@ or reformatting.  This is the zero-copy counterpart of [`write`](@ref) for lazy 
 Being zero-copy, it reports the bytes of the document the reader actually holds. A `String`
 document whose lines end in CR is normalized when it is read in, so its source text is the
 normalized one; a document held as any other string type — a view over a memory-mapped file,
-say — keeps its own line ends, so its source text carries them. A document that declares and
-references general entities in its internal subset is expanded when it is read in, whatever
-string type holds it, so its source text is the expanded one (§4.4.2). Reported *values* are
-normalized either way.
+say — keeps its own line ends, so its source text carries them. A document whose internal
+subset declares something to apply — a general entity it references, an attribute default, an
+attribute declared with a type other than CDATA — is rewritten when it is read in (see
+[`LazyNode`](@ref) for the source types). Its source text is then the rewritten one:
+replacement texts included (§4.4.2), defaults supplied (§3.3.2), values reduced (§3.3.3).
+Reported *values* are normalized either way.
 """
 function sourcetext(n::LazyNode)
     nt = n.nodetype
@@ -447,7 +455,9 @@ end
 The range of *valid character indices* of the node's original source text within the
 retained source string, so that `source[sourcespan(n)] == sourcetext(n)` — the positional
 counterpart of [`sourcetext`](@ref), for consumers that need *where* the node lives rather
-than its text (verbatim excision and splicing, error context).
+than its text (verbatim excision and splicing, error context). The retained string is the one
+the reader holds: for a document rewritten when it was read in (see [`sourcetext`](@ref)), it
+is the rewritten one, and the indices do not apply to the text the reader was given.
 
 The bounds are character indices, not code units: the library performs the `prevind`
 computation, so a node ending on a multi-byte character yields indices that are safe to
