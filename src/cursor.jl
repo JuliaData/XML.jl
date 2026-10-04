@@ -181,7 +181,15 @@ end
 #-----------------------------------------------------------------------------# accessors
 @inline nodetype(c::Cursor) = c.nodetype
 @inline depth(c::Cursor)    = c.depth
-@inline eof(c::Cursor)      = c.done
+
+"""
+    eof(c::Cursor) -> Bool
+
+Return whether `next!(c)` has reached the end of the token stream. A new cursor
+returns `false`, including for an empty document, until `next!(c)` returns
+`nothing`. Checking `eof` does not advance the cursor.
+"""
+@inline Base.eof(c::Cursor) = c.done
 
 function tag(c::Cursor)
     nt = c.nodetype

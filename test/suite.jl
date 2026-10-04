@@ -4794,6 +4794,7 @@ end
 @testset "test_w3c" begin include("test_w3c.jl") end
 @testset "test_tokenizer" begin include("test_tokenizer.jl") end
 @testset "test_allocations" begin include("test_allocations.jl") end
+@testset "test_eof" begin include("test_eof.jl") end
 @testset "test_cursor" begin include("test_cursor.jl") end
 @testset "test_flatnode" begin include("test_flatnode.jl") end
 @testset "test_node_identity" begin include("test_node_identity.jl") end
