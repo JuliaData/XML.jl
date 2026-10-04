@@ -225,7 +225,7 @@ xpath(root, "//b/text()")    # Text nodes inside all <b>s
 
 # `Cursor`
 
-The forward, StAX-style pull reader: one mutable cursor walks the document in document order — no tree, one tokenizing scan, ~zero allocation. Advance with `next!`; read the current position with the usual accessors (`nodetype`, `tag`, `attributes`, `value`, `depth`):
+The forward, StAX-style pull reader: one mutable cursor walks the document in document order — no tree, one tokenizing scan, ~zero allocation. Advance with `next!`; read the current position with the usual accessors (`nodetype`, `tag`, `attributes`, `value`, `depth`, `is_simple`, `simple_value`):
 
 ```julia
 cur = Cursor(xml_string)
@@ -283,7 +283,7 @@ doc = open("very_large.xml") do io
 end
 ```
 
-The reader keeps the string type it is given, so the document is walked through the mapping instead of being copied into the heap, and accessors return views into the mapped bytes. Opening costs one probe of the prolog whatever the file's line ends — about 25 ns on a mapped 14 MB document, LF or CR LF alike: the document is neither scanned nor rewritten for its line ends, and the line-end normalization the specification requires happens on each value as it is read, so a file written with CR LF or a lone CR copies only the values you actually ask for, and only those that carry a line end. A document whose internal subset declares and references general entities is the exception: XML 1.0 §4.4.2 includes their replacement text before the parse, which copies the document once whatever string type holds it. `sourcetext` is the one accessor that shows the file's own bytes — it is a zero-copy view of the document the reader holds, which for a mapped file that declares no entities is the file itself. See [Memory-mapped sources](PERFORMANCE-v0.4.md#memory-mapped-sources) for the measured figures.
+The reader keeps the string type it is given, so the document is walked through the mapping instead of being copied into the heap, and accessors return views into the mapped bytes. Opening costs one probe of the prolog whatever the file's line ends — about 25 ns on a mapped 14 MB document, LF or CR LF alike: the document is neither scanned nor rewritten for its line ends, and the line-end normalization the specification requires happens on each value as it is read, so a file written with CR LF or a lone CR copies only the values you actually ask for, and only those that carry a line end. A document whose internal subset declares something to apply is the exception: general entities it references, attribute defaults, attributes of a type other than CDATA. The reader rewrites such a document before the parse (XML 1.0 §4.4.2, §3.3.2, §3.3.3), and copies it once into the heap if anything changes. `sourcetext` is the one accessor that shows the file's own bytes — it is a zero-copy view of the document the reader holds, which for a mapped file that needs no rewrite is the file itself. See [Memory-mapped sources](PERFORMANCE-v0.4.md#memory-mapped-sources) for the measured figures.
 
 <br>
 
