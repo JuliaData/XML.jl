@@ -507,43 +507,6 @@ end
         @test nodetype(parse("<root><? data?></root>", Node; wellformed=:lenient)) == Document
     end
 
-    @testset ":strict rejects a reference to an undeclared entity (§4.1)" begin
-        # WFC: Entity Declared. `_expand_entities` has already replaced every reference it could
-        # resolve, so a name that reaches the check with no replacement text behind it has no
-        # declaration behind it either.
-        @test_throws Exception parse("<a>&foo;</a>", Node; wellformed=:strict)
-        @test_throws Exception parse("<a x=\"&foo;\"/>", Node; wellformed=:strict)
-        @test_throws Exception parse("<!DOCTYPE a [<!ENTITY e \"x\">]><a>&nope;</a>", Node; wellformed=:strict)
-        @test_throws Exception parse("<a>&foo;</a>", FlatNode; wellformed=:strict)
-        # the five predefined names and character references name no declaration to look up
-        @test nodetype(parse("<a>&amp;&lt;&gt;&apos;&quot;</a>", Node; wellformed=:strict)) == Document
-        @test nodetype(parse("<a>&#65;&#x42;</a>", Node; wellformed=:strict)) == Document
-        # The name is read as the tokenizer reads names, case-sensitive, up to its `;`: the ASCII
-        # name characters and every non-ASCII character (§2.3). A `&` that starts no such name is
-        # left as written, and a name that is not one of the five is named by the message.
-        @test_throws "reference to undeclared entity \"&AMP;\"" parse("<a>&AMP;</a>", Node; wellformed=:strict)
-        @test_throws "reference to undeclared entity \"&_x.y-z:1;\"" parse("<a>&_x.y-z:1;</a>", Node; wellformed=:strict)
-        @test nodetype(parse("<a>&; & &1a; &-a; &amp &&amp;</a>", Node; wellformed=:strict)) == Document
-        for name in ("é", "café", "été"), R in (Node, FlatNode)
-            msg = "reference to undeclared entity \"&$name;\""
-            @test_throws msg parse("<a>&$name;</a>", R; wellformed = :strict)
-            @test_throws msg parse("<a x=\"&$name;\"/>", R; wellformed = :strict)
-        end
-        # a declared entity resolves, so nothing of it reaches the check
-        @test nodetype(parse("<!DOCTYPE a [<!ENTITY e \"x\">]><a>&e;</a>", Node; wellformed=:strict)) == Document
-        # The constraint binds only where the document carries every declaration that could name
-        # an entity. An external subset, an external entity declaration, and a parameter-entity
-        # reference each put one out of reach, so an unknown name is not a defect under them.
-        for shape in ("<!DOCTYPE a SYSTEM \"a.dtd\"><a>&foo;</a>",
-                      "<!DOCTYPE a [<!ENTITY e SYSTEM \"e.ent\">]><a>&foo;</a>",
-                      "<!DOCTYPE a [%pe;<!ENTITY e \"x\">]><a>&foo;</a>")
-            @test nodetype(parse(shape, Node; wellformed=:strict)) == Document
-        end
-        # below :strict the reference stays literal — the graceful degradation
-        @test value(children(parse("<a>&foo;</a>", Node)[end])[1]) == "&foo;"
-        @test value(children(parse("<a>&foo;</a>", Node; wellformed=:lenient)[end])[1]) == "&foo;"
-    end
-
     @testset "every short span gets the verdict and message of the pattern-based check" begin
         # The reference is the check as it read with a pattern, kept here as the specification:
         # one `eachmatch` with three groups, a `tryparse` of the digit run against the character
@@ -699,6 +662,45 @@ end
         @test nodetype(doc[1]) == Declaration
         @test nodetype(doc[2]) == DTD
         @test nodetype(doc[3]) == Element
+    end
+
+    @testset ":strict rejects a parameter-entity reference inside a declaration (§2.8)" begin
+        # WFC: PEs in Internal Subset. Between declarations a reference is allowed; inside one,
+        # in the literal of an entity as in the body of an ELEMENT, ATTLIST or NOTATION, it is
+        # not (W3C not-wf-sa-160, 161, 162, ibm29n02, ibm29n03, ibm29n04, ibm29n07).
+        for subset in ("<!ENTITY % e \"\"><!ENTITY foo \"%e;\">",
+                       "<!ENTITY % e \"#PCDATA\"><!ELEMENT doc (%e;)>",
+                       "<!ENTITY % e1 \"\"><!ENTITY % e2 \"%e1;\">",
+                       "<!ENTITY % p \"leopard EMPTY>\"><!ELEMENT %p;>",
+                       "<!ENTITY % p \"color\"><!ATTLIST doc %p; CDATA #IMPLIED>",
+                       "<!ENTITY % p \"cat SYSTEM\"><!NOTATION %p; \"cat.txt\">",
+                       # an entity may be named SYSTEM: its literal is still its value
+                       "<!ENTITY % p \"x\"><!ENTITY SYSTEM \"%p;\">")
+            xml = "<!DOCTYPE doc [" * subset * "]><doc/>"
+            @test_throws "not well-formed" parse(xml, Node; wellformed = :strict)
+            @test_throws "not well-formed" parse(xml, FlatNode; wellformed = :strict)
+            @test nodetype(parse(xml, Node; wellformed = :structural)) == Document
+        end
+        # Below `:strict` nothing is included inside a declaration: the reference stays text
+        # in a literal, and a declaration whose body holds one is not used.
+        xml = "<!DOCTYPE d [<!ENTITY % p \"x\"><!ENTITY e \"[%p;]\">]><d>&e;</d>"
+        @test_throws "not well-formed" parse(xml, Node; wellformed = :strict)
+        for w in (:lenient, :structural), R in (Node, FlatNode)
+            @test simple_value(only(elements(parse(xml, R; wellformed = w)))) == "[%p;]"
+        end
+        xml = "<!DOCTYPE d [<!ENTITY % p \"a CDATA 'v'\"><!ATTLIST d %p;>]><d/>"
+        @test_throws "not well-formed" parse(xml, Node; wellformed = :strict)
+        for w in (:lenient, :structural), R in (Node, FlatNode)
+            @test attributes(only(elements(parse(xml, R; wellformed = w)))) === nothing
+        end
+        # A `%` that the grammar does not read as a reference is no such reference: in a
+        # default value (W3C valid-sa-094), a system literal, a comment, a processing
+        # instruction. Nor is one between two declarations (ibm29v02).
+        for subset in ("<!ENTITY % e \"foo\"><!ATTLIST d a1 CDATA \"%e;\">",
+                       "<!ENTITY % p \"x\"><!ENTITY e SYSTEM \"a%p;.ent\"><!-- %p; --><?pi %p;?>",
+                       "<!ENTITY % m \"<!ELEMENT leopard ANY>\"> %m; <!ELEMENT d ANY>")
+            @test nodetype(parse("<!DOCTYPE d [" * subset * "]><d/>", Node; wellformed = :strict)) == Document
+        end
     end
 end
 
@@ -884,6 +886,19 @@ end
         doc = parse("""<x a = "1" />""", Node)
         @test doc[1]["a"] == "1"
     end
+
+    @testset ":strict rejects an external entity in an attribute value (§3.1)" begin
+        # WFC: No External Entity References, whether the value names the entity or reaches it
+        # through an internal one (W3C ibm41n10, ibm41n11).
+        x = "<!DOCTYPE a [<!ENTITY x SYSTEM \"x.ent\"><!ENTITY i \"&x;\">]>"
+        for body in ("<a b=\"&x;\"/>", "<a b=\"&i;\"/>"), R in (Node, FlatNode)
+            @test_throws "reference to external entity \"&x;\" in an attribute value" parse(x * body, R; wellformed=:strict)
+        end
+        # in content the reference is allowed, and stays as written
+        @test simple_value(only(elements(parse(x * "<a>&x;</a>", Node; wellformed=:strict)))) == "&x;"
+        # below :strict the attribute value keeps it as written
+        @test only(elements(parse(x * "<a b=\"&x;\"/>", Node)))["b"] == "&x;"
+    end
 end
 
 #==============================================================================#
@@ -916,6 +931,80 @@ end
         doc = parse("<root>&lt;tag&gt; &amp; &quot;value&quot;</root>", Node)
         @test simple_value(doc[1]) == "<tag> & \"value\""
     end
+
+    @testset ":strict rejects a reference to an undeclared entity (§4.1)" begin
+        # WFC: Entity Declared. Every reference to a declared internal entity is included before
+        # the check, which knows the names declared external or unparsed: a name that reaches it
+        # with neither behind it has no declaration behind it.
+        @test_throws Exception parse("<a>&foo;</a>", Node; wellformed=:strict)
+        @test_throws Exception parse("<a x=\"&foo;\"/>", Node; wellformed=:strict)
+        @test_throws Exception parse("<!DOCTYPE a [<!ENTITY e \"x\">]><a>&nope;</a>", Node; wellformed=:strict)
+        @test_throws Exception parse("<a>&foo;</a>", FlatNode; wellformed=:strict)
+        # the five predefined names and character references name no declaration to look up
+        @test nodetype(parse("<a>&amp;&lt;&gt;&apos;&quot;</a>", Node; wellformed=:strict)) == Document
+        @test nodetype(parse("<a>&#65;&#x42;</a>", Node; wellformed=:strict)) == Document
+        # The name is read as the tokenizer reads names, case-sensitive, up to its `;`: the ASCII
+        # name characters and every non-ASCII character (§2.3). A `&` that starts no such name is
+        # left as written, and a name that is not one of the five is named by the message.
+        @test_throws "reference to undeclared entity \"&AMP;\"" parse("<a>&AMP;</a>", Node; wellformed=:strict)
+        @test_throws "reference to undeclared entity \"&_x.y-z:1;\"" parse("<a>&_x.y-z:1;</a>", Node; wellformed=:strict)
+        @test nodetype(parse("<a>&; & &1a; &-a; &amp &&amp;</a>", Node; wellformed=:strict)) == Document
+        for name in ("é", "café", "été"), R in (Node, FlatNode)
+            msg = "reference to undeclared entity \"&$name;\""
+            @test_throws msg parse("<a>&$name;</a>", R; wellformed = :strict)
+            @test_throws msg parse("<a x=\"&$name;\"/>", R; wellformed = :strict)
+        end
+        # a declared entity resolves, so nothing of it reaches the check
+        @test nodetype(parse("<!DOCTYPE a [<!ENTITY e \"x\">]><a>&e;</a>", Node; wellformed=:strict)) == Document
+        # The constraint binds only where the document carries every declaration that could name
+        # an entity. An external subset, or a parameter-entity reference between declarations,
+        # puts one out of reach, so an unknown name is a validity error there, not a defect of
+        # form (W3C rmt-e3e-13).
+        for shape in ("<!DOCTYPE a SYSTEM \"a.dtd\"><a>&foo;</a>",
+                      "<!DOCTYPE a [%pe;<!ENTITY e \"x\">]><a>&foo;</a>",
+                      "<!DOCTYPE a [<!ENTITY % pe \"<!ENTITY e 'x'>\">%pe;]><a>&foo;</a>")
+            @test nodetype(parse(shape, Node; wellformed=:strict)) == Document
+        end
+        # The declarations are read, not the text searched: a declared external entity, a
+        # NOTATION or a comment that names SYSTEM, a `%` in a default value, a parameter entity
+        # declared and never referenced: none puts a declaration out of reach.
+        for shape in ("<!DOCTYPE a [<!ENTITY e SYSTEM \"e.ent\">]><a>&foo;</a>",
+                      "<!DOCTYPE a [<!NOTATION n SYSTEM \"n\">]><a>&foo;</a>",
+                      "<!DOCTYPE a [<!-- SYSTEM --><!ENTITY e \"x\">]><a>&foo;</a>",
+                      "<!DOCTYPE a [<!ATTLIST a b CDATA \"50%\">]><a>&foo;</a>",
+                      "<!DOCTYPE a [<!ENTITY % p \"x\">]><a>&foo;</a>")
+            @test_throws "reference to undeclared entity \"&foo;\"" parse(shape, Node; wellformed=:strict)
+        end
+        # an entity declared external is declared: its reference stays as written
+        ext = "<!DOCTYPE a [<!ENTITY x SYSTEM \"x.ent\">]><a>&x;</a>"
+        @test simple_value(only(elements(parse(ext, Node; wellformed=:strict)))) == "&x;"
+        # In a standalone document the constraint binds whatever the DTD holds (W3C not-wf-sa-185,
+        # not-sa03, ibm68n06, ibm32n09), and an entity declared external still counts.
+        sa = "<?xml version=\"1.0\" standalone=\"yes\"?>"
+        for shape in ("<!DOCTYPE a SYSTEM \"a.dtd\"><a>&foo;</a>",
+                      "<!DOCTYPE a [%pe;<!ENTITY e \"x\">]><a>&foo;</a>",
+                      "<!DOCTYPE a SYSTEM \"a.dtd\"><a b=\"&foo;\"/>")
+            @test_throws "reference to undeclared entity \"&foo;\"" parse(sa * shape, Node; wellformed=:strict)
+            @test_throws "reference to undeclared entity \"&foo;\"" parse(sa * shape, FlatNode; wellformed=:strict)
+        end
+        @test simple_value(only(elements(parse(sa * ext, Node; wellformed=:strict)))) == "&x;"
+        # below :strict the reference stays literal — the graceful degradation
+        @test value(children(parse("<a>&foo;</a>", Node)[end])[1]) == "&foo;"
+        @test value(children(parse("<a>&foo;</a>", Node; wellformed=:lenient)[end])[1]) == "&foo;"
+    end
+
+    @testset ":strict rejects a reference to an unparsed entity (§4.1)" begin
+        # WFC: Parsed Entity. An unparsed entity is named by the value of an ENTITY attribute,
+        # never by a reference (W3C not-wf-sa-083, ibm68n08, ibm41n12).
+        un = "<!DOCTYPE a [<!NOTATION n SYSTEM \"n\"><!ENTITY u SYSTEM \"u.jpg\" NDATA n>]>"
+        for R in (Node, FlatNode)
+            @test_throws "reference to unparsed entity \"&u;\"" parse(un * "<a>&u;</a>", R; wellformed=:strict)
+            @test_throws "not well-formed" parse(un * "<a b=\"&u;\"/>", R; wellformed=:strict)
+        end
+        @test nodetype(parse(un * "<a b=\"u\"/>", Node; wellformed=:strict)) == Document
+        # below :strict the reference stays as written
+        @test simple_value(only(elements(parse(un * "<a>&u;</a>", Node)))) == "&u;"
+    end
 end
 
 @testset "Spec 4.4: Internal General Entity Declarations" begin
@@ -923,6 +1012,16 @@ end
     # implemented: without a `<` in any reachable replacement text every reference is a text
     # substitution; with one, inclusion has to produce structure (§4.4.2).
     ents(x) = XML._internal_entities(x)
+    # the root's text from `Node` and `FlatNode` at each level, then from `LazyNode` and
+    # `Cursor`: eight readings of one document
+    function root_text(xml)
+        readings = Any[simple_value(only(elements(parse(xml, R; wellformed = w))))
+                       for w in (:lenient, :structural, :strict) for R in (Node, FlatNode)]
+        push!(readings, simple_value(only(elements(parse(xml, LazyNode)))))
+        cursor = parse(xml, Cursor)
+        while next!(cursor) !== nothing && nodetype(cursor) !== Element end
+        push!(readings, is_simple_value(cursor))
+    end
 
     @testset "a document that declares none costs nothing" begin
         @test ents("<a>x</a>") === nothing
@@ -1006,12 +1105,29 @@ end
         @test ents("<!DOCTYPE d [<!ELEMENT d (#PCDATA)><!ENTITY e \"v\"><!ATTLIST d a CDATA #IMPLIED>]><d/>").values == Dict("e" => "v")
         # parameter entities are not general entities
         @test ents("<!DOCTYPE d [<!ENTITY % p \"<foo>\"><!ENTITY e \"ok\">]><d/>").values == Dict("e" => "ok")
+
+        @testset "comments and processing instructions are stepped over whole" begin
+            # A quote or a `>` in a comment, a quote or a `]` in a processing instruction: none
+            # hides the declaration that follows or makes one of its own. Each reader, at each
+            # level, reads `&e;` as the "x" the subset declares.
+            for skipped in ("<!-- it's -->", "<!-- \" -->", "<!-- a > b <!ENTITY e \"fake\"> -->",
+                            "<?pi it's?>", "<?pi ]> ?>")
+                @test root_text("<!DOCTYPE d [" * skipped * "<!ENTITY e \"x\">]><d>&e;</d>") == fill("x", 8)
+            end
+            # a processing instruction never closed is refused at every level (W3C ibm29n05)
+            unclosed = "<!DOCTYPE d [<!ENTITY % p \"x ?>\"><?music %p;\n]><d/>"
+            for w in (:lenient, :structural, :strict), R in (Node, FlatNode)
+                @test_throws ArgumentError parse(unclosed, R; wellformed = w)
+            end
+            @test_throws ArgumentError parse(unclosed, LazyNode)
+            @test_throws ArgumentError parse(unclosed, Cursor)
+        end
     end
 
     @testset "references are included before the parse (§4.4.2)" begin
         # Inclusion happens on the document, not on each reported value: replacement text
         # carrying markup then produces structure, because the parser reads what this wrote.
-        exp(x) = XML._expand_entities(x)
+        exp(x) = XML._apply_declarations(x)
         doc(sub, body) = "<!DOCTYPE d [" * sub * "]><d>" * body * "</d>"
 
         @test exp("<a>texte &amp; suite</a>") == "<a>texte &amp; suite</a>"   # nothing declared
@@ -1042,7 +1158,7 @@ end
     end
 
     @testset "a reference is only a reference in content and attribute values" begin
-        exp(x) = XML._expand_entities(x)
+        exp(x) = XML._apply_declarations(x)
         for body in ("<!--&e;-->", "<![CDATA[&e;]]>", "<?pi &e;?>")
             src = "<!DOCTYPE d [<!ENTITY e \"X\">]><d>" * body * "</d>"
             @test exp(src) == src
@@ -1080,16 +1196,28 @@ end
     end
 
     @testset "a document that needs no rewrite is returned as it stands" begin
-        exp(x) = XML._expand_entities(x)
+        exp(x) = XML._apply_declarations(x)
+        # The same bytes, not an equal copy: `===` compares two `String`s, and two `SubString`s
+        # of them, by content, so the address of the bytes is compared as well.
+        same(x, y) = x === y && pointer(x) == pointer(y)
         for src in ("<a>plain</a>",
                     "<!DOCTYPE d [<!ELEMENT d EMPTY>]><d/>",              # declarations, no entity
                     "<!DOCTYPE d [<!ENTITY e \"X\">]><d>no use</d>",      # declared, never referenced
                     "<!DOCTYPE d [<!ENTITY e \"X\">]><d>&other;</d>")     # only undeclared names
-            @test exp(src) === src                                        # the same object, not a copy
+            @test same(exp(src), src)
         end
         # a source that is not a String takes the same exits
         sub = SubString("<a>plain</a>", 1)
-        @test XML._expand_entities(sub) === sub
+        @test same(XML._apply_declarations(sub), sub)
+        # Declarations that change nothing leave the document as it stands: a CDATA attribute
+        # without a default asks for no walk, and an ID value already reduced is walked and kept.
+        for src in ("<!DOCTYPE d [<!ATTLIST d a CDATA #IMPLIED>]><d a=\" x \"/>",
+                    "<!DOCTYPE d [<!ATTLIST d id ID #IMPLIED>]><d id=\"x\"/>")
+            @test same(exp(src), src)
+        end
+        # a value to reduce, or a default to supply, is a change, made on a copy
+        @test occursin("<d a=\"x\"/>", exp("<!DOCTYPE d [<!ATTLIST d a NMTOKENS #IMPLIED>]><d a=\" x \"/>"))
+        @test occursin("<d a=\"v\"/>", exp("<!DOCTYPE d [<!ATTLIST d a CDATA \"v\">]><d/>"))
     end
 
     @testset "sources that are not a `String`" begin
@@ -1097,9 +1225,9 @@ end
         # past its own start; a view beginning after byte one is what catches the correction.
         root = "padding<!DOCTYPE d [<!ENTITY e \"<b>x</b>\">]><d>&e;</d>"
         sub = SubString(root, ncodeunits("padding") + 1)
-        @test XML._expand_entities(sub) == "<!DOCTYPE d [<!ENTITY e \"<b>x</b>\">]><d><b>x</b></d>"
-        @test XML._expand_entities(sub) isa SubString{String}
-        @test @inferred(XML._expand_entities(sub)) isa SubString{String}
+        @test XML._apply_declarations(sub) == "<!DOCTYPE d [<!ENTITY e \"<b>x</b>\">]><d><b>x</b></d>"
+        @test XML._apply_declarations(sub) isa SubString{String}
+        @test @inferred(XML._apply_declarations(sub)) isa SubString{String}
 
         doc = "<!DOCTYPE r [<!ENTITY e \"<b>x</b>\"><!ENTITY t \"hi\">]><r a=\"&t;\">&e;&t;</r>"
         mktemp() do path, io
@@ -1107,7 +1235,7 @@ end
             close(io)
             open(path) do f
                 sv = StringView(Mmap.mmap(f))
-                @test @inferred(XML._expand_entities(sv)) isa StringView{Vector{UInt8}}
+                @test @inferred(XML._apply_declarations(sv)) isa StringView{Vector{UInt8}}
                 # §4.4.2 inclusion reaches a mapped document: markup in replacement text is
                 # structure, not a text node holding `<`
                 r = last(collect(children(parse(sv, LazyNode))))
@@ -1143,14 +1271,30 @@ end
             close(io)
             open(path) do f
                 sv = StringView(Mmap.mmap(f))
-                @test XML._expand_entities(sv) === sv
+                @test XML._apply_declarations(sv) === sv
             end
         end
 
-        # a `StringView` over anything but a `Vector{UInt8}` cannot be rebuilt as its own type,
-        # so it keeps its references literal rather than changing the reader's type parameter
-        odd = StringView(view(Vector{UInt8}(doc), 1:ncodeunits(doc)))
-        @test XML._expand_entities(odd) === odd
+        # A `StringView` over a view of a `Vector{UInt8}` is rebuilt as its own type too, so its
+        # document receives entities, defaults and reduction, and the reader keeps its type
+        # parameter; with an encoding signature it comes back as a `SubString` of that type.
+        dd = "<!DOCTYPE r [<!ENTITY t \"hi\"><!ATTLIST r d CDATA \"v\" n NMTOKENS #IMPLIED>]>" *
+             "<r a=\"&t;\" n=\" p  q \">&t;</r>"
+        for bom in ("", "\ufeff")
+            sv(text) = (bytes = Vector{UInt8}(bom * text); StringView(view(bytes, 1:length(bytes))))
+            lazy = parse(sv(dd), LazyNode)
+            @test typeof(lazy) === typeof(parse(sv("<r/>"), LazyNode))   # as if it declared nothing
+            r = only(elements(lazy))
+            @test collect(attributes(r)) == ["a" => "hi", "n" => "p q", "d" => "v"]
+            @test value(only(children(r))) == "hi"
+        end
+        # Any other source type that the document needs rewritten for is refused, with a message
+        # that says how to pass it; one with nothing to rewrite is read as it stands.
+        other = StringView(codeunits(dd))
+        @test_throws ArgumentError parse(other, LazyNode)
+        @test_throws ArgumentError parse(other, Cursor)
+        plain = StringView(codeunits("<!DOCTYPE r [<!ELEMENT r ANY>]><r>&amp;</r>"))
+        @test simple_value(only(elements(parse(plain, LazyNode)))) == "&"
     end
 
     @testset "expansion is bounded, at every wellformed level" begin
@@ -1158,13 +1302,13 @@ end
         # ten entities each naming the previous one ten times reach 10^10 bytes at depth ten
         laughs = "<!ENTITY a0 \"" * repeat("a", 1000) * "\">" *
                  join(["<!ENTITY a$i \"" * repeat("&a$(i-1);", 10) * "\">" for i in 1:9])
-        @test_throws ErrorException XML._expand_entities("<!DOCTYPE d [" * laughs * "]><d>&a9;</d>")
+        @test_throws ErrorException XML._apply_declarations("<!DOCTYPE d [" * laughs * "]><d>&a9;</d>")
         # nesting alone is bounded too, without amplification
         deep = join(["<!ENTITY b$i \"&b$(i-1);\">" for i in 1:60])
-        @test_throws ErrorException XML._expand_entities(
+        @test_throws ErrorException XML._apply_declarations(
             "<!DOCTYPE d [<!ENTITY b0 \"x\">" * deep * "]><d>&b60;</d>")
         # and a modest nesting is not
-        @test occursin("<d>xxxx</d>", XML._expand_entities(
+        @test occursin("<d>xxxx</d>", XML._apply_declarations(
             "<!DOCTYPE d [<!ENTITY c0 \"x\"><!ENTITY c1 \"&c0;&c0;\"><!ENTITY c2 \"&c1;&c1;\">]><d>&c2;</d>"))
     end
 
@@ -1174,6 +1318,98 @@ end
         # one the subset itself declares is read, so the cutoff does not apply
         e = ents("<!DOCTYPE d [<!ENTITY % p \"\">%p;<!ENTITY e2 \"b\">]><d/>")
         @test haskey(e.values, "e2")
+        # a reference left unread is a validity matter: `&e2;` stays as written, even at `:strict`
+        subset = "<!ENTITY % ext SYSTEM \"ext.ent\"><!ENTITY e1 \"a\">%ext;<!ENTITY e2 \"b\">"
+        @test root_text("<!DOCTYPE d [" * subset * "]><d>&e2;</d>") == fill("&e2;", 8)
+        # except in a standalone document, where the declarations that follow MUST be used
+        @test root_text("<?xml version=\"1.0\" standalone=\"yes\"?><!DOCTYPE d [" * subset *
+                        "]><d>&e2;</d>") == fill("b", 8)
+    end
+
+    @testset "an internal parameter entity is included between declarations (§4.4.8)" begin
+        # its declarations are read where the reference stands, the first binding each name
+        @test root_text("<!DOCTYPE r [<!ENTITY % p \"<!ENTITY g 'OVERRIDE'>\"> %p; <!ENTITY g \"G\">]>" *
+                        "<r>&g;</r>") == fill("OVERRIDE", 8)
+        xml = "<!DOCTYPE d [<!ENTITY % p \"<!ATTLIST d a CDATA 'v'>\"> %p;]><d/>"
+        @test [only(elements(parse(xml, R)))["a"] for R in (Node, FlatNode, LazyNode)] == fill("v", 3)
+        # its text can itself be a reference, written `&#37;` (the example of Appendix D)
+        appendix_d = """
+            <?xml version='1.0'?>
+            <!DOCTYPE test [
+            <!ELEMENT test (#PCDATA) >
+            <!ENTITY % xx '&#37;zz;'>
+            <!ENTITY % zz '&#60;!ENTITY tricky "error-prone" >' >
+            %xx;
+            ]>
+            <test>This sample shows a &tricky; method.</test>"""
+        @test root_text(appendix_d) == fill("This sample shows a error-prone method.", 8)
+        @test root_text("<!DOCTYPE d [<!ENTITY % c0 \"<!ENTITY e 'x'>\"><!ENTITY % c1 \"&#37;c0;\"> %c1;]>" *
+                        "<d>&e;</d>") == fill("x", 8)
+    end
+
+    @testset "parameter entities: No Recursion and the bounds hold at every level" begin
+        deep = "<!ENTITY % p0 \"<!ENTITY e 'x'>\">" * join("<!ENTITY % p$i \"&#37;p$(i-1);\">" for i in 1:60)
+        laughs = "<!ENTITY % a0 \"" * repeat(" ", 1000) * "\">" *
+                 join("<!ENTITY % a$i \"" * repeat("&#37;a$(i-1);", 10) * "\">" for i in 1:9)
+        for subset in ("<!ENTITY % p \"&#37;p;\"> %p;",
+                       "<!ENTITY % p \"&#37;q;\"><!ENTITY % q \"&#37;p;\"> %p;",
+                       deep * "%p60;", laughs * "%a9;")
+            xml = "<!DOCTYPE d [" * subset * "]><d/>"
+            for w in (:lenient, :structural, :strict), R in (Node, FlatNode)
+                @test_throws ErrorException parse(xml, R; wellformed = w)
+            end
+            @test_throws ErrorException parse(xml, LazyNode)
+            @test_throws ErrorException parse(xml, Cursor)
+        end
+    end
+
+    @testset "white space from an entity's text reads as spaces in an attribute value (§3.3.3)" begin
+        # Each white space character of the replacement text becomes one space, so a CR LF pair
+        # gives two (W3C valid-sa-110), while white space written in the value keeps its own
+        # rule. A character reference in the replacement text still gives its character.
+        function a_by_reader(xml)
+            cursor = parse(xml, Cursor)
+            while next!(cursor) !== nothing && nodetype(cursor) !== Element end
+            (only(elements(parse(xml, Node)))["a"], only(elements(parse(xml, Node{SubString{String}})))["a"],
+             only(elements(parse(xml, LazyNode)))["a"], only(elements(parse(xml, FlatNode)))["a"], cursor["a"])
+        end
+        five(v) = (v, v, v, v, v)
+        crlf = "<!DOCTYPE d [<!ENTITY e \"&#13;&#10;\">]>"
+        @test a_by_reader(crlf * "<d a=\"x&e;y\"/>") == five("x  y")
+        @test a_by_reader(crlf * "<d a=\"p\tq&e;r\"/>") == five("p q  r")
+        # `&#38;#10;` declares the text `&#10;`; `Node{SubString{String}}` reports it as written
+        @test a_by_reader("<!DOCTYPE d [<!ENTITY e \"&#38;#10;&#13;&#10;\">]><d a=\"p&e;q\"/>") ==
+              ("p\n  q", "p&#10;  q", "p\n  q", "p\n  q", "p\n  q")
+    end
+
+    @testset "markup in an entity's text is read as markup (§4.4.2)" begin
+        # A tag that an entity brings is read like a written one: a reference in its attribute
+        # value follows the attribute-value rules, and it receives its defaults and reduction.
+        function e_attrs(xml)
+            pairsof(el) = collect(attributes(el))
+            readings = Any[pairsof(only(elements(only(elements(parse(xml, R; wellformed = w))))))
+                           for w in (:lenient, :structural, :strict) for R in (Node, FlatNode)]
+            push!(readings, pairsof(only(elements(only(elements(parse(xml, LazyNode)))))))
+            cursor = parse(xml, Cursor)
+            while next!(cursor) !== nothing && !(nodetype(cursor) === Element && tag(cursor) == "e") end
+            push!(readings, pairsof(cursor))
+        end
+        @test e_attrs("<!DOCTYPE d [<!ENTITY y \"it's\"><!ENTITY x \"<e a='&y;'/>\">]><d>&x;</d>") ==
+              fill(["a" => "it's"], 8)
+        @test e_attrs("<!DOCTYPE d [<!ENTITY x \"<e a='p&#13;&#10;q'/>\">]><d>&x;</d>") ==
+              fill(["a" => "p  q"], 8)
+        @test e_attrs("<!DOCTYPE d [<!ATTLIST e a CDATA \"v\" n NMTOKENS #IMPLIED>" *
+                      "<!ENTITY x \"<e n=' p  q '/>\">]><d>&x;</d>") == fill(["n" => "p q", "a" => "v"], 8)
+        # A replacement text that cuts a tag or an element is not balanced content: refused at
+        # every level, by every reader.
+        for xml in ("<!DOCTYPE d [<!ENTITY s \"<e a='\">]><d>&s;x'/></d>",
+                    "<!DOCTYPE d [<!ENTITY s \"<p>\">]><d>&s;x</p></d>")
+            for w in (:lenient, :structural, :strict), R in (Node, FlatNode)
+                @test_throws "is not balanced content" parse(xml, R; wellformed = w)
+            end
+            @test_throws "is not balanced content" parse(xml, LazyNode)
+            @test_throws "is not balanced content" parse(xml, Cursor)
+        end
     end
 end
 
@@ -1462,6 +1698,44 @@ end
         el = Element("x", CData("data"))
         @test is_simple(el)
         @test simple_value(el) == "data"
+    end
+
+    # `is_simple`, `is_simple_value` and `simple_value` take a different path in each reader:
+    # the `attributes` field of `Node`, the attribute count of a `FlatNode` record, a walk
+    # over the tag's tokens in `LazyNode` and in `Cursor`.
+    # Whatever the element holds, the four readers must give the same answers.
+    @testset "the four readers give the same answers" begin
+        docs = ["<a>x</a>", "<a> </a>", "<a></a>", "<a/>", "<a x=\"1\">x</a>", "<a >x</a>",
+                "<a><![CDATA[c]]></a>", "<a><![CDATA[]]></a>", "<a>x<![CDATA[c]]></a>",
+                "<a>x<!--c--></a>", "<a><!--c-->x</a>", "<a>x<b/></a>", "<a><?p d?>x</a>",
+                "<a>&amp;</a>", "<a>\r\nx</a>",
+                "<!DOCTYPE a [<!ENTITY e \"y\">]><a>&e;</a>",
+                "<!DOCTYPE a [<!ENTITY e \"<b/>\">]><a>&e;</a>",
+                "<!DOCTYPE a [<!ATTLIST a t CDATA \"v\">]><a>x</a>"]
+        for xml in docs
+            @testset "$(repr(xml))" begin
+                node = only(elements(parse(xml, Node)))
+                flat = only(elements(parse(xml, FlatNode)))
+                lazy = only(elements(parse(xml, LazyNode)))
+                cursor = parse(xml, Cursor)
+                while next!(cursor) !== nothing && nodetype(cursor) !== Element end
+                v = is_simple_value(node)
+                simple = v !== nothing
+                @test is_simple_value(flat) == is_simple_value(lazy) == v
+                @test is_simple_value(cursor) == v
+                @test is_simple(node) == is_simple(flat) == is_simple(lazy) == is_simple(cursor) ==
+                      simple
+                if !simple
+                    @test_throws ErrorException simple_value(node)
+                    @test_throws ErrorException simple_value(flat)
+                    @test_throws ErrorException simple_value(lazy)
+                    @test_throws ErrorException simple_value(cursor)
+                else
+                    @test simple_value(node) == simple_value(flat) == simple_value(lazy) ==
+                          simple_value(cursor) == v
+                end
+            end
+        end
     end
 end
 
@@ -2248,6 +2522,206 @@ end
         @test pd.attributes[1].name == "id"
         @test pd.attributes[2].name == "isbn"
         @test pd.attributes[3].name == "format"
+    end
+
+    @testset "attribute defaults (§3.3.2)" begin
+        # An attribute that a tag leaves out, but that an ATTLIST gives a default value, is
+        # reported with that value as if the tag wrote it: by all four readers, at every
+        # `wellformed` level, after the written attributes and in declaration order.
+        withsubset(subset, root = "<d/>") = "<!DOCTYPE d [" * subset * "]>" * root
+        pairsof(el) = (a = attributes(el); a === nothing ? Pair{String, String}[] : collect(a))
+        function cursor_on_root(xml)
+            cursor = parse(xml, Cursor)
+            while next!(cursor) !== nothing && nodetype(cursor) !== Element end
+            cursor
+        end
+        # the root's attributes from `Node` and `FlatNode` at each level, then from `LazyNode`
+        # and `Cursor`, which have no levels: eight readings when all three levels read it
+        function reported(xml; levels = (:lenient, :structural, :strict))
+            readings = [pairsof(only(elements(parse(xml, R; wellformed = w))))
+                        for w in levels for R in (Node, FlatNode)]
+            push!(readings, pairsof(only(elements(parse(xml, LazyNode)))),
+                  pairsof(cursor_on_root(xml)))
+        end
+        none = Pair{String, String}[]
+
+        @testset "supplied after the written attributes, in declaration order" begin
+            @test reported("""<!DOCTYPE d [<!ATTLIST d a2 CDATA "def">]><d a1="x"/>""") ==
+                  fill(["a1" => "x", "a2" => "def"], 8)
+            @test reported(withsubset("""<!ATTLIST d z CDATA "1" b CDATA "2" a CDATA "3">""",
+                                      """<d b="w"/>""")) == fill(["b" => "w", "z" => "1", "a" => "3"], 8)
+        end
+
+        @testset "#FIXED supplies its value; #IMPLIED and #REQUIRED supply nothing" begin
+            @test reported(withsubset("""<!ATTLIST d f CDATA #FIXED "v" i CDATA #IMPLIED r CDATA #REQUIRED>""")) ==
+                  fill(["f" => "v"], 8)
+        end
+
+        @testset "the first declaration of an attribute binds (§3.3)" begin
+            @test reported(withsubset("""<!ATTLIST d a CDATA "1"><!ATTLIST d b CDATA "2">""")) ==
+                  fill(["a" => "1", "b" => "2"], 8)
+            @test reported(withsubset("""<!ATTLIST d a CDATA "first"><!ATTLIST d a CDATA "second">""")) ==
+                  fill(["a" => "first"], 8)
+            @test reported(withsubset("""<!ATTLIST d a CDATA "first" a CDATA "second">""")) ==
+                  fill(["a" => "first"], 8)
+            # even when it supplies nothing
+            @test reported(withsubset("""<!ATTLIST d a CDATA #IMPLIED><!ATTLIST d a CDATA "late">""")) ==
+                  fill(none, 8)
+        end
+
+        @testset "references in a default value" begin
+            # an entity declared before the ATTLIST is included as in a written value (§4.4.5)
+            @test reported(withsubset("""<!ENTITY e "ev"><!ATTLIST d a CDATA "[&e;]">""")) ==
+                  fill(["a" => "[ev]"], 8)
+            @test reported(withsubset("""<!ENTITY q '"'><!ATTLIST d a CDATA "&q;">""")) ==
+                  fill(["a" => "\""], 8)
+            @test reported(withsubset("""<!ATTLIST d a CDATA 'say "hi"'>""")) ==
+                  fill(["a" => "say \"hi\""], 8)
+            # character and predefined references decode; white space reads as in §3.3.3
+            @test reported(withsubset("""<!ATTLIST d a CDATA "&lt;&#65;&amp;">""")) ==
+                  fill(["a" => "<A&"], 8)
+            @test reported(withsubset("<!ATTLIST d a CDATA \"x\ty&#9;z\">")) ==
+                  fill(["a" => "x y\tz"], 8)
+            # `%e;` is no reference in an attribute value (§4.4, W3C valid-sa-094)
+            @test reported(withsubset("""<!ENTITY % e "foo"><!ATTLIST d a CDATA "%e;">""")) ==
+                  fill(["a" => "%e;"], 8)
+        end
+
+        @testset "every accessor sees a supplied attribute" begin
+            xml = withsubset("""<!ATTLIST d a CDATA "v">""")
+            flat = only(elements(parse(xml, FlatNode)))
+            lazy = only(elements(parse(xml, LazyNode)))
+            cursor = cursor_on_root(xml)
+            @testset "$(nameof(typeof(el)))" for el in (only(elements(parse(xml, Node))), flat, lazy, cursor)
+                @test el["a"] == "v"
+                @test get(el, "a", nothing) == "v"
+                @test haskey(el, "a")
+                @test collect(keys(el)) == ["a"]
+            end
+            @test collect(eachattribute(lazy)) == ["a" => "v"]
+            @test pairsof(Node(flat)) == ["a" => "v"]
+            @test pairsof(LazyNode(cursor)) == ["a" => "v"]
+        end
+
+        @testset "an element given an attribute is no longer simple" begin
+            # `is_simple` asks for an element with no attributes, and a supplied one counts
+            xml = """<!DOCTYPE title [<!ATTLIST title type CDATA "text">]><title>Hello</title>"""
+            @testset "$R" for R in (Node, FlatNode, LazyNode)
+                el = only(elements(parse(xml, R)))
+                @test !is_simple(el)
+                @test is_simple_value(el) === nothing
+                @test_throws ErrorException simple_value(el)
+            end
+            @test is_simple_value(cursor_on_root(xml)) === nothing
+            @test !is_simple(cursor_on_root(xml))
+            @test_throws ErrorException simple_value(cursor_on_root(xml))
+        end
+
+        @testset "the document read is the document rewritten" begin
+            xml = """<!DOCTYPE d [<!ATTLIST d a2 CDATA "def">]><d a1="x"/>"""
+            @test sourcetext(only(elements(parse(xml, LazyNode)))) == """<d a1="x" a2="def"/>"""
+            @test sourcetext(only(elements(parse(xml, FlatNode)))) == """<d a1="x" a2="def"/>"""
+            # written out, a supplied attribute is an attribute like any other
+            out = XML.write(parse(xml, Node))
+            @test occursin("""<d a1="x" a2="def"/>""", out)
+            @test pairsof(only(elements(parse(out, Node)))) == ["a1" => "x", "a2" => "def"]
+        end
+
+        @testset ":strict checks every default value as it reads the ATTLIST" begin
+            # Rule [60] and the constraints on references (§3.1, §4.1): `:strict` refuses a
+            # default value naming an undeclared entity (W3C not-wf-sa-078), one declared after
+            # the ATTLIST (180, ibm68n07), an external one (082, rmt-e3e-12) or an unparsed one
+            # (084), and a `<`, written or through an entity, whether the value is supplied or
+            # not. Below `:strict`, a supplied value keeps those references as written.
+            for (subset, root, below) in (
+                    ("""<!ATTLIST d a CDATA "&foo;">""", "<d/>", ["a" => "&foo;"]),
+                    ("""<!ATTLIST d a CDATA "&e;"><!ENTITY e "v">""", "<d/>", ["a" => "&e;"]),
+                    ("""<!ENTITY e SYSTEM "nul"><!ATTLIST d a CDATA "&e;">""", "<d/>", ["a" => "&e;"]),
+                    ("""<!ENTITY e SYSTEM "e"><!ATTLIST d a CDATA "x &e; y">""", """<d a="w"/>""",
+                     ["a" => "w"]),
+                    ("""<!ENTITY e SYSTEM "nul" NDATA n><!ATTLIST d a CDATA "&e;">""", "<d/>",
+                     ["a" => "&e;"]),
+                    ("""<!ATTLIST d a CDATA "<">""", """<d a="w"/>""", ["a" => "w"]),
+                    ("""<!ENTITY l "&#60;"><!ATTLIST d a CDATA "&l;">""", """<d a="w"/>""",
+                     ["a" => "w"]))
+                xml = withsubset(subset, root)
+                @test_throws "not well-formed" parse(xml, Node; wellformed = :strict)
+                @test_throws "not well-formed" parse(xml, FlatNode; wellformed = :strict)
+                @test reported(xml; levels = (:lenient, :structural)) == fill(below, 6)
+            end
+            # a supplied `<` is refused from `:structural` up, like a written one
+            xml = withsubset("""<!ATTLIST d a CDATA "<">""")
+            @test_throws "not well-formed" parse(xml, Node; wellformed = :structural)
+            @test_throws "not well-formed" parse(xml, FlatNode; wellformed = :structural)
+            @test reported(xml; levels = (:lenient,)) == fill(["a" => "<"], 4)
+        end
+
+        @testset "a malformed ATTLIST is ignored, never refused" begin
+            # A misspelled keyword, `#FIXED` without its value or the space before it, the
+            # default before the keyword, two keywords (W3C ibm60n01 to ibm60n08), an
+            # enumeration still open where the subset ends: the declaration cannot be read,
+            # so none of its definitions supplies anything.
+            for subset in ("<!ATTLIST d a CDATA #required>", "<!ATTLIST d a CDATA #Implied>",
+                           "<!ATTLIST d a CDATA !IMPLIED>", "<!ATTLIST d a CDATA #FIXED >",
+                           """<!ATTLIST d a CDATA #FIXED"v">""", """<!ATTLIST d a CDATA "v" #FIXED>""",
+                           "<!ATTLIST d a CDATA #REQUIRED #IMPLIED>",
+                           """<!ATTLIST d b CDATA "2" a CDATA #required>""",
+                           "<!ATTLIST d a (x|y")
+                @test reported(withsubset(subset)) == fill(none, 8)
+            end
+        end
+
+        @testset "the walk over start tags writes what the full walk writes" begin
+            # Without a general entity the entry rewrite reads start tags only. Every document on
+            # disk that declares attributes and no entity, and forms that walk steps over, get the
+            # same bytes from both walks.
+            full(s, d) = (out = XML._rewrite_walk!(nothing, s, d, 1);
+                          out === nothing ? nothing : take!(out))
+            handled = 0
+            for (dir, _, fs) in walkdir(joinpath(@__DIR__, "data")), f in fs
+                endswith(f, ".xml") || continue
+                s = try read(joinpath(dir, f), String) catch; continue end
+                isvalid(s) || continue
+                d = try XML._declarations(s) catch; continue end
+                (d === nothing || d.entities !== nothing) && continue
+                want = try full(s, d) catch; continue end
+                done, got = XML._rewrite_tags(s, d.attributes)
+                @test !done || got == want
+                handled += done
+            end
+            @test handled > 100
+            dt = "<!DOCTYPE r [<!ATTLIST r i ID #IMPLIED><!ATTLIST e n NMTOKENS ' a  b ' k CDATA \"v\">]>"
+            for body in ("<r i=' x '><!-- <e n=' p  q '/> --><e/></r>",
+                         "<r><![CDATA[<e n=' p '/>]]><e n=\" p  q \" /></r>",
+                         "<r><?pi <e n=' z '/> ?><e\n  n = ' p\tq '\n/></r>",
+                         "<r i=\"a>b\" ><e k='x > y' n=\"1/>2\"></e></r>",
+                         "<r><é/><e n='é  à '/></r>", "<r>text > more <e/> tail</r>", "<r/>",
+                         "<r><!-- a-b --><?p a?b?><![CDATA[x]y]]><e/></r>")
+                s = dt * body
+                d = XML._declarations(s)
+                @test XML._rewrite_tags(s, d.attributes) == (true, full(s, d))
+            end
+            # on a form it does not expect, the walk returns `(false, nothing)`, and the
+            # full walk reads the document
+            for body in ("<r><e n=unquoted/></r>", "<r><!FOO><e/></r>")
+                s = dt * body
+                @test XML._rewrite_tags(s, XML._declarations(s).attributes) == (false, nothing)
+            end
+        end
+
+        @testset "names that are not ASCII" begin
+            @test reported("""<!DOCTYPE r [<!ATTLIST r a (é|b) "b">]><r/>""") == fill(["a" => "b"], 8)
+            @test reported("""<!DOCTYPE données [<!ATTLIST données é CDATA "à">]><données/>""") ==
+                  fill(["é" => "à"], 8)
+        end
+
+        @testset "§5.1: an ATTLIST after an unread parameter entity is not used" begin
+            subset = """<!ENTITY % ext SYSTEM "ext.ent"><!ATTLIST d a CDATA "1">%ext;<!ATTLIST d b CDATA "2">"""
+            @test reported(withsubset(subset)) == fill(["a" => "1"], 8)
+            # except in a standalone document, where it MUST be used
+            @test reported("""<?xml version="1.0" standalone="yes"?>""" * withsubset(subset)) ==
+                  fill(["a" => "1", "b" => "2"], 8)
+        end
     end
 end
 
@@ -3799,6 +4273,69 @@ end
             if Base.JLOptions().code_coverage == 0       # coverage counters skew @allocated
                 @test measure(clean) == 0
             end
+        end
+
+        @testset "a type other than CDATA drops outer spaces and repeated ones" begin
+            # Once white space reads as spaces, a value declared with a type other than CDATA
+            # loses its leading and trailing spaces and keeps one space of each run. Only #x20
+            # counts: `&#32;` does, `&#9;` and `&#10;` do not (W3C valid-sa-058, 096, 111).
+            four(v) = (v, v, v, v)
+            nmtokens(value) = "<!DOCTYPE d [<!ATTLIST d a NMTOKENS #IMPLIED>]><d a=\"$value\"/>"
+            @test attr_by_reader(nmtokens(" 1  \t2 \t"), "a") == four("1 2")
+            @test attr_by_reader(nmtokens("&#32;x&#32;&#32;y&#32;"), "a") == four("x y")
+            @test attr_by_reader(nmtokens("  x &#9; y  "), "a") == four("x \t y")
+            @test attr_by_reader(nmtokens("x&#10;y"), "a") == four("x\ny")
+            @test attr_by_reader(nmtokens(" &#xA0;x é  ü "), "a") == four("\u00a0x é ü")
+            # another reference in a value already reduced is written as it stands, for the
+            # readers to decode, whether or not the DTD declares an entity
+            @test attr_by_reader(nmtokens("a&amp;b"), "a") == four("a&b")
+            @test attr_by_reader("<!DOCTYPE d [<!ENTITY e \"z\"><!ATTLIST d a NMTOKENS #IMPLIED>]>" *
+                                 "<d a=\"a&amp;b\"/>", "a") == four("a&b")
+            # at every level, and once written out
+            @test [only(elements(parse(nmtokens(" 1  2 "), R; wellformed = w)))["a"]
+                   for R in (Node, FlatNode), w in (:lenient, :strict)] == fill("1 2", 2, 2)
+            @test occursin("a=\"1 2\"", XML.write(parse(nmtokens(" 1  2 "), Node)))
+            # a default value, and the replacement text of an entity, are reduced the same way
+            @test attr_by_reader("<!DOCTYPE d [<!ATTLIST d a NMTOKENS \" 1  \t2 \t\">]><d/>", "a") ==
+                  four("1 2")
+            @test attr_by_reader("<!DOCTYPE d [<!ENTITY e \" p  q \"><!ATTLIST d a NMTOKENS #IMPLIED>]>" *
+                                 "<d a=\"&e;\"/>", "a") == four("p q")
+            @test attr_by_reader("<!DOCTYPE d [<!ENTITY e \" p  q \"><!ATTLIST d a NMTOKENS \"&e;\">]>" *
+                                 "<d/>", "a") == four("p q")
+            # an entity's name may hold non-ASCII characters, as in content (§2.3)
+            @test attr_by_reader("<!DOCTYPE d [<!ENTITY é \" p  q \"><!ATTLIST d a NMTOKENS #IMPLIED>]>" *
+                                 "<d a=\"&é;\"/>", "a") == four("p q")
+            @test attr_by_reader("<!DOCTYPE d [<!ENTITY é \" p  q \"><!ATTLIST d a NMTOKENS \"&é;\">]>" *
+                                 "<d/>", "a") == four("p q")
+            # every tokenized and enumerated type
+            for type in ("ID", "IDREF", "IDREFS", "ENTITY", "ENTITIES", "NMTOKEN", "NMTOKENS",
+                         "(x|y)", "NOTATION (n)")
+                @test attr_by_reader("<!DOCTYPE d [<!ATTLIST d a $type #IMPLIED>]><d a=\" x  y \"/>", "a") ==
+                      four("x y")
+            end
+        end
+
+        @testset "CDATA and undeclared attributes keep their spaces" begin
+            four(v) = (v, v, v, v)
+            xml = "<!DOCTYPE d [<!ATTLIST d a CDATA #IMPLIED>]><d a=\" x  y \" b=\" x  y \"/>"
+            @test attr_by_reader(xml, "a") == four(" x  y ")
+            @test attr_by_reader(xml, "b") == four(" x  y ")
+            # the first declaration of an attribute decides its type (§3.3)
+            @test attr_by_reader("<!DOCTYPE d [<!ATTLIST d a CDATA #IMPLIED><!ATTLIST d a NMTOKENS #IMPLIED>]>" *
+                                 "<d a=\" x  y \"/>", "a") == four(" x  y ")
+            @test attr_by_reader("<!DOCTYPE d [<!ATTLIST d a NMTOKENS #IMPLIED><!ATTLIST d a CDATA #IMPLIED>]>" *
+                                 "<d a=\" x  y \"/>", "a") == four("x y")
+            # a declaration names one element type: another element's attribute of that name is CDATA
+            xml = "<!DOCTYPE d [<!ATTLIST e a NMTOKENS #IMPLIED>]><d a=\" x  y \"><e a=\" x  y \"/></d>"
+            @testset "$R" for R in (Node, FlatNode, LazyNode)
+                d = only(elements(parse(xml, R)))
+                @test (d["a"], only(elements(d))["a"]) == (" x  y ", "x y")
+            end
+            cur, seen = Cursor(xml), Pair{String, String}[]
+            while next!(cur) !== nothing
+                nodetype(cur) === Element && push!(seen, String(tag(cur)) => String(cur["a"]))
+            end
+            @test seen == ["d" => " x  y ", "e" => "x y"]
         end
     end
 

@@ -15,6 +15,12 @@ document was handed in as — so navigating a large document through `LazyNode` 
 its text data. The materialized [`attributes`](@ref) dict is the one exception: its pairs are
 always `SubString{String}`, so a non-`String` document has each attribute's own bytes copied.
 
+A document whose internal subset declares something to apply is first rewritten into a copy of
+the same string type (see [`sourcetext`](@ref)), and the views point into that copy. `String`,
+`SubString{String}` and, with StringViews.jl loaded, a `StringView` over a `Vector{UInt8}` or
+over a view of a whole one can be rebuilt; for any other source type, such a document raises
+an `ArgumentError`.
+
 # Performance — which reader to use
 
 `LazyNode` holds **no materialized tree**, only the source string, so its resident footprint is
@@ -39,7 +45,7 @@ end
 # for a `String`-backed document means the rewrite, and for any other source means leaving it
 # to `_read_eol`. Without this a hand-built `LazyNode(raw, Document)` would be the one entry
 # that skips the rewrite its source type requires, and return CR to the application.
-LazyNode(data::AbstractString, nt::NodeType) = _lazynode_at(_expand_entities(_normalize_input_eol(data)), nt)
+LazyNode(data::AbstractString, nt::NodeType) = _lazynode_at(_apply_declarations(_normalize_input_eol(data)), nt)
 
 # `d` arrives with §2.11 already applied — see `_cursor_at` for the same split.
 # No scan here. Parametric on `d`'s own type, so a rewritten document (always a `String`)
@@ -393,10 +399,12 @@ or reformatting.  This is the zero-copy counterpart of [`write`](@ref) for lazy 
 Being zero-copy, it reports the bytes of the document the reader actually holds. A `String`
 document whose lines end in CR is normalized when it is read in, so its source text is the
 normalized one; a document held as any other string type — a view over a memory-mapped file,
-say — keeps its own line ends, so its source text carries them. A document that declares and
-references general entities in its internal subset is expanded when it is read in, whatever
-string type holds it, so its source text is the expanded one (§4.4.2). Reported *values* are
-normalized either way.
+say — keeps its own line ends, so its source text carries them. A document whose internal
+subset declares something to apply — a general entity it references, an attribute default, an
+attribute declared with a type other than CDATA — is rewritten when it is read in (see
+[`LazyNode`](@ref) for the source types). Its source text is then the rewritten one:
+replacement texts included (§4.4.2), defaults supplied (§3.3.2), values reduced (§3.3.3).
+Reported *values* are normalized either way.
 """
 function sourcetext(n::LazyNode)
     nt = n.nodetype
@@ -447,7 +455,9 @@ end
 The range of *valid character indices* of the node's original source text within the
 retained source string, so that `source[sourcespan(n)] == sourcetext(n)` — the positional
 counterpart of [`sourcetext`](@ref), for consumers that need *where* the node lives rather
-than its text (verbatim excision and splicing, error context).
+than its text (verbatim excision and splicing, error context). The retained string is the one
+the reader holds: for a document rewritten when it was read in (see [`sourcetext`](@ref)), it
+is the rewritten one, and the indices do not apply to the text the reader was given.
 
 The bounds are character indices, not code units: the library performs the `prevind`
 computation, so a node ending on a multi-byte character yields indices that are safe to
@@ -653,13 +663,10 @@ end
 end
 
 #-----------------------------------------------------------------------------# is_simple / simple_value
-function is_simple(n::LazyNode)
-    n.nodetype === Element || return false
-    attrs = attributes(n)
-    (!isnothing(attrs) && !isempty(attrs)) && return false
-    ch = children(n)
-    length(ch) == 1 && ch[1].nodetype in (Text, CData)
-end
+# Answered by the walk of `is_simple_value`, which reads the element's tokens once and builds
+# nothing: the conditions are the same, an element without attributes whose one child is a
+# text or a CDATA section.
+is_simple(n::LazyNode) = is_simple_value(n) !== nothing
 
 # Delegates to the single-pass token walk of `is_simple_value` — materializing
 # `attributes` + `children` just to validate simplicity costs ~10× the walk (#105).
@@ -713,7 +720,7 @@ Base.length(n::LazyNode) = length(children(n))
 
 #-----------------------------------------------------------------------------# parse / read
 Base.parse(::Type{LazyNode}, xml::AbstractString) = parse(xml, LazyNode)
-Base.parse(xml::AbstractString, ::Type{LazyNode}) = _lazynode_at(_expand_entities(_normalize_input_eol(_drop_bom(xml))), Document)
+Base.parse(xml::AbstractString, ::Type{LazyNode}) = _lazynode_at(_apply_declarations(_normalize_input_eol(_drop_bom(xml))), Document)
 
 Base.read(filename::AbstractString, ::Type{LazyNode}) = parse(String(_normalize_bom(read(filename))), LazyNode)
 Base.read(io::IO, ::Type{LazyNode}) = parse(String(_normalize_bom(read(io))), LazyNode)

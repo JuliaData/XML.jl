@@ -83,13 +83,14 @@ function _dtd_read_quoted(s, pos)
 end
 
 # Read a balanced parenthesized expression (e.g. `(a|b|(c,d))`), returning the full
-# substring including the outer `(` and `)`. Skips over quoted strings inside.
+# substring including the outer `(` and `)`. Skips over quoted strings inside. Steps by
+# character, like the other readers: an enumerated value can be a name beyond ASCII.
 function _dtd_read_parens(s, pos)
     pos = _dtd_skip_ws(s, pos)
     s[pos] == '(' || error("Expected '(' at position $pos in DTD")
     depth = 1
     start = pos
-    pos += 1
+    pos = _dtd_next(s, pos)
     while pos <= ncodeunits(s) && depth > 0
         c = s[pos]
         if c == '('
@@ -97,14 +98,14 @@ function _dtd_read_parens(s, pos)
         elseif c == ')'
             depth -= 1
         elseif c == '"' || c == '\''
-            pos += 1
+            pos = _dtd_next(s, pos)
             while pos <= ncodeunits(s) && s[pos] != c
-                pos += 1
+                pos = _dtd_next(s, pos)
             end
         end
-        pos += 1
+        pos = _dtd_next(s, pos)
     end
-    SubString(s, start, pos - 1), pos
+    SubString(s, start, prevind(s, min(pos, ncodeunits(s) + 1))), pos
 end
 
 # Advance past the next `>` that terminates a markup declaration, ignoring `>` inside
@@ -186,6 +187,121 @@ function _dtd_parse_attlist(s, pos)
     end
     pos <= ncodeunits(s) && s[pos] == '>' && (pos += 1)
     atts, pos
+end
+
+# What one definition of an ATTLIST declares (rule [53]): the attribute's name, whether its type
+# is other than CDATA, its keyword, and its default value as written between the quotes.
+struct _AttDef
+    name::String
+    tokenized::Bool                     # a type other than CDATA (§3.3.1)
+    keyword::Symbol                     # :required, :implied, :fixed, or :none for a plain default
+    literal::Union{Nothing, String}
+end
+
+const _TOKENIZED_TYPES = ("ID", "IDREF", "IDREFS", "ENTITY", "ENTITIES", "NMTOKEN", "NMTOKENS")
+
+# An ATTLIST declaration read in full for the readers (rule [52]), from `pos` just past
+# `<!ATTLIST`. Returns the element's name, its definitions in order, and the position after the
+# closing `>`. The definitions are `nothing` when the declaration does not follow the grammar — a
+# misspelled keyword, `#FIXED` without its value or the space before it, a default before its
+# keyword, a parameter-entity reference — and the declaration is then skipped as a whole: no
+# reading of a faulty declaration is a safe one. Unlike `_dtd_parse_attlist`, it never raises.
+function _read_attlist(s::String, pos::Int)
+    n = ncodeunits(s)
+    skipped(p) = ("", nothing, _dtd_skip_to_close(s, p))
+    p = _dtd_skip_ws(s, pos)
+    p == pos && return skipped(p)
+    element, p = _dtd_name_at(s, p)
+    element === nothing && return skipped(p)
+    defs = _AttDef[]
+    while true
+        q = _dtd_skip_ws(s, p)
+        q > n && return skipped(q)
+        s[q] == '>' && return (element, defs, nextind(s, q))
+        q == p && return skipped(q)                      # each definition follows a space
+        name, p = _dtd_name_at(s, q)
+        name === nothing && return skipped(q)
+        q = _dtd_skip_ws(s, p)
+        (q == p || q > n) && return skipped(q)
+        if s[q] == '('                                   # an enumeration
+            p = _dtd_parens_end(s, q)
+            tokenized = true
+        else
+            t, p = _dtd_name_at(s, q)
+            if t == "NOTATION"
+                q = _dtd_skip_ws(s, p)
+                (q == p || q > n || s[q] != '(') && return skipped(q)
+                p = _dtd_parens_end(s, q)
+                tokenized = true
+            elseif t == "CDATA"
+                tokenized = false
+            elseif t in _TOKENIZED_TYPES
+                tokenized = true
+            else
+                return skipped(q)
+            end
+        end
+        p === nothing && return skipped(q)
+        q = _dtd_skip_ws(s, p)
+        (q == p || q > n) && return skipped(q)
+        literal = nothing
+        if s[q] == '#'
+            kw, p = _dtd_name_at(s, nextind(s, q))
+            if kw == "REQUIRED" || kw == "IMPLIED"
+                keyword = kw == "REQUIRED" ? :required : :implied
+            elseif kw == "FIXED"
+                q = _dtd_skip_ws(s, p)
+                q == p && return skipped(q)
+                literal, p = _dtd_literal_at(s, q)
+                literal === nothing && return skipped(q)
+                keyword = :fixed
+            else
+                return skipped(q)
+            end
+        else
+            literal, p = _dtd_literal_at(s, q)
+            literal === nothing && return skipped(q)
+            keyword = :none
+        end
+        push!(defs, _AttDef(name, tokenized, keyword, literal))
+    end
+end
+
+# A Name at `pos`, or `nothing` when none starts there.
+function _dtd_name_at(s::String, pos::Int)
+    start = pos
+    while pos <= ncodeunits(s) && _dtd_is_name_char(s[pos])
+        pos = nextind(s, pos)
+    end
+    pos == start ? (nothing, pos) : (String(SubString(s, start, prevind(s, pos))), pos)
+end
+
+# A quoted literal at `pos`: its content and the position after its closing quote, or `nothing`
+# when no quote opens one there or it is never closed.
+function _dtd_literal_at(s::String, pos::Int)
+    (pos <= ncodeunits(s) && (s[pos] == '"' || s[pos] == '\'')) || return (nothing, pos)
+    stop = findnext(s[pos], s, nextind(s, pos))
+    stop === nothing && return (nothing, pos)
+    String(SubString(s, nextind(s, pos), prevind(s, stop))), nextind(s, stop)
+end
+
+# The position after the `)` that closes the `(` at `pos`, or `nothing` when a `>` or the end
+# comes first.
+function _dtd_parens_end(s::String, pos::Int)
+    depth = 0
+    while pos <= ncodeunits(s)
+        c = s[pos]
+        if c == '('
+            depth += 1
+        elseif c == ')'
+            depth -= 1
+            depth == 0 && return nextind(s, pos)
+        elseif c == '>'
+            return nothing
+        end
+        pos = nextind(s, pos)
+    end
+    nothing
 end
 
 # Parse `<!ENTITY [%] name "value">` or `<!ENTITY name SYSTEM/PUBLIC ...>`. `%` marks a

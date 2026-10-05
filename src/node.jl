@@ -184,7 +184,9 @@ elements(node) = collect(eachelement(node))
     is_simple(node) -> Bool
 
 Return `true` if `node` is an `Element` with no attributes and exactly one `Text` or
-`CData` child — i.e. the `<tag>content</tag>` pattern with no nested markup. See also
+`CData` child — i.e. the `<tag>content</tag>` pattern with no nested markup. An attribute
+supplied from an ATTLIST default counts like a written one: under
+`<!ATTLIST title type CDATA "text">`, `<title>Hello</title>` is not simple. See also
 [`simple_value`](@ref).
 """
 is_simple(o::Node) = o.nodetype === Element &&

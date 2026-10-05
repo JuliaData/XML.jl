@@ -266,7 +266,7 @@ row("parse, no declarations",    @benchmark parse($S, Node))
 row("parse, entities included",  @benchmark parse($SE, Node))
 row("parse :strict, no decl",    @benchmark parse($S, Node; wellformed = :strict))
 row("parse :strict, entities",   @benchmark parse($SE, Node; wellformed = :strict))
-row("expansion pass alone",      @benchmark XML._expand_entities($SE))
+row("expansion pass alone",      @benchmark XML._apply_declarations($SE))
 row("prolog probe, no decl",     @benchmark XML._internal_entities($S))
 #--------------------------------------------------------------# (7) CONSTRUCTIONS THE PLAIN DOCUMENT LACKS
 # The plain document carries no reference, no attribute value that needs normalizing, no comment, no
@@ -278,15 +278,20 @@ row("prolog probe, no decl",     @benchmark XML._internal_entities($S))
 # item and person a `note` attribute that needs decoding or XML 1.0 §3.3.3 white-space
 # normalization. The markup twin writes one text child per item and person as a CDATA section
 # followed by a comment and a processing instruction, under a DOCTYPE holding the schema's
-# declarations. Two EzXML rows put libxml2 on the same three documents: its reader touches node
+# declarations. The defaults twin is the markup twin with one declaration changed in memory,
+# `featured CDATA "no"` for `featured CDATA #IMPLIED`: every item that leaves `featured` out
+# receives it from its default (XML 1.0 §3.3.2), which the entry rewrite writes into the
+# document. Two EzXML rows put libxml2 on the same four documents: its reader touches node
 # names only, so its escaped column carries the lexing of a reference and not its decoding; its
-# DOM build decodes. The C tree is freed per sample, outside the timing.
+# DOM build decodes. Its DOM build supplies the defaults twin's attributes, and its reader, as
+# called here, does not. The C tree is freed per sample, outside the timing.
 const FILE_ESC = joinpath(@__DIR__, "data", "xmark_escaped.xml")
 const FILE_MK  = joinpath(@__DIR__, "data", "xmark_markup.xml")
 isfile(FILE_ESC) || generate_xmark(FILE_ESC, 1.0; features = Features(text_every = 10, attr_every = 1))
 isfile(FILE_MK)  || generate_xmark(FILE_MK,  1.0; features = Features(markup_every = 1, doctype = true))
 const SESC = read(FILE_ESC, String)
 const SM = read(FILE_MK, String)
+const SD = replace(SM, "featured CDATA #IMPLIED" => "featured CDATA \"no\"")
 
 # The twin invariant, checked rather than assumed: the same element tags in the same order.
 function next_element!(c)
@@ -322,16 +327,22 @@ pct(x) = string(round(100x, digits = 1), " %")
 println("\n=== (7) CONSTRUCTIONS THE PLAIN DOCUMENT LACKS — twins of the same structure ===")
 const LAZY_E = parse(SESC, LazyNode); const FLAT_E = parse(SESC, FlatNode)
 const LAZY_M = parse(SM, LazyNode); const FLAT_M = parse(SM, FlatNode)
+const LAZY_D = parse(SD, LazyNode); const FLAT_D = parse(SD, FlatNode)
 println("  invariant, same elements in the same order:  escaped=", same_elements(S, SESC),
-        "  markup=", same_elements(S, SM))
+        "  markup=", same_elements(S, SM), "  defaults=", same_elements(S, SD))
 println("  nodes:  plain=", traverse_walk(LAZY)[1], "  escaped=", traverse_walk(LAZY_E)[1],
-        "  markup=", traverse_walk(LAZY_M)[1])
+        "  markup=", traverse_walk(LAZY_M)[1], "  defaults=", traverse_walk(LAZY_D)[1])
+let rewritten = XML._apply_declarations(SD)
+    println("  defaults twin: ", count("featured=", rewritten) - count("featured=", SD),
+            " attributes supplied; rewritten document ", ncodeunits(rewritten), " bytes, from ",
+            ncodeunits(SD))
+end
 let e = token_shares(SESC)
     println("  escaped twin, tokens carrying a reference:  text ", pct(e.text_ref),
             "  attribute values ", pct(e.attr_ref))
 end
 for (lbl, s, lz, fl) in (("plain", S, LAZY, FLAT), ("escaped", SESC, LAZY_E, FLAT_E),
-                          ("markup", SM, LAZY_M, FLAT_M))
+                          ("markup", SM, LAZY_M, FLAT_M), ("defaults", SD, LAZY_D, FLAT_D))
     row("Cursor stream, $lbl",   @benchmark cursor_stream($s))
     row("parse → DOM, $lbl",     @benchmark parse($s, Node))
     row("parse SubString, $lbl", @benchmark parse($s, SSNode))
@@ -343,7 +354,7 @@ for (lbl, s, lz, fl) in (("plain", S, LAZY, FLAT), ("escaped", SESC, LAZY_E, FLA
 end
 const DTD_VALUE = XML.value(first(c for c in XML.children(LAZY_M) if XML.nodetype(c) === XML.DTD))
 mrow("parse_dtd, the schema",   @benchmark XML.parse_dtd($DTD_VALUE))
-println("\n(same rows as (1), (2) and (4) over the three documents; the DOCTYPE holds 74 element",
+println("\n(same rows as (1), (2) and (4) over the four documents; the DOCTYPE holds 74 element",
         "\n and 14 attribute-list declarations)")
 
 #--------------------------------------------------------------# (8) WELL-FORMEDNESS LEVELS

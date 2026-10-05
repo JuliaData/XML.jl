@@ -241,6 +241,17 @@ end
     @test occursin("a>b", raw(toks[2], xml))
 end
 
+# Their text is free (§2.5, §2.6): a quote opens no string there, and a `]` closes nothing,
+# so the internal subset ends at its own `]`.
+@testset "DOCTYPE with $skipped in internal subset" for skipped in
+        ("<!-- it's ]> -->", "<?pi it's?>", "<?pi \"?>", "<?pi ]> ?>")
+    subset = " note [" * skipped * "<!ELEMENT note (#PCDATA)>]"
+    xml = "<!DOCTYPE" * subset * "><note/>"
+    toks = collect(tokenize(xml))
+    @test [t.kind for t in toks[1:3]] == [TokenKinds.DOCTYPE_OPEN, TokenKinds.DOCTYPE_CONTENT, TokenKinds.DOCTYPE_CLOSE]
+    @test raw(toks[2], xml) == subset
+end
+
 #-----------------------------------------------------------------------# Full document
 @testset "full document" begin
     xml = """<?xml version="1.0"?>
@@ -363,6 +374,11 @@ end
 
 @testset "error: unterminated DOCTYPE" begin
     @test_throws ArgumentError collect(tokenize("<!DOCTYPE x"))
+end
+
+@testset "error: unterminated processing instruction in internal subset" begin
+    # W3C ibm29n05: the only `?>` sits in an earlier literal, so none closes this one
+    @test_throws ArgumentError collect(tokenize("<!DOCTYPE a [<!ENTITY % p \"x ?>\"><?music %p;\n]><a/>"))
 end
 
 @testset "error: lone <" begin

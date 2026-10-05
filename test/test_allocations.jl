@@ -30,6 +30,7 @@ measure_unescape(x)  = @allocations _use(unescape(x))
 measure_value(x)     = @allocated _use(value(x))
 measure_simple(x)    = @allocated _use(simple_value(x))
 measure_is_simple(x) = @allocated _use(is_simple_value(x))
+measure_simple_test(x) = @allocated is_simple(x)
 function measure_eachattr(x)
     @allocated begin
         s = 0
@@ -100,8 +101,9 @@ end
         for x in (tlz, tfl, tcu, tnd)
             @test value(x) == "hello"
         end
-        for x in (slz, sfl, snd)
+        for x in (slz, sfl, scu, snd)
             @test simple_value(x) == "hello"
+            @test is_simple(x)
         end
         for x in (slz, sfl, scu, snd)
             @test is_simple_value(x) == "hello"
@@ -114,8 +116,9 @@ end
     end
     measure_eachattr(lz)
     foreach(measure_value, (tlz, tfl, tcu, tnd))
-    foreach(measure_simple, (slz, sfl, snd))
+    foreach(measure_simple, (slz, sfl, scu, snd))
     foreach(measure_is_simple, (slz, sfl, scu, snd))
+    foreach(measure_simple_test, (slz, sfl, scu, snd))
 
     if _NO_COVERAGE
         @testset "by-key attribute reads" begin
@@ -147,9 +150,14 @@ end
             @test measure_value(tnd) == 0
         end
 
-        @testset "simple_value / is_simple_value" begin
+        @testset "is_simple / simple_value / is_simple_value" begin
+            @test measure_simple_test(slz) == 0
+            @test measure_simple_test(sfl) == 0
+            @test measure_simple_test(scu) == 0
+            @test measure_simple_test(snd) == 0
             @test measure_simple(slz) == 0
             @test measure_simple(sfl) == 0
+            @test measure_simple(scu) == 0
             @test measure_simple(snd) == 0
             @test measure_is_simple(slz) == 0
             @test measure_is_simple(sfl) == 0
@@ -258,6 +266,27 @@ measure_eol_rewrite(s) = Base.@allocations XML._rewrite_content_eol(s)
     measure_eol_rewrite(v)   # warm-up
     if _NO_COVERAGE
         @test measure_eol_rewrite(v) <= 3
+    end
+end
+
+# Entry rewrite — the contract that follows it: a document without a DTD is returned after one
+# probe of its prolog, allocating nothing, and a walk that changes nothing creates no output
+# buffer, so it allocates what reading the internal subset costs and nothing per element.
+measure_entry_allocs(s) = Base.@allocations XML._apply_declarations(s)
+measure_entry_bytes(s)  = @allocated XML._apply_declarations(s)
+
+@testset "Entry rewrite: nothing without a DTD, no buffer when nothing changes" begin
+    plain = "<?xml version=\"1.0\"?><d>" * repeat("<e a=\"x\"/>", 20_000) * "</d>"
+    walked = "<!DOCTYPE d [<!ATTLIST e id ID #IMPLIED>]><d>" *
+             join("<e id=\"x$i\"/>" for i in 1:20_000) * "</d>"
+    # the same bytes, not an equal copy, which `===` would accept since it compares two
+    # `String`s by content; every ID value of `walked` is already reduced
+    @test pointer(XML._apply_declarations(plain)) == pointer(plain)
+    @test pointer(XML._apply_declarations(walked)) == pointer(walked)
+    measure_entry_allocs(plain); measure_entry_bytes(walked)   # warm-up
+    if _NO_COVERAGE
+        @test measure_entry_allocs(plain) == 0
+        @test measure_entry_bytes(walked) < ncodeunits(walked) ÷ 10
     end
 end
 

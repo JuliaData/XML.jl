@@ -1,7 +1,8 @@
 using Test, XML
 using XML: Cursor, next!, for_each_child, @for_each_child, skip_element!, eof, nodetype,
            tag, value, attributes, depth, children, Element, Text, CData, Comment,
-           ProcessingInstruction, Declaration, DTD, LazyNode, is_simple_value
+           ProcessingInstruction, Declaration, DTD, LazyNode, is_simple_value, is_simple,
+           simple_value
 
 @testset "Cursor" begin
 
@@ -282,6 +283,26 @@ using XML: Cursor, next!, for_each_child, @for_each_child, skip_element!, eof, n
         # non-destructive: the cursor is unchanged after the read (still on <v>)
         c = at_v("<r><v>9</v></r>"); is_simple_value(c)
         @test String(tag(c)) == "v" && is_simple_value(c) == "9"
+    end
+
+    @testset "is_simple and simple_value(::Cursor) — read as is_simple_value reads" begin
+        at_v(doc) = (c = parse(Cursor, doc); next!(c); next!(c); c)   # position on <v>
+        for doc in ("<r><v>123</v></r>", "<r><v>a &amp; b</v></r>", "<r><v><![CDATA[x<y]]></v></r>")
+            c = at_v(doc)
+            @test is_simple(c)
+            @test simple_value(c) == is_simple_value(c) == simple_value(LazyNode(c))
+        end
+        for doc in ("""<r><v a="1">x</v></r>""", "<r><v><b/></v></r>", "<r><v/></r>", "<r><v>a<b/>c</v></r>")
+            c = at_v(doc)
+            @test !is_simple(c)
+            @test_throws ErrorException simple_value(c)
+        end
+        c = parse(Cursor, "<r>text</r>"); next!(c); next!(c)        # on the Text node
+        @test !is_simple(c)
+        @test_throws ErrorException simple_value(c)
+        # non-destructive, as is_simple_value is: the cursor stays on <v>
+        c = at_v("<r><v>9</v></r>"); is_simple(c); simple_value(c)
+        @test String(tag(c)) == "v" && simple_value(c) == "9"
     end
 
     @testset "entry points align with the tree readers (#89)" begin

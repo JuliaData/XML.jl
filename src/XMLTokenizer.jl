@@ -561,6 +561,19 @@ function read_doctype_body(data::AbstractString, pos::Int)
                 end
                 pos += 1
             end
+        elseif b == UInt8('?') && pos >= 2 && codeunit(data, pos - 1) == UInt8('<')
+            # Inside a <? processing instruction: its text is free (§2.6), so a quote opens no
+            # string and a `]` closes nothing. Skip until ?>
+            pi_start = pos - 1
+            pos += 1
+            while true
+                iseof(data, pos) && err("unterminated processing instruction", pi_start)
+                if peek(data, pos) == UInt8('?') && canpeek(data, pos, 1) && peek(data, pos + 1) == UInt8('>')
+                    pos += 2  # skip "?>"
+                    break
+                end
+                pos += 1
+            end
         elseif b == UInt8('"') || b == UInt8('\'')
             pos = skip_quoted(data, pos)
         elseif b == UInt8('[')

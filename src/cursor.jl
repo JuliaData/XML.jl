@@ -36,9 +36,13 @@ end
 
 A forward, in-place [`StAX`-style] pull cursor over the XML `data`. Advance it
 with [`next!`](@ref); read the current position with [`nodetype`](@ref),
-[`tag`](@ref), [`value`](@ref), [`attributes`](@ref), [`depth`](@ref).
+[`tag`](@ref), [`value`](@ref), [`attributes`](@ref), [`depth`](@ref),
+[`is_simple`](@ref), [`simple_value`](@ref).
 (`parse(Cursor, data)` also works.) The `read` forms apply the same byte-level
 BOM normalization as the tree readers: UTF-8 BOM strip, UTF-16 LE/BE transcoding.
+Like [`LazyNode`](@ref), the cursor reads a document whose internal subset declares
+something to apply from a rewritten copy of the same string type; for a source type that
+cannot be rebuilt, such a document raises an `ArgumentError`.
 
 The cursor is a single mutable object reused across the whole walk. See the
 aliasing-contract note on [`next!`](@ref).
@@ -46,7 +50,7 @@ aliasing-contract note on [`next!`](@ref).
 function Cursor(data::S) where {S <: AbstractString}
     data = _drop_bom(data)   # a leading U+FEFF BOM char is an encoding signature, not content (§4.3.3)
     # §2.11 — rewritten here for a `String`-backed document, on read for any other source
-    _cursor_at(_expand_entities(_normalize_input_eol(data)), 1)
+    _cursor_at(_apply_declarations(_normalize_input_eol(data)), 1)
 end
 
 # `d` arrives with whatever §2.11 requires of it already applied: a `String`-backed document
@@ -285,7 +289,7 @@ function Base.keys(c::Cursor)
     result
 end
 
-#-----------------------------------------------------------------------------# is_simple_value
+#-----------------------------------------------------------------------------# simple elements
 # Cursor mirror of `is_simple_value(::LazyNode)`: combined predicate+accessor that
 # returns the lone Text/CData value of the current element (or `nothing` if it has
 # attributes / isn't a single-text element). Non-destructive — reads via `_rescan`,
@@ -319,6 +323,26 @@ end
         return content
     end
     nothing
+end
+
+"""
+    is_simple(c::Cursor) -> Bool
+
+Whether the cursor's current node is a simple element (see [`is_simple`](@ref)), answered by
+the walk of [`is_simple_value`](@ref), without moving the cursor.
+"""
+is_simple(c::Cursor) = is_simple_value(c) !== nothing
+
+"""
+    simple_value(c::Cursor) -> SubString
+
+The textual content of the cursor's current element when it is simple (see
+[`simple_value`](@ref)), read without moving the cursor. Errors if the element is not simple.
+"""
+@inline function simple_value(c::Cursor)
+    v = is_simple_value(c)
+    v === nothing && error("`simple_value` is only defined for simple nodes.")
+    v
 end
 
 #-----------------------------------------------------------------------------# snapshot (bridge to DOM)
