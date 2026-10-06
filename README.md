@@ -8,6 +8,29 @@
 
 > **Upgrading from XML.jl 0.3 to 0.4?** See the [migration guide](MIGRATING_TO_v0.4.md).
 
+**Contents**
+
+- [Quickstart](#quickstart)
+- [Choosing a reader](#choosing-a-reader)
+- [`Node` Interface](#node-interface)
+  - [`NodeType`](#nodetype)
+  - [Mutation](#mutation)
+  - [Tree Navigation](#tree-navigation)
+  - [Writing Elements with `XML.h`](#writing-elements-with-xmlh)
+- [Reading](#reading)
+  - [Well-formedness and validation checks](#well-formedness-and-validation-checks)
+- [Writing](#writing)
+- [XPath](#xpath)
+  - [Supported syntax](#supported-syntax)
+- [`Cursor`](#cursor)
+- [`LazyNode`](#lazynode)
+  - [Memory-mapped files](#memory-mapped-files)
+- [`FlatNode` *(experimental)*](#flatnode-experimental)
+- [Under the hood](#under-the-hood)
+- [AbstractTrees Integration](#abstracttrees-integration)
+- [Performance by access pattern](#performance-by-access-pattern)
+- [Benchmarks](#benchmarks)
+
 # Quickstart
 
 ```julia
@@ -58,6 +81,8 @@ Rules of thumb:
 - build or edit documents → `Node`
 
 `FlatNode` and `LazyNode` retain the source string as long as any handle lives. Measured numbers: see [Performance by access pattern](#performance-by-access-pattern).
+
+`Node` and `FlatNode` check that the document is well-formed, to the level the `wellformed` keyword sets; `Cursor` and `LazyNode` check only the rules on entities. See [Well-formedness and validation checks](#well-formedness-and-validation-checks).
 
 <br>
 
@@ -153,6 +178,20 @@ parse(str, Node)         # or LazyNode, FlatNode, Cursor
 ```
 
 `Cursor` can also be constructed directly from any `AbstractString`: `Cursor(str)`.
+
+## Well-formedness and validation checks
+
+> [!WARNING]
+> XML.jl is not a [validating processor](https://www.w3.org/TR/xml/#proc-types): it never checks a document against its DTD.
+
+`Node` and `FlatNode` check that a document is well-formed, at three levels set by their `wellformed` keyword: `:lenient`, `:structural`, the default, and `:strict`. `Cursor` and `LazyNode` take no keyword: they check only the rules on entities, and accept mismatched tags.
+
+```julia
+parse("<a/><b/>", Node)                         # ERROR: not well-formed: multiple root elements (found 2)
+parse("<a/><b/>", Node; wellformed = :lenient)  # Document (2 children)
+```
+
+[WELL-FORMEDNESS.md](WELL-FORMEDNESS.md) details what each level rejects, what validation would add, and when an undeclared entity is an error.
 
 <br>
 
