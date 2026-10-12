@@ -8,30 +8,7 @@
 
 > **Upgrading from XML.jl 0.3 to 0.4?** See the [migration guide](MIGRATING_TO_v0.4.md).
 
-**Contents**
-
-- [Quickstart](#quickstart)
-- [Choosing a reader](#choosing-a-reader)
-- [`Node` Interface](#node-interface)
-  - [`NodeType`](#nodetype)
-  - [Mutation](#mutation)
-  - [Tree Navigation](#tree-navigation)
-  - [Writing Elements with `XML.h`](#writing-elements-with-xmlh)
-- [Reading](#reading)
-  - [Well-formedness and validation checks](#well-formedness-and-validation-checks)
-- [Writing](#writing)
-- [XPath](#xpath)
-  - [Supported syntax](#supported-syntax)
-- [`Cursor`](#cursor)
-- [`LazyNode`](#lazynode)
-  - [Memory-mapped files](#memory-mapped-files)
-- [`FlatNode` *(experimental)*](#flatnode-experimental)
-- [Under the hood](#under-the-hood)
-- [AbstractTrees Integration](#abstracttrees-integration)
-- [Performance by access pattern](#performance-by-access-pattern)
-- [Benchmarks](#benchmarks)
-
-# Quickstart
+## Quickstart
 
 ```julia
 using XML
@@ -61,17 +38,17 @@ elements(catalog)[2]  # second <book> element
 
 <br>
 
-# Choosing a reader
+## Choosing a reader
 
 XML.jl provides four readers behind one set of accessors (`nodetype`, `tag`, `attributes`,
 `value`, `children`, `eachelement`, …). Pick by what you do with the document:
 
-| Reader | DOM materialized? | Revisit a node | Mutable | GC cost |
-|---|---|---|---|---|
-| `Cursor` | no (nothing) | impossible (forward-only) | — | ~0 |
-| `LazyNode` | virtual | re-decode per visit | no | ~0 |
-| `FlatNode` *(experimental)* | yes, compact (columnar) | O(1), built once | no | ~0 |
-| `Node` | yes, objects | O(1), built once | **yes** | high |
+| Reader | Model | DOM materialized? | Revisit a node | Mutable | GC cost |
+|---|---|---|---|---|---|
+| `Cursor` | pull stream (StAX-like) | no: only the source and the current position are kept | impossible (forward-only) | — | ~0 |
+| `LazyNode` | lazy view | no: only the source is kept; handles are made on each access | re-decode per visit | no | ~0 |
+| `FlatNode` *(experimental)* | flat read-only DOM | yes, one record per node in a few arrays | O(1), built once | no | ~0 |
+| `Node` | DOM of objects | yes, Julia objects (several per node) | O(1), built once | **yes** | high |
 
 Rules of thumb:
 
@@ -86,7 +63,7 @@ Rules of thumb:
 
 <br>
 
-# `Node` Interface
+## `Node` Interface
 
 Every node in the XML DOM is represented by `Node`, a single type parametrized on its string storage.
 
@@ -108,7 +85,7 @@ and `haskey`/`keys` alongside. `Cursor` supports the attribute forms on its curr
 
 <br>
 
-## `NodeType`
+### `NodeType`
 
 Each item in an XML DOM is classified by its `NodeType`:
 
@@ -125,7 +102,7 @@ Each item in an XML DOM is classified by its `NodeType`:
 
 <br>
 
-## Mutation
+### Mutation
 
 ```julia
 push!(parent, child)   # Add a child
@@ -136,7 +113,7 @@ node["key"]            # Get an attribute
 
 <br>
 
-## Tree Navigation
+### Tree Navigation
 
 ```julia
 depth(child, root)      # Depth of child relative to root
@@ -146,7 +123,7 @@ siblings(child, root)   # Siblings of child within root's tree
 
 <br>
 
-## Writing Elements with `XML.h`
+### Writing Elements with `XML.h`
 
 Similar to [Cobweb.jl](https://github.com/JuliaComputing/Cobweb.jl#-creating-nodes-with-cobwebh), `XML.h` enables you to write elements with a simpler syntax:
 
@@ -168,7 +145,7 @@ print(XML.write(node))
 
 <br>
 
-# Reading
+## Reading
 
 Every reader shares the same entry points — the reader is the second argument:
 
@@ -179,7 +156,7 @@ parse(str, Node)         # or LazyNode, FlatNode, Cursor
 
 `Cursor` can also be constructed directly from any `AbstractString`: `Cursor(str)`.
 
-## Well-formedness and validation checks
+### Well-formedness and validation checks
 
 > [!WARNING]
 > XML.jl is not a [validating processor](https://www.w3.org/TR/xml/#proc-types): it never checks a document against its DTD.
@@ -195,7 +172,7 @@ parse("<a/><b/>", Node; wellformed = :lenient)  # Document (2 children)
 
 <br>
 
-# Writing
+## Writing
 
 ```julia
 XML.write(filename::String, node)  # write to file
@@ -223,7 +200,7 @@ print(XML.write(only(elements(without)))) # pretty-printed — the three spaces 
 
 <br>
 
-# XPath
+## XPath
 
 Query nodes using a subset of XPath 1.0 via `xpath(node, path)`:
 
@@ -262,7 +239,7 @@ xpath(root, "//b/text()")    # Text nodes inside all <b>s
 
 <br>
 
-# `Cursor`
+## `Cursor`
 
 The forward, StAX-style pull reader: one mutable cursor walks the document in document order — no tree, one tokenizing scan, ~zero allocation. Advance with `next!`; read the current position with the usual accessors (`nodetype`, `tag`, `attributes`, `value`, `depth`, `is_simple`, `simple_value`):
 
@@ -281,7 +258,7 @@ A `Cursor` is one object that *mutates* as it advances: every variable referring
 
 <br>
 
-# `LazyNode`
+## `LazyNode`
 
 For read-only access without building a full DOM tree, use `LazyNode`. It stores only a reference to the source string and re-tokenizes on demand, using significantly less memory:
 
@@ -297,15 +274,15 @@ doc = read("file.xml", LazyNode)
 For streaming and high-throughput workloads, several extra accessors avoid materializing intermediate collections:
 
 ```julia
-sourcetext(n)               # zero-copy SubString view of the node's raw source bytes
-sourcespan(n)               # where that text lives: a range of valid character indices
-splicetext(n, repl)         # the document text with this node's text replaced ("" default)
-eachchildnode(n)            # lazy iterator over children — no Vector allocation
-children!(buf, n)           # collect children into a reusable buffer
-eachattribute(n)            # lazy iterator over attribute name=>value pairs
-is_simple_value(n)          # combined is_simple + simple_value (one tokenizer pass)
-get(n, key, default)        # single-attribute read without building Attributes
-XML.write(n)                # zero-copy: returns node's original source text
+sourcetext(n)                # zero-copy SubString view of the node's raw source bytes
+sourcespan(n)                # where that text lives: a range of valid character indices
+splicetext(n, repl)          # the document text with this node's text replaced ("" default)
+eachchildnode(n)             # lazy iterator over children — no Vector allocation
+children!(buf, n)            # collect children into a reusable buffer
+eachattribute(n)             # lazy iterator over attribute name=>value pairs
+is_simple_value(n)           # combined is_simple + simple_value (one tokenizer pass)
+get(n, key, default)         # single-attribute read without building Attributes
+XML.write(n)                 # zero-copy: returns node's original source text
 XML.write(n; normalize=true) # re-parse + pretty-print, collapses source whitespace
 ```
 
@@ -322,11 +299,24 @@ doc = open("very_large.xml") do io
 end
 ```
 
-The reader keeps the string type it is given, so the document is walked through the mapping instead of being copied into the heap, and accessors return views into the mapped bytes. Opening costs one probe of the prolog whatever the file's line ends — about 25 ns on a mapped 14 MB document, LF or CR LF alike: the document is neither scanned nor rewritten for its line ends, and the line-end normalization the specification requires happens on each value as it is read, so a file written with CR LF or a lone CR copies only the values you actually ask for, and only those that carry a line end. A document whose internal subset declares something to apply is the exception: general entities it references, attribute defaults, attributes of a type other than CDATA. The reader rewrites such a document before the parse (XML 1.0 §4.4.2, §3.3.2, §3.3.3), and copies it once into the heap if anything changes. `sourcetext` is the one accessor that shows the file's own bytes — it is a zero-copy view of the document the reader holds, which for a mapped file that needs no rewrite is the file itself. See [Memory-mapped sources](PERFORMANCE-v0.4.md#memory-mapped-sources) for the measured figures.
+The reader keeps the string type it is given: the document is walked through the mapping instead of being copied into the heap, and accessors return views into the mapped bytes.
+
+Opening costs one probe of the prolog, about 25 ns on a mapped 14 MB document, LF or CR LF alike:
+
+- the document is neither scanned nor rewritten for its line ends;
+- the line-end normalization the specification requires happens on each value as it is read;
+- a file written with CR LF or a lone CR thus copies only the values you actually ask for, and only those that carry a line end.
+
+The exception is a document whose internal subset declares something to apply: general entities it references, attribute defaults, attributes of a type other than CDATA. The reader rewrites such a document before the parse (XML 1.0 §4.4.2, §3.3.2, §3.3.3), into a copy in the heap whenever anything changes.
+
+> [!WARNING]
+> This is a limitation for a file too large for memory. XML.jl does not refuse such a document, but the rewritten copy can exceed the physical memory. The system then either swaps memory to disk, which can make the reading very long, or refuses the allocation.
+
+`sourcetext` is the one accessor that shows the file's own bytes. It is a zero-copy view of the document the reader holds, which for a mapped file that needs no rewrite is the file itself. See [Memory-mapped sources](PERFORMANCE-v0.4.md#memory-mapped-sources) for the measured figures.
 
 <br>
 
-# `FlatNode` *(experimental)*
+## `FlatNode` *(experimental)*
 
 The whole document parsed once into a contiguous columnar store — the random-access read API of `Node` at almost none of its GC cost: fast build, O(1) random access and O(1) `parent`, and the garbage collector sees a handful of arrays instead of one object per node.
 
@@ -344,13 +334,13 @@ Same read-only accessor surface as the other readers, including `sourcetext(node
 
 <br>
 
-# Under the hood
+## Under the hood
 
 All four readers sit on `XML.XMLTokenizer`, a zero-allocation streaming tokenizer (a token is a kind plus a byte range into the source). It is usable directly for token-level tooling — see the `XML.XMLTokenizer` module docstrings.
 
 <br>
 
-# AbstractTrees Integration
+## AbstractTrees Integration
 
 Loading [`AbstractTrees`](https://github.com/JuliaCollections/AbstractTrees.jl) alongside XML enables tree-walking utilities (`print_tree`, `PreOrderDFS`, `Leaves`, etc.) on both `Node` and `LazyNode`:
 
@@ -372,7 +362,7 @@ end
 
 <br>
 
-# Performance by access pattern
+## Performance by access pattern
 
 One number cannot rank the readers — cost depends on what you do with the document. Same ~14 MB / 882 K-node XMark-style document as the cross-library table below (source: [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl); **lower is better**; BenchmarkTools `@benchmark` medians at default parameters):
 
@@ -390,7 +380,7 @@ _Measured 2026-09-02, Apple M5 (single-threaded), Julia 1.12.7, EzXML 1.2.3; Ben
 
 <br>
 
-# Benchmarks
+## Benchmarks
 
 Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl). Data: `books.xml` (~4 KB) and a generated XMark-style auction document (~14 MB). The XML.jl column uses `Node` throughout — the full mutable DOM, the like-for-like counterpart of the libxml2 DOMs the C wrappers build; [Performance by access pattern](#performance-by-access-pattern) above shows how the other readers change the picture. BenchmarkTools median time, **lower is better.**
 
