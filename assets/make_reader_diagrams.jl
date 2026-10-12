@@ -3,9 +3,10 @@
 #
 #   julia --project=assets assets/make_reader_diagrams.jl
 #
-# Every count drawn or quoted is first measured on the package with BenchmarkTools: a mismatch stops
-# the script, so the diagrams cannot drift from the code. The counts are those of Julia 1.11 and later,
-# where a vector is two allocations, the array and its `Memory`.
+# Every count drawn or quoted is first measured on the package with BenchmarkTools, and a mismatch
+# stops the script: it never redraws a count the code no longer gives. Nothing else checks READERS.md,
+# so run the script again after changing a reader and before each release. The counts are those of
+# Julia 1.13; under Julia 1.10, where a vector is one allocation and not two, they differ.
 #
 # Graphviz's `dot` places the boxes. A few arrows are then redrawn as explicit Bézier paths, and
 # `neato -n2` renders that fixed layout as SVG. The cairo renderer draws the text as outlines, so the
