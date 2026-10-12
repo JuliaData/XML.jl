@@ -1,0 +1,7 @@
+[deps]
+BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+Graphviz_jll = "3c863552-8265-54e4-a6dc-903eb78fde85"
+XML = "72c71f33-b9b6-44de-8c94-c961784809e2"
+
+[sources]
+XML = {path = ".."}

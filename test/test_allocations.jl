@@ -252,6 +252,42 @@ measure_node_build_allocs(xml) = Base.@allocations parse(xml, Node)
     end
 end
 
+# Reader footprint — the contracts READERS.md draws: a `LazyNode` opened on a `String` without
+# CR or DTD allocates nothing, a `FlatNode` build allocates a few arrays whatever the number of
+# nodes, and reading every node allocates less through `LazyNode` than through `Node`. The exact
+# counts of that page depend on the Julia version; `assets/make_reader_diagrams.jl` checks them.
+function read_every_node(n)
+    s = Int(nodetype(n) === XML.Element)
+    t = tag(n);        t === nothing || (s += ncodeunits(t))
+    v = value(n);      v === nothing || (s += ncodeunits(v))
+    a = attributes(n); a === nothing || (s += length(a))
+    for c in children(n)
+        s += read_every_node(c)
+    end
+    s
+end
+measure_lazy_open(xml)  = Base.@allocations parse(xml, LazyNode)
+measure_flat_build(xml) = Base.@allocations parse(xml, FlatNode)
+measure_lazy_read(xml)  = Base.@allocations read_every_node(parse(xml, LazyNode))
+measure_node_read(xml)  = Base.@allocations read_every_node(parse(xml, Node))
+
+@testset "Reader footprint: what each reader keeps" begin
+    items(n) = "<root>" * join("<e id=\"$i\" k=\"v\">text $i</e>" for i in 1:n) * "</root>"
+    small, large = items(20), items(20_000)
+    expected = read_every_node(parse(large, Node))
+    @test read_every_node(parse(large, LazyNode)) == expected   # same content; doubles as warm-up
+    @test read_every_node(parse(large, FlatNode)) == expected
+    measure_lazy_open(large); measure_flat_build(large)          # warm-up
+    measure_lazy_read(small); measure_node_read(small)
+    if _NO_COVERAGE
+        @test measure_lazy_open(large) == 0
+        # 40,002 nodes cost 35 allocations on Julia 1.13 and 21 on 1.10; a build that allocated
+        # per node would cost at least 40,002, so the ceiling sits between the two
+        @test measure_flat_build(large) <= 64
+        @test measure_lazy_read(small) < measure_node_read(small)
+    end
+end
+
 # Line-end rewrite — the sizing contract: the output is bounded by its source (a CR LF pair
 # loses a byte, a lone CR keeps its own), so one buffer is allocated at that bound and shrunk
 # to what was written. A short value costs three objects on 1.12 and two on 1.10; the
