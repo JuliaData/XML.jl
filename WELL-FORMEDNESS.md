@@ -30,9 +30,9 @@ XML 1.0 defines two [classes of processors](https://www.w3.org/TR/xml/#proc-type
 
 | level | rejects |
 |---|---|
-| every level, `:lenient` included | mismatched or unclosed tags; an attribute written twice; an entity that refers to itself; an entity expansion beyond 40 levels or 64 MiB; replacement text that is not balanced |
-| `:structural`, the default | several root elements or none; text outside the root; an invalid element name; `<` in an attribute value; a misplaced XML declaration or DOCTYPE |
-| `:strict` | `--` in a comment; an invalid processing-instruction target; a character outside the allowed range; a reference to an undeclared entity where that rule applies (see [below](#undeclared-entities)), to an unparsed entity, or to an external entity from an attribute value; a parameter-entity reference inside a declaration; a default value that holds `<` |
+| every level, `:lenient` included | mismatched or unclosed tags<br>an attribute written twice<br>an entity that refers to itself<br>an entity expansion beyond 40 levels or 64 MiB<br>replacement text that is not balanced |
+| `:structural`, the default | several root elements or none<br>text outside the root<br>an invalid element name<br>`<` in an attribute value<br>a misplaced XML declaration or DOCTYPE |
+| `:strict` | `--` in a comment<br>an invalid processing-instruction target<br>a character outside the allowed range<br>a reference to an undeclared entity where that rule applies (see [below](#undeclared-entities)), to an unparsed entity, or to an external entity from an attribute value<br>a parameter-entity reference inside a declaration<br>a default value that holds `<` |
 
 Every row is a well-formedness rule. The first row comes with building a tree: a reader must know which element each end tag closes, and which value each attribute name holds. The entity rules of that row are checked when the document is read in, by all four readers.
 
