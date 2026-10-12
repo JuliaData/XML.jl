@@ -21,16 +21,22 @@ the same string type (see [`sourcetext`](@ref)), and the views point into that c
 over a view of a whole one can be rebuilt; for any other source type, such a document raises
 an `ArgumentError`.
 
+`LazyNode` takes no `wellformed` keyword: it checks only the rules on entities and accepts
+mismatched tags, so read a document that must be checked with [`Node`](@ref) or
+[`FlatNode`](@ref).
+
 # Performance — which reader to use
 
 `LazyNode` holds **no materialized tree**, only the source string, so its resident footprint is
-roughly the document size — about an order of magnitude smaller than the equivalent `Node` tree.
-The trade-off is that it **re-tokenizes on every access**: one traversal is somewhat slower than
-`Node`, and *repeated* traversals are dramatically slower (each pass re-scans the whole document),
-whereas a `Node` tree is built once and then walked cheaply.
+roughly the document size, several times smaller than the equivalent `Node` tree. The trade-off
+is that it **re-tokenizes on every access**. Each call to `children` re-reads the content it
+lists, so one whole traversal can take longer than building a `Node` and walking it. *Repeated*
+traversals are dramatically slower, since each pass re-scans the whole document, whereas a
+`Node` tree is built once and then walked cheaply.
 
 - **Forward streaming of a large document** → [`Cursor`](@ref) — fastest, and allocation-free
-  over a `String` document.
+  over a `String` document, except one copy when its lines end in CR or its internal subset
+  declares something to apply.
 - **Repeated or random access** → [`Node`](@ref) — builds the tree once.
 - **`LazyNode`** → low-memory, *read-once* navigation, or as a holdable snapshot of a
   [`Cursor`](@ref) position (`LazyNode(c)` / `Cursor(::LazyNode)`).
@@ -456,8 +462,9 @@ The range of *valid character indices* of the node's original source text within
 retained source string, so that `source[sourcespan(n)] == sourcetext(n)` — the positional
 counterpart of [`sourcetext`](@ref), for consumers that need *where* the node lives rather
 than its text (verbatim excision and splicing, error context). The retained string is the one
-the reader holds: for a document rewritten when it was read in (see [`sourcetext`](@ref)), it
-is the rewritten one, and the indices do not apply to the text the reader was given.
+the reader holds. For a `String` whose lines end in CR, normalized when it was read in, or for a
+document rewritten then (see [`sourcetext`](@ref)), it is that copy. The indices then do not
+apply to the text the reader was given.
 
 The bounds are character indices, not code units: the library performs the `prevind`
 computation, so a node ending on a multi-byte character yields indices that are safe to
@@ -489,7 +496,9 @@ _splice_span(src::AbstractString, span::UnitRange{Int}, replacement::AbstractStr
 The node's document source with the node's own text replaced by `replacement` — excised
 entirely by default. This is the packaged, multi-byte-safe form of splicing around
 [`sourcespan`](@ref): `Base.splice!`'s remove-and-insert, applied to the retained source
-and returning a new `String` (nothing is mutated).
+and returning a new `String` (nothing is mutated). The retained source is the one
+[`sourcespan`](@ref) describes: for a `String` whose lines end in CR, the result has the
+normalized line ends.
 
 Defined for the two source-retaining readers (`LazyNode`, `FlatNode`).
 """
