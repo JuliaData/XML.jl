@@ -54,8 +54,8 @@ XML.jl provides four readers behind one set of accessors (`nodetype`, `tag`, `at
 
 Rules of thumb:
 
-- one forward pass → `Cursor` (fastest scan, ~zero allocation)
-- extract a little from a large document → `LazyNode` (opening is one scan of the source, then a cost per node touched)
+- one forward pass → `Cursor` (fastest scan, ~zero allocation; a `String` with CR line ends or declarations to apply is copied once)
+- extract a little from a large document → `LazyNode` (opening scans a `String` once and copies it only when it has CR line ends or declarations to apply, then a cost per node touched)
 - read-heavy full document, repeated traversals → `FlatNode` (the random-access read API of `Node` at almost none of its GC cost: fastest build and walk, O(1) revisits)
 - build or edit documents → `Node`
 
@@ -100,7 +100,9 @@ Each item in an XML DOM is classified by its `NodeType`:
 | `Comment` | `<!-- text -->` | `Comment(text)` |
 | `CData` | `<![CDATA[text]]>` | `CData(text)` |
 | `Element` | `<tag attrs...> children... </tag>` | `Element(tag, children...; attrs...)` |
-| `Text` | the `text` part of `<tag>text</tag>` | `Text(text)` |
+| `Text` | the `text` part of `<tag>text</tag>` | `XML.Text(text)` |
+
+After `using XML`, write `XML.Text`: `Base` also exports a `Text`, so the bare name is ambiguous.
 
 <br>
 
@@ -243,7 +245,7 @@ xpath(root, "//b/text()")    # Text nodes inside all <b>s
 
 ## `Cursor`
 
-The forward, StAX-style pull reader: one mutable cursor walks the document in document order — no tree, one tokenizing scan, ~zero allocation. Advance with `next!`; read the current position with the usual accessors (`nodetype`, `tag`, `attributes`, `value`, `depth`, `is_simple`, `simple_value`):
+The forward, StAX-style pull reader: one mutable cursor walks the document in document order, with no tree and one tokenizing scan. It allocates almost nothing, except one copy of a `String` that has CR line ends or declarations to apply. Advance with `next!`; read the current position with the usual accessors (`nodetype`, `tag`, `attributes`, `value`, `depth`, `is_simple`, `simple_value`):
 
 ```julia
 cur = Cursor(xml_string)
@@ -271,7 +273,13 @@ doc = read("file.xml", LazyNode)
 
 `LazyNode` supports the same read-only interface as `Node`: `nodetype`, `tag`, `attributes`, `value`, `children`, `is_simple`, `simple_value`, plus integer and string indexing.
 
-`LazyNode` is for *partial* reads only: opening is a no-op wrapper (sub-microsecond whatever the file size), a traversal costs only the bytes it steps over — descending to a target is O(bytes before it) — and nothing is cached, so repeated visits cost again. Unbeatable for descents and kilobyte-scale documents; for whole-tree walks (135 ms vs ~29/~71 ms build+walk on the 14 MB document below) and repeated queries, build `FlatNode` or `Node` instead — see [Performance by access pattern](#performance-by-access-pattern).
+`LazyNode` is for *partial* reads only:
+
+- Opening builds nothing. A `String` source is scanned once for CR line ends (0.21 ms on the 14 MB document below), and copied only when it has some; any other string type is not scanned at all. A source whose internal subset declares something to apply is rewritten, as described [below](#memory-mapped-files).
+- A traversal costs only the bytes it steps over: descending to a target is O(bytes before it).
+- Nothing is cached, so repeated visits cost again.
+
+It is unbeatable for descents and kilobyte-scale documents. For whole-tree walks (131 ms against ~29/~71 ms build + walk on the 14 MB document below) and repeated queries, build `FlatNode` or `Node` instead: see [Performance by access pattern](#performance-by-access-pattern).
 
 For streaming and high-throughput workloads, several extra accessors avoid materializing intermediate collections:
 
@@ -301,7 +309,7 @@ doc = open("very_large.xml") do io
 end
 ```
 
-The reader keeps the string type it is given: the document is walked through the mapping instead of being copied into the heap, and accessors return views into the mapped bytes.
+The reader keeps the string type it is given: the document is walked through the mapping instead of being copied into the heap, and accessors return views into the mapped bytes. `Node` and `FlatNode` do not: they copy the document into a `String` before they parse it, so a mapping saves them no memory.
 
 Opening costs one probe of the prolog, about 25 ns on a mapped 14 MB document, LF or CR LF alike:
 
@@ -376,7 +384,7 @@ One number cannot rank the readers — cost depends on what you do with the docu
 | `Node` | 67.6 ms | 3.36 ms | 3.6 ms | 71.6 MiB |
 | EzXML (libxml2) | 37.3 ms | — | — | — |
 
-Reading the table: `Cursor`'s walk *is* its parse — one tokenizing scan, nothing retained. `LazyNode` materializes nothing, so its open is one allocation-free scan of the source for line ends (the source is rewritten once when it has CR LF or lone CR line ends, or declares general entities in its internal subset) — after that it costs per node visited, which still makes it the pick for touching a *fraction* of a large document, and (as the walk column shows) the wrong tool for visiting all of it. `FlatNode` builds ~2.6× faster than `Node`, holds ~23% less memory, and its `parent`/`depth` are O(1) where `Node` searches from the root; whole-tree walks are close (`Node`'s exact-size children vectors keep its locality sharp), and pure value extraction is close too, flat store slightly faster (3.1 vs 3.6 ms — a per-value `SubString` view costs two integer stores). `FlatNode` builds ~1.4× faster than even libxml2, and `Node`'s gap to the C library is materialization, not scanning (see [PERFORMANCE-v0.4.md](PERFORMANCE-v0.4.md)).
+Reading the table: `Cursor`'s walk *is* its parse — one tokenizing scan, nothing retained. `LazyNode` materializes nothing, so its open is one allocation-free scan of the source for line ends. The source is rewritten once when it has CR LF or lone CR line ends, or when its internal subset declares something to apply: general entities, attribute defaults, attributes of a type other than CDATA. After that it costs per node visited. That still makes it the pick for touching a *fraction* of a large document, and, as the walk column shows, the wrong tool for visiting all of it. `FlatNode` builds ~2.6× faster than `Node`, holds ~23% less memory, and its `parent`/`depth` are O(1) where `Node` searches from the root; whole-tree walks are close (`Node`'s exact-size children vectors keep its locality sharp), and pure value extraction is close too, flat store slightly faster (3.1 vs 3.6 ms — a per-value `SubString` view costs two integer stores). `FlatNode` builds ~1.4× faster than even libxml2, and `Node`'s gap to the C library is materialization, not scanning (see [PERFORMANCE-v0.4.md](PERFORMANCE-v0.4.md)).
 
 _Measured 2026-09-02, Apple M5 (single-threaded), Julia 1.12.7, EzXML 1.2.3; BenchmarkTools medians._
 
