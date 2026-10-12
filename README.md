@@ -50,6 +50,8 @@ XML.jl provides four readers behind one set of accessors (`nodetype`, `tag`, `at
 | `FlatNode` *(experimental)* | flat read-only DOM | yes, one record per node in a few arrays | O(1), built once | no | ~0 |
 | `Node` | DOM of objects | yes, Julia objects (several per node) | O(1), built once | **yes** | high |
 
+[READERS.md](READERS.md) draws what `Node`, `FlatNode` and `LazyNode` keep in memory for a small document.
+
 Rules of thumb:
 
 - one forward pass → `Cursor` (fastest scan, ~zero allocation)
