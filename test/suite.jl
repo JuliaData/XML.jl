@@ -2276,13 +2276,15 @@ end
         isfile(path) || return
         subset = read(path, String)
         xml = "<!DOCTYPE TVSCHEDULE [\n" * subset * "\n]><TVSCHEDULE NAME=\"x\"/>"
+        # the DTD node keeps the subset with its line ends normalized (§2.11): a checkout that
+        # writes CR LF, as on Windows, still reads as LF
+        kept = "TVSCHEDULE [\n" * replace(subset, "\r\n" => "\n", "\r" => "\n") * "\n]"
         for w in (:lenient, :structural, :strict), R in (Node, FlatNode)
             doc = parse(xml, R; wellformed = w)
             root = only(elements(doc))
             @test tag(root) == "TVSCHEDULE"
             @test collect(attributes(root)) == ["NAME" => "x"]
-            @test value(only(filter(x -> nodetype(x) == DTD, children(doc)))) ==
-                  "TVSCHEDULE [\n" * subset * "\n]"
+            @test value(only(filter(x -> nodetype(x) == DTD, children(doc)))) == kept
         end
     end
 
