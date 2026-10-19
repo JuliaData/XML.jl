@@ -177,7 +177,7 @@ XMark limits its documents to a restricted set of XML features by design: no ent
 
 _Table 6 — the same operations over the XMark-style document and its three twins: time (incl. GC) · allocations. The four columns of a row come from one run, and the differences between them are the point. The libxml2 DOM lives in the C heap, where the allocation column does not apply. libxml2's DOM build supplies the defaults twin's attributes; its reader, as called here, does not report them._[^twins]
 
-The escaped column is the decode path. A decoded value allocates once, the result string, the same +46,583 on `Cursor`, `LazyNode` and `FlatNode` for the 46,583 text tokens that carry a reference: `unescape` decodes in one pass over the bytes into a scratch buffer kept per task, then copies out exactly the decoded bytes. `Node{SubString}` does not decode, and its +12,801 are the §3.3.3 normalization of the 3,200 attribute values that carry a literal tab or newline, four allocations each. The markup column costs its extra nodes and a walk at the entry. Its DOCTYPE declares no entity, but it declares ID and IDREF attributes, whose values [§3.3.3](https://www.w3.org/TR/xml/#AVNormalize) reduces: the entry reads the start tags to find them, and copies nothing, since every value is already reduced. That walk is most of the 10.6 ms `Cursor` takes over the document, and of its 192 allocations. The defaults column adds the supply itself: the entry writes the 2,697 attributes into a copy of the document, 14.7 MB, which costs `Cursor` under 1 ms and 35.8 MiB. On the two `parse` rows, that copy brings on a garbage collection, and they take 9 to 10 ms more than on the markup twin. The walk and the copy happen once, at the entry: the `LazyNode` and `FlatNode` rows, timed on a reader already built, do not include them. Parsing that DOCTYPE's 88 declarations with `parse_dtd` takes 7.8 µs and 372 allocations.
+The escaped column is the decode path. A decoded value allocates once, the result string, the same +46,583 on `Cursor`, `LazyNode` and `FlatNode` for the 46,583 text tokens that carry a reference: `unescape` decodes in one pass over the bytes into a scratch buffer kept per task, then copies out exactly the decoded bytes. `Node{SubString}` does not decode, and its +12,801 are the §3.3.3 normalization of the 3,200 attribute values that carry a literal tab or newline, four allocations each. The markup column costs its extra nodes and a walk at the entry. Its DOCTYPE declares no entity, but it declares ID and IDREF attributes, whose values [§3.3.3](https://www.w3.org/TR/xml/#AVNormalize) reduces: the entry reads the start tags to find them, and copies nothing, since every value is already reduced. That walk is most of the 10.6 ms `Cursor` takes over the document, and of its 192 allocations. The defaults column adds the supply itself: the entry writes the 2,697 attributes into a copy of the document, 14.7 MB, which costs `Cursor` under 1 ms and 35.8 MiB. On the two `parse` rows, that copy brings on a garbage collection, and they take 9 to 10 ms more than on the markup twin. The walk and the copy happen once, at the entry: the `LazyNode` and `FlatNode` rows, timed on a reader already built, do not include them.
 
 The two libxml2 rows put the C library on the same four documents. Its reader touches node names only, so its escaped column carries the lexing of a reference and not its decoding. Its DOM build decodes for 6 ms over the plain build, about the 7 ms `parse` → `Node` takes over its own. The markup twin's comments, processing instructions, CDATA sections and DOCTYPE cost the C library 7 ms over the plain build, where `parse` → `Node` takes 10.5 ms more, its extra nodes and the walk at the entry. Its DOM build supplies the defaults twin's attributes for 4 ms over the markup twin. Every libxml2 cell frees its tree per sample outside the timing: EzXML attaches its finalizer to the document's node, so a cell that finalizes the document frees nothing, and a benchmark loop never wakes the collector.
 
@@ -199,7 +199,7 @@ libxml2 has no levels: it always enforces well-formedness in full. Its DOM build
 
 ## The other entry points
 
-`sourcespan`, `splicetext`, `issamenode`, `depth`, `siblings`, `foreach_attr`, `xpath` and `parse_dtd` appear in no table above. On one `item` element, the 1000th of the XMark-style document, four levels below its document node, the same node in every reader:
+`sourcespan`, `splicetext`, `issamenode`, `depth`, `siblings`, `foreach_attr` and `xpath` appear in no table above. On one `item` element, the 1000th of the XMark-style document, four levels below its document node, the same node in every reader:
 
 | | time | allocations |
 |---|--:|--:|
@@ -214,7 +214,6 @@ libxml2 has no levels: it always enforces well-formedness in full. Its DOM build
 | `eachattribute(::LazyNode)` | 69.7 ns | 0 |
 | `xpath`, `/site/regions/asia/item[500]` | 2.5 µs | 26 |
 | `xpath`, `//item[@featured='yes']` | 8.58 ms | 60, 17.4 MiB |
-| `parse_dtd`, the schema's 88 declarations | 8.1 µs | 372 |
 
 _Table 8 — the entry points no other table covers._[^entrypoints]
 
@@ -241,6 +240,6 @@ Stream / low-memory / read-only full-DOM / repeated traversal → **XML.jl**; `F
 
 [^twins]: Table 6 measured 2026-10-04 on Julia 1.13.1 and Table 7 2026-09-11 on Julia 1.13.0, same machine and settings as the rest; BenchmarkTools medians. Source: [`benchmarks/profile.jl`](benchmarks/profile.jl), sections (7) and (8), which generate the escaped and markup twins beside the XMark-style document through the generator's opt-in features, and build the defaults twin from the markup twin in memory.
 
-[^entrypoints]: Table 8: measured 2026-09-02, same settings; source [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl), its last section, and section (7) of `profile.jl` for the `parse_dtd` row.
+[^entrypoints]: Table 8: measured 2026-09-02, same settings; source [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl), its last section.
 
 [^xmark]: XMark is the XML benchmark of A. Schmidt, F. Waas, M. Kersten, M. J. Carey, I. Manolescu and R. Busse, "XMark: A Benchmark for XML Data Management", VLDB 2002, pp. 974–985 ([PDF](https://www.vldb.org/conf/2002/S30P01.pdf), [DOI](https://doi.org/10.1016/B978-155860869-6/50096-2)); D. Barbosa, I. Manolescu and J. X. Yu survey it and its peers in "XML Benchmarks", Encyclopedia of Database Systems, Springer, 2009 ([PDF](https://pages.saclay.inria.fr/ioana.manolescu/PAPERS/Encyclopedia-XMLBenchmarks), [DOI](https://doi.org/10.1007/978-0-387-39940-9_789)). The generator here follows the XMark DTD and vocabulary but is not xmlgen: its factor 1.0 gives a 14 MB document where xmlgen's gives 100 MB.

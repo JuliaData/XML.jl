@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`Cursor(data, startpos)`**, removed in v0.5: it is the only entry that exposes a byte offset into the source, and nothing in the package or in any registered dependent calls it. Line-end normalization only shortens, so the offset still translates; entity inclusion inserts, so an offset inside a replaced reference has no image. To walk a subtree, take a snapshot and cross back through it: `snapshot = LazyNode(cursor)`, then `Cursor(snapshot)`.
 
+### Removed
+
+- **`XML.parse_dtd`**, with the types it returned (`ParsedDTD`, `ElementDecl`, `AttDecl`, `NotationDecl`): a second reader of the internal subset, with rules of its own, that no registered package calls. The name was neither exported nor declared `public`. Calling it raises an error that points to the `DTD` node, whose `value` is the DOCTYPE text; the readers apply the declarations of the internal subset themselves.
+
 ### Added
 
 - **`XML.escape` and `XML.unescape` are now public API** ([#125](https://github.com/JuliaData/XML.jl/issues/125)): declared `public` on Julia 1.11+ and covered by semver, for downstream code that assembles XML strings itself. They stay unexported — the bare names are too generic for `using XML`.
@@ -40,8 +44,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **ATTLIST default values are supplied per XML 1.0 §3.3.2** ([#131](https://github.com/JuliaData/XML.jl/issues/131)): an attribute that a start tag leaves out, and that an ATTLIST declaration of the internal subset gives a default value, is now reported with that value. It comes after the written attributes, in declaration order, from all four readers at every `wellformed` level. `#FIXED` supplies its value, `#IMPLIED` and `#REQUIRED` supply nothing, the first declaration of an attribute binds, and a declaration that does not follow the grammar is ignored as a whole. The value of an attribute declared with a type other than CDATA is reduced per §3.3.3: no space at either end, and one space for each run, where only #x20 counts. **Any document whose DTD declares attribute defaults, or attributes of such types, changes the attributes it reports**, and an element that receives a supplied attribute is no longer simple: `simple_value` raises on it. Defaults and reductions are written into the document at the entry, before the parse. A DTD that declares attributes and no entity has only its start tags read: 9.5 ms on the 14 MB benchmark document, whose DTD declares ID and IDREF attributes. Besides a `String` or a `SubString{String}`, a source that needs this rewrite is rebuilt when it is a `StringView` over a `Vector{UInt8}` or over a view of a whole one. Any other source type raises an `ArgumentError` when its document needs the rewrite, where v0.4.6 read it with its references literal and its defaults missing. This turned 10 more of the ledgered W3C canonical-reference gaps green, 249 of 262.
 
 - **A processing instruction in the internal subset is skipped whole**: the reader of the DOCTYPE skipped only comments and quoted strings. A quote inside an instruction opened a string that never closed, and a `]` inside one closed the subset early. Instructions are now skipped to their `?>`, and one left unclosed is an error at every level (W3C `ibm29n05`).
-
-- **`parse_dtd` no longer raises `StringIndexError` on a non-ASCII internal subset**: it walked the subset one byte at a time, so a multi-byte character inside a declaration left the index between the bytes of a character.
 
 - **Line ends are now normalized per XML 1.0 §2.11** (all four readers): literal CR LF and lone CR read as LF — in character data, CDATA sections, processing-instruction data, comments, attribute values and the DOCTYPE value — while CR written as `&#13;` still reads as a real CR. Previously the raw bytes came through, so CR LF documents read differently in XML.jl than in conforming parsers. On write, a CR in text content is escaped as `&#13;`, so values round-trip exactly. This turned 62 of the ledgered W3C canonical-reference gaps green ([#129](https://github.com/JuliaData/XML.jl/issues/129)).
 
@@ -422,7 +424,7 @@ First release since XML.jl moved to [JuliaData](https://github.com/JuliaData/XML
 ## [0.2.2]
 
 ### Added
-- DTD parsing via `parse_dtd`.
+- DTD parsing via `DTDBody`, unexported; its constructor raised an error in every release up to v0.3.9.
 - `is_simple` and `simple_value` exports.
 - `setindex!` methods for modifying attributes.
 - `unescape` function.

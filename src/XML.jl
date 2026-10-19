@@ -32,7 +32,7 @@ include("flatnode.jl")   # FlatNode read-only columnar reader (needs node.jl typ
 include("identity.jl")   # structural ==/hash bindings + issamenode (needs all reader types above)
 include("write.jl")      # XML writer: _write_xml/_write_escaped + XML.write entry points
 include("parse.jl")      # BOM normalization, Base.read entry points, the VPA parser
-include("dtd.jl")        # DTD/DOCTYPE parsing (independent: uses only the tokenizer)
+include("dtd.jl")        # DOCTYPE declaration readers — leaf, plain string scanning
 include("entities.jl")   # internal general entities §4.4 (needs dtd.jl's declaration reader)
 #-----------------------------------------------------------------------------# h (HTML/XML element builder)
 """
@@ -119,6 +119,14 @@ function unescape!(o::Node, warn::Bool=true)
     msg = """`XML.unescape!` has been removed in XML.jl v0.4.
         Text is now unescaped automatically during `parse`."""
     Base.depwarn(msg, :unescape!)
+    error(msg)
+end
+
+function parse_dtd(args...)
+    msg = """`XML.parse_dtd` has been removed in XML.jl v0.4.7.
+        The DOCTYPE text is the `value` of the `DTD` node;
+        the readers apply the declarations of its internal subset themselves."""
+    Base.depwarn(msg, :parse_dtd)
     error(msg)
 end
 
