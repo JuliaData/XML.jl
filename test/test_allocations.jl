@@ -11,7 +11,7 @@ using Mmap, StringViews
 
 # The value-correctness checks always run (they double as compile warm-up for each
 # barrier); the `== 0` assertions are skipped under coverage, whose counters allocate
-# inside the measured call (same gate as the `_normalize_attr_ws` guard in runtests.jl).
+# inside the measured call (same gate as the `_normalize_attr_ws` guard in suite.jl).
 const _NO_COVERAGE = Base.JLOptions().code_coverage == 0
 
 # `Node`'s by-key attribute lookups return through a union boundary that the 1.10 and
