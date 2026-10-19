@@ -110,8 +110,12 @@ Review these even if your code compiles unchanged:
    round-tripping `"5 &amp; 6"` down to `"5 & 6"`. Don't call `escape` on possibly-escaped text —
    and note `XML.write` escapes for you on output.
 
-4. **Duplicate attributes are an error.** A document with repeated attribute names that parsed in
-   0.3.x now raises `"Duplicate attribute: …"`.
+4. **Mismatched tags and duplicate attributes are errors.** `Node` and `FlatNode` reject them at
+   every `wellformed` level, `:lenient` included. That covers an end tag that does not match its
+   start tag (`<a></b>`), crossed elements (`<a><b></a></b>`), an element never closed, and a
+   repeated attribute name. The errors read `"Mismatched tags: …"`, `"Unclosed tags: …"` and
+   `"Duplicate attribute: …"`. 0.3.x accepted such documents, writing `<a></b>` back as `<a/>`
+   and keeping the last value of a repeated attribute.
 
 5. **Stricter parsing by default.** `parse`/`read` default to `wellformed = :structural`, which
    rejects: multiple root elements; a document with **no** root element; non-whitespace text outside
@@ -124,7 +128,15 @@ Review these even if your code compiles unchanged:
    parse(str, Node; wellformed = :strict)    # see below
    ```
 
-   `:strict` additionally rejects: `--` (or a trailing `-`) inside a comment; an empty or invalid processing-instruction target; a reference to an undeclared entity, in a document whose declarations are all within reach — no external subset, no parameter-entity reference between the internal subset's declarations — or declared `standalone="yes"` (XML 1.0 §4.1, *Entity Declared*); and any character — whether a numeric **reference** (`&#0;`) or a **raw** literal character — outside the XML 1.0 §2.2 `Char` range (e.g. NUL and other control characters). Because that adds a character-range scan over textual content, `:strict` is meaningfully slower than `:structural` on text-heavy documents — a cost paid only when you opt in (`:lenient` and `:structural` are unaffected).
+   `:strict` additionally rejects:
+
+   - `--` (or a trailing `-`) inside a comment;
+   - an empty or invalid processing-instruction target;
+   - a reference to an undeclared entity, in a document whose declarations are all within reach — no external subset, no parameter-entity reference between the internal subset's declarations — or declared `standalone="yes"` (XML 1.0 §4.1, *Entity Declared*);
+   - any character — whether a numeric **reference** (`&#0;`) or a **raw** literal character — outside the XML 1.0 §2.2 `Char` range (e.g. NUL and other control characters);
+   - from **v0.4.7**, a parameter-entity reference (`%name;`) inside a declaration of the internal subset (§2.8), `<` in a declared default value, a reference to an unparsed entity, and a reference to an external entity from an attribute value.
+
+   Because the character check adds a range scan over textual content, `:strict` is meaningfully slower than `:structural` on text-heavy documents — a cost paid only when you opt in (`:lenient` and `:structural` are unaffected).
 
    A consequence of requiring a root element: input that is **not a complete document** — a
    standalone DTD file, or a prolog-only fragment — is now rejected at `:structural`. Read it with
@@ -134,7 +146,15 @@ Review these even if your code compiles unchanged:
    read("schema.dtd", Node; wellformed = :lenient)   # a DTD file has no root element
    ```
 
-6. **Inter-element whitespace is preserved.** `parse`/`read` keep whitespace-only text between
+6. **Declarations of the internal subset are applied** (from **v0.4.7**). General entities are
+   expanded where they are referenced, attribute defaults are supplied, and the values of
+   attributes declared with a type other than CDATA are normalized (XML 1.0 §4.4.2, §3.3.2,
+   §3.3.3). With `<!DOCTYPE r [<!ENTITY e "zz">]><r>&e;</r>`, the text of `r` is `"zz"`, where
+   0.3.x and v0.4.6 returned `"&e;"`. Every reader, at every level, rejects an entity that refers
+   to itself, an expansion beyond 40 levels or 64 MiB, and replacement text that is not balanced
+   (§4.3.2).
+
+7. **Inter-element whitespace is preserved.** `parse`/`read` keep whitespace-only text between
    elements as `Text` nodes (0.3.x dropped it by default). So `children(root)` may include leading
    `Text` nodes, and `children(root)[1]` is **not** necessarily the first child *element*. Use
    `eachelement` / `elements` (new in **v0.4.1**) when you need elements only:
@@ -151,12 +171,11 @@ Review these even if your code compiles unchanged:
    first(c for c in children(root) if nodetype(c) === Element)
    ```
 
-7. **`LazyNode` and `Cursor` do not check well-formedness.** `Node` and `FlatNode` enforce the
-   `wellformed` level; `parse(x, LazyNode)` and `Cursor(x)` tokenize without validating and do not
-   accept a `wellformed` keyword. Parse through `Node` or `FlatNode` if you need well-formedness
-   checking.
+8. **`LazyNode` and `Cursor` check only the rules on entities.** `Node` and `FlatNode` enforce the
+   `wellformed` level; `parse(x, LazyNode)` and `Cursor(x)` take no `wellformed` keyword and accept
+   mismatched tags. Parse through `Node` or `FlatNode` if you need well-formedness checking.
 
-8. **No memory-mapping.** `read` no longer memory-maps the input file. The README shows the manual
+9. **No memory-mapping.** `read` no longer memory-maps the input file. The README shows the manual
    recipe, a `StringView` over `Mmap`, for files too large for the heap.
 
 ## Compat

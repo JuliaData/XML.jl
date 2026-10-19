@@ -42,7 +42,9 @@ with [`next!`](@ref); read the current position with [`nodetype`](@ref),
 BOM normalization as the tree readers: UTF-8 BOM strip, UTF-16 LE/BE transcoding.
 Like [`LazyNode`](@ref), the cursor reads a document whose internal subset declares
 something to apply from a rewritten copy of the same string type; for a source type that
-cannot be rebuilt, such a document raises an `ArgumentError`.
+cannot be rebuilt, such a document raises an `ArgumentError`. The cursor takes no `wellformed`
+keyword: it checks only the rules on entities and accepts mismatched tags, so read a document
+that must be checked with [`Node`](@ref) or [`FlatNode`](@ref).
 
 The cursor is a single mutable object reused across the whole walk. See the
 aliasing-contract note on [`next!`](@ref).

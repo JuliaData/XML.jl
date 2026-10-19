@@ -45,6 +45,9 @@ random-access read API of `Node` at almost none of its GC cost.
         tag(el), attributes(el), value(el)
     end
 
+`parse` and `read` take the same `wellformed` keyword as for [`Node`](@ref): `:lenient`,
+`:structural` (the default) or `:strict`.
+
 The whole document is parsed once into a contiguous columnar store (a `Vector` of isbits
 records indexing into the retained source string), so building is fast, random access is
 O(1), repeated traversals never re-decode structure, and the garbage collector sees a
@@ -324,9 +327,9 @@ end
 
 The node's exact raw source slice, markup included — `<tag …>…</tag>` for an element,
 `<!--…-->` for a comment, and the whole document for the Document node. Zero-copy: the
-store keeps per-record source spans. The slice is taken from the document the reader holds,
-which is rewritten when its internal subset declares something to apply (see the `LazyNode`
-method).
+store keeps per-record source spans. The slice is taken from the document the store holds:
+always a `String`, normalized when its lines end in CR, and rewritten when its internal subset
+declares something to apply (see the `LazyNode` method).
 """
 function sourcetext(n::FlatNode)
     so, se = @inbounds n.store.spans[n.i]
@@ -338,7 +341,8 @@ end
 
 O(1): answered straight from the store's per-record source spans. Same contract and
 splice idiom as the `LazyNode` method — valid character indices, with
-`sourcetext(n) == SubString(source, sourcespan(n))`.
+`sourcetext(n) == SubString(source, sourcespan(n))`, where `source` is the string the store
+holds (see [`sourcetext`](@ref)).
 """
 function sourcespan(n::FlatNode)
     so, se = @inbounds n.store.spans[n.i]
