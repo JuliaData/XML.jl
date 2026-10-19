@@ -497,7 +497,7 @@ is_simple(n::FlatNode) = (r = _rec(n);
 # crosses one level, into inlined callees only): the constructor then inlines *with* its
 # checked machinery, and those branches around the view construction re-box the union
 # return — 32 B per call on the default-bounds build, invisible under `--check-bounds=yes`,
-# which selects the checked reconstruction body outright. The allocation
+# which selects the checked reconstruction body. The allocation
 # guards enforce both copies (#111, #113, #114).
 @inline function is_simple_value(n::FlatNode)
     is_simple(n) || return nothing
