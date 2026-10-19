@@ -77,7 +77,7 @@ end
 # is a token span or the field pair of a tokenizer accessor's SubString (see `_frng`
 # below), so both edges are UTF-8 character boundaries by construction — the same
 # invariant as XMLTokenizer's `_noshift_substring`, one hop removed (#113).
-# `--check-bounds=yes` (as in Pkg.test) still validates every span.
+# `--check-bounds=yes` still validates every span.
 @inline _fsub(store::FlatStore, off::Int32, len::Int32) =
     @inbounds _noshift_substring(store.source, Int(off), Int(len))
 
@@ -496,8 +496,8 @@ is_simple(n::FlatNode) = (r = _rec(n);
 # `@inbounds` chain stops reaching the noshift constructor's own `@boundscheck` (elision
 # crosses one level, into inlined callees only): the constructor then inlines *with* its
 # checked machinery, and those branches around the view construction re-box the union
-# return — 32 B per call on the default-bounds build, invisible to `Pkg.test`, whose
-# `--check-bounds=yes` selects the checked reconstruction body outright. The allocation
+# return — 32 B per call on the default-bounds build, invisible under `--check-bounds=yes`,
+# which selects the checked reconstruction body. The allocation
 # guards enforce both copies (#111, #113, #114).
 @inline function is_simple_value(n::FlatNode)
     is_simple(n) || return nothing

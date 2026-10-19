@@ -40,6 +40,8 @@ jobs:
           key: w3c-xmlconf-v20130923
       - uses: julia-actions/julia-buildpkg@v1
       - uses: julia-actions/julia-runtest@v1
+        with:
+          check_bounds: 'yes'
       - uses: julia-actions/julia-processcoverage@v1
       - uses: codecov/codecov-action@v7
         with:
@@ -47,7 +49,7 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
   test-default-bounds:
     # The build users actually run: --check-bounds=auto makes the load-time selection
-    # compile the noshift span reconstruction (Pkg.test's default --check-bounds=yes
+    # compile the noshift span reconstruction (the test job's --check-bounds=yes
     # compiles the checked branch instead, leaving the user-facing path untested), and
     # coverage off lets the numeric allocation guards assert (coverage counters allocate
     # inside the measured calls, so the guards skip themselves under coverage).

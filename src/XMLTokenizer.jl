@@ -82,7 +82,7 @@ end
     SubString(s, offset + 1, prevind(s, offset + ncu + 1))
 
 # One body per build, selected at load time (precompile caches are keyed by the flag):
-# `--check-bounds=yes` (as in `Pkg.test`) compiles the checked reconstruction wholesale
+# `--check-bounds=yes` compiles only the checked reconstruction
 # — an intra-body `@boundscheck` split would leave two construction paths and re-box
 # accessor chains' union returns (#113). Default builds compile the bare noshift store
 # (`substring.jl:39-46` @ 1.12.6); its call needs `@inbounds` plus a callsite
