@@ -1,7 +1,6 @@
 using XML
 using XML: Document, Element, Declaration, Comment, CData, DTD, ProcessingInstruction, Text
-using XML: escape, unescape, h, parse_dtd
-using XML: ParsedDTD, ElementDecl, AttDecl, EntityDecl, NotationDecl
+using XML: escape, unescape, h
 using Mmap, StringViews
 using Test
 
@@ -1067,6 +1066,22 @@ end
         e = ents("<!DOCTYPE d [<!ENTITY e \"\"><!ENTITY e \"<foo>\">]><d>&e;</d>")
         @test e.values == Dict("e" => "")
         @test e.markup == false
+    end
+
+    @testset "§4.2's examples are read, external and parameter entities included" begin
+        # the internal entity is included; the external and parameter ones are declared and
+        # never referenced, which every level accepts
+        subset = """<!ENTITY Pub-Status "This is a pre-release of the specification.">
+<!ENTITY open-hatch SYSTEM "http://www.textuality.com/boilerplate/OpenHatch.xml">
+<!ENTITY open-hatch2 PUBLIC "-//Textuality//TEXT Standard open-hatch boilerplate//EN" "http://www.textuality.com/boilerplate/OpenHatch.xml">
+<!ENTITY % YN '"Yes"'>"""
+        @test root_text("<!DOCTYPE d [" * subset * "]><d>&Pub-Status;</d>") ==
+              fill("This is a pre-release of the specification.", 8)
+    end
+
+    @testset "a subset that holds non-ASCII characters is read by character" begin
+        @test root_text("<!DOCTYPE doc [<!ENTITY e '日本'>]><doc>&e;</doc>") == fill("日本", 8)
+        @test root_text("<!DOCTYPE doc [<!-- é --><!ENTITY e 'v'>]><doc>&e;</doc>") == fill("v", 8)
     end
 
     @testset "character references resolve into replacement text, general ones do not (§4.5)" begin
@@ -2219,6 +2234,14 @@ end
         dtd_nodes = filter(x -> nodetype(x) == DTD, children(doc))
         @test length(dtd_nodes) == 1
         @test contains(value(dtd_nodes[1]), "ENTITY")
+
+        # the readers include the entities its internal subset declares, at every level
+        nbsp = Char(0xA0)   # the replacement text of `&nbsp;`, declared as `&#xA0;`
+        for w in (:lenient, :structural, :strict), R in (Node, FlatNode)
+            note = only(elements(read(path, R; wellformed = w)))
+            footer = only(filter(x -> nodetype(x) == Element && tag(x) == "footer", children(note)))
+            @test simple_value(footer) == "Writer: Donald Duck.$(nbsp)Copyright: W3Schools."
+        end
     end
 
     @testset "preserve.xml" begin
@@ -2247,187 +2270,27 @@ end
     end
 
     @testset "tv.dtd" begin
+        # tv.dtd as the internal subset of a document: ten element types and five attributes,
+        # each #REQUIRED or #IMPLIED, so the readers supply none
         path = joinpath(@__DIR__, "data", "tv.dtd")
         isfile(path) || return
-        dtd_text = read(path, String)
-        pd = parse_dtd("TVSCHEDULE [\n" * dtd_text * "\n]")
-        @test pd.root == "TVSCHEDULE"
-
-        @test length(pd.elements) == 10
-        elem_names = map(e -> e.name, pd.elements)
-        @test "TVSCHEDULE" in elem_names
-        @test "CHANNEL" in elem_names
-        @test "PROGRAMSLOT" in elem_names
-        @test "TITLE" in elem_names
-
-        @test length(pd.attributes) == 5
-        attr_elements = map(a -> a.element, pd.attributes)
-        @test "TVSCHEDULE" in attr_elements
-        @test "CHANNEL" in attr_elements
-        @test "TITLE" in attr_elements
-    end
-end
-
-#==============================================================================#
-#                        DTD PARSING (parse_dtd)                               #
-#==============================================================================#
-@testset "DTD Parsing (parse_dtd)" begin
-    @testset "a subset holding non-ASCII is read by character, not by byte" begin
-        # the readers walk the subset by index; stepping with `pos + 1` lands inside a character
-        # as soon as one is not ASCII, and indexing there throws
-        @test parse_dtd("doc [<!ENTITY e \"日本\">]").entities[1].value == "日本"
-        @test parse_dtd("doc [<!-- é --><!ENTITY e \"v\">]").entities[1].value == "v"
-        @test parse_dtd("doc [<!ELEMENT données EMPTY>]").elements[1].name == "données"
-        ad = parse_dtd("doc [<!ATTLIST données a CDATA \"é\">]").attributes[1]
-        @test (ad.element, ad.name, ad.default) == ("données", "a", "\"é\"")
-        # an unterminated quote must not step past the end while doing so
-        @test parse_dtd("doc [<!ENTITY e \"oups").entities[1].value == "oups"
-    end
-
-    @testset "simple DTD with entities" begin
-        path = joinpath(@__DIR__, "data", "simple_dtd.xml")
-        isfile(path) || return
-        doc = read(path, Node)
-        dtd_node = first(filter(x -> nodetype(x) == DTD, children(doc)))
-        pd = parse_dtd(dtd_node)
-        @test pd.root == "note"
-        @test length(pd.entities) == 3
-        @test pd.entities[1].name == "nbsp"
-        @test pd.entities[2].name == "writer"
-        @test pd.entities[3].name == "copyright"
-        @test pd.entities[2].value == "Writer: Donald Duck."
-    end
-
-    @testset "Unicode name in DTD" begin
-        pd = parse_dtd("café [<!ELEMENT café (#PCDATA)>]")
-        @test pd.root == "café"
-        @test pd.elements[1].name == "café"
-    end
-
-    @testset "DTD with SYSTEM external ID" begin
-        pd = parse_dtd("""root SYSTEM "root.dtd\"""")
-        @test pd.root == "root"
-        @test pd.system_id == "root.dtd"
-        @test pd.public_id === nothing
-    end
-
-    @testset "DTD with PUBLIC external ID" begin
-        pd = parse_dtd("""root PUBLIC "-//W3C//DTD XHTML 1.0//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd\"""")
-        @test pd.root == "root"
-        @test pd.public_id == "-//W3C//DTD XHTML 1.0//EN"
-        @test pd.system_id == "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd"
-    end
-
-    @testset "DTD with ELEMENT declarations" begin
-        pd = parse_dtd("""root [
-<!ELEMENT root (child)>
-<!ELEMENT child (#PCDATA)>
-<!ELEMENT empty EMPTY>
-<!ELEMENT any ANY>
-]""")
-        @test pd.root == "root"
-        @test length(pd.elements) == 4
-        @test pd.elements[1].name == "root"
-        @test pd.elements[1].content == "(child)"
-        @test pd.elements[2].name == "child"
-        @test pd.elements[2].content == "(#PCDATA)"
-        @test pd.elements[3].name == "empty"
-        @test pd.elements[3].content == "EMPTY"
-        @test pd.elements[4].name == "any"
-        @test pd.elements[4].content == "ANY"
-    end
-
-    @testset "DTD with ATTLIST declarations (spec examples)" begin
-        pd = parse_dtd("""root [
-<!ATTLIST termdef id ID #REQUIRED name CDATA #IMPLIED>
-<!ATTLIST list type (bullets|ordered|glossary) "ordered">
-<!ATTLIST form method CDATA #FIXED "POST">
-]""")
-        @test length(pd.attributes) == 4
-        @test pd.attributes[1].element == "termdef"
-        @test pd.attributes[1].name == "id"
-        @test pd.attributes[1].type == "ID"
-        @test pd.attributes[1].default == "#REQUIRED"
-        @test pd.attributes[2].name == "name"
-        @test pd.attributes[2].type == "CDATA"
-        @test pd.attributes[2].default == "#IMPLIED"
-        @test pd.attributes[3].element == "list"
-        @test pd.attributes[3].name == "type"
-        @test pd.attributes[3].default == "\"ordered\""
-        @test pd.attributes[4].element == "form"
-        @test pd.attributes[4].name == "method"
-        @test pd.attributes[4].default == "#FIXED \"POST\""
-    end
-
-    @testset "DTD with ENTITY declarations (spec examples)" begin
-        pd = parse_dtd("""root [
-<!ENTITY Pub-Status "This is a pre-release of the specification.">
-<!ENTITY open-hatch SYSTEM "http://www.textuality.com/boilerplate/OpenHatch.xml">
-<!ENTITY open-hatch2 PUBLIC "-//Textuality//TEXT Standard open-hatch boilerplate//EN" "http://www.textuality.com/boilerplate/OpenHatch.xml">
-<!ENTITY % YN '"Yes"'>
-]""")
-        @test length(pd.entities) == 4
-        @test pd.entities[1].name == "Pub-Status"
-        @test pd.entities[1].value == "This is a pre-release of the specification."
-        @test pd.entities[1].parameter == false
-
-        @test pd.entities[2].name == "open-hatch"
-        @test pd.entities[2].value === nothing
-        @test contains(pd.entities[2].external_id, "SYSTEM")
-
-        @test pd.entities[3].name == "open-hatch2"
-        @test contains(pd.entities[3].external_id, "PUBLIC")
-
-        @test pd.entities[4].name == "YN"
-        @test pd.entities[4].parameter == true
-    end
-
-    @testset "DTD with NOTATION declarations (spec example)" begin
-        pd = parse_dtd("""root [
-<!NOTATION vrml PUBLIC "VRML 1.0">
-<!NOTATION jpeg SYSTEM "image/jpeg">
-]""")
-        @test length(pd.notations) == 2
-        @test pd.notations[1].name == "vrml"
-        @test contains(pd.notations[1].external_id, "PUBLIC")
-        @test pd.notations[2].name == "jpeg"
-        @test contains(pd.notations[2].external_id, "SYSTEM")
-    end
-
-    @testset "parse_dtd from Node" begin
-        dtd = DTD("root [<!ELEMENT root (#PCDATA)>]")
-        pd = parse_dtd(dtd)
-        @test pd.root == "root"
-        @test length(pd.elements) == 1
-    end
-
-    @testset "parse_dtd errors on non-DTD node" begin
-        @test_throws ErrorException parse_dtd(Element("x"))
-    end
-
-    @testset "parse_dtd gives a clear error on parameter-entity references" begin
-        # PE references (%name;) are not expanded by this best-effort helper; the error explains
-        # that, rather than surfacing an opaque internal BoundsError / position error.
-        @test_throws "parameter-entity" parse_dtd("root [<!ELEMENT e %text;>]")
-        # a PE-free DTD is unaffected
-        @test parse_dtd("note [<!ELEMENT note (#PCDATA)>]").root == "note"
-        # but a bare '%' that is NOT a %name; reference (here in an entity value) must not be
-        # blamed: the real underlying error is surfaced, not the parameter-entity message.
-        notation_err = try
-            parse_dtd("root [ <!ENTITY pct \"100%\"> <!NOTATION n > ]")
-            ""
-        catch e
-            sprint(showerror, e)
+        subset = read(path, String)
+        xml = "<!DOCTYPE TVSCHEDULE [\n" * subset * "\n]><TVSCHEDULE NAME=\"x\"/>"
+        for w in (:lenient, :structural, :strict), R in (Node, FlatNode)
+            doc = parse(xml, R; wellformed = w)
+            root = only(elements(doc))
+            @test tag(root) == "TVSCHEDULE"
+            @test collect(attributes(root)) == ["NAME" => "x"]
+            @test value(only(filter(x -> nodetype(x) == DTD, children(doc)))) ==
+                  "TVSCHEDULE [\n" * subset * "\n]"
         end
-        @test !isempty(notation_err)                       # the malformed NOTATION still errors
-        @test !occursin("parameter-entity", notation_err)  # …with the true cause, not PE blame
     end
 
-    @testset "complex DTD file (structure test)" begin
-        # complex_dtd.xml uses parameter entity references (%text;) which parse_dtd does not
-        # expand, so we just verify parsing the fixture works. It is an XML declaration plus an
-        # internal-subset DOCTYPE with no root element, i.e. not a well-formed document — read it
-        # with :lenient, since the default :structural requires a root element (§2.1).
+    @testset "complex_dtd.xml" begin
+        # An XML declaration and a DOCTYPE whose internal subset references parameter entities
+        # (`%text;`), with no root element: not a well-formed document. It is read with
+        # :lenient, since the default :structural requires a root element (§2.1), and the DTD
+        # node keeps the subset as written.
         path = joinpath(@__DIR__, "data", "complex_dtd.xml")
         isfile(path) || return
         doc = read(path, Node; wellformed=:lenient)
@@ -2445,34 +2308,31 @@ end
 #         XML 1.0 SPEC: ELEMENT TYPE DECLARATIONS (Section 3.2)                #
 #==============================================================================#
 @testset "Spec 3.2: Element Type Declarations" begin
-    @testset "EMPTY content model" begin
-        pd = parse_dtd("root [<!ELEMENT br EMPTY>]")
-        @test pd.elements[1].content == "EMPTY"
+    # A non-validating reader checks no content model, but it reads each element type
+    # declaration of the internal subset: the document reads at every `wellformed` level, and
+    # the DTD node keeps the declaration as written.
+    function readings(root, decl, body = "<$root/>")
+        xml = "<!DOCTYPE $root [$decl]>$body"
+        [(tag(only(elements(doc))), value(only(filter(x -> nodetype(x) == DTD, children(doc)))))
+         for w in (:lenient, :structural, :strict)
+         for doc in (parse(xml, Node; wellformed = w), parse(xml, FlatNode; wellformed = w))]
     end
 
-    @testset "ANY content model" begin
-        pd = parse_dtd("root [<!ELEMENT container ANY>]")
-        @test pd.elements[1].content == "ANY"
+    @testset "$model content model" for (model, decl) in (
+            ("EMPTY", "<!ELEMENT br EMPTY>"),
+            ("ANY", "<!ELEMENT container ANY>"),
+            ("#PCDATA", "<!ELEMENT text (#PCDATA)>"),
+            ("mixed", "<!ELEMENT p (#PCDATA|emph)*>"),
+            ("sequence", "<!ELEMENT spec (front, body, back?)>"),
+            ("choice", "<!ELEMENT div1 (head, (p | list | note)*, div2*)>"))
+        @test readings("root", decl) == fill(("root", "root [$decl]"), 6)
     end
 
-    @testset "#PCDATA content model" begin
-        pd = parse_dtd("root [<!ELEMENT text (#PCDATA)>]")
-        @test pd.elements[1].content == "(#PCDATA)"
-    end
-
-    @testset "mixed content model" begin
-        pd = parse_dtd("root [<!ELEMENT p (#PCDATA|emph)*>]")
-        @test pd.elements[1].content == "(#PCDATA|emph)*"
-    end
-
-    @testset "sequence content model" begin
-        pd = parse_dtd("root [<!ELEMENT spec (front, body, back?)>]")
-        @test pd.elements[1].content == "(front, body, back?)"
-    end
-
-    @testset "choice content model" begin
-        pd = parse_dtd("root [<!ELEMENT div1 (head, (p | list | note)*, div2*)>]")
-        @test pd.elements[1].content == "(head, (p | list | note)*, div2*)"
+    @testset "names that are not ASCII" begin
+        @test readings("café", "<!ELEMENT café (#PCDATA)>", "<café>x</café>") ==
+              fill(("café", "café [<!ELEMENT café (#PCDATA)>]"), 6)
+        @test readings("données", "<!ELEMENT données EMPTY>") ==
+              fill(("données", "données [<!ELEMENT données EMPTY>]"), 6)
     end
 end
 
@@ -2480,50 +2340,6 @@ end
 #       XML 1.0 SPEC: ATTRIBUTE-LIST DECLARATIONS (Section 3.3)                #
 #==============================================================================#
 @testset "Spec 3.3: Attribute-List Declarations" begin
-    @testset "ID attribute" begin
-        pd = parse_dtd("root [<!ATTLIST el id ID #REQUIRED>]")
-        @test pd.attributes[1].type == "ID"
-        @test pd.attributes[1].default == "#REQUIRED"
-    end
-
-    @testset "CDATA attribute with default" begin
-        pd = parse_dtd("""root [<!ATTLIST el name CDATA "default">]""")
-        @test pd.attributes[1].type == "CDATA"
-        @test pd.attributes[1].default == "\"default\""
-    end
-
-    @testset "enumerated attribute" begin
-        pd = parse_dtd("""root [<!ATTLIST list type (bullets|ordered|glossary) "ordered">]""")
-        @test contains(pd.attributes[1].type, "bullets")
-        @test pd.attributes[1].default == "\"ordered\""
-    end
-
-    @testset "#IMPLIED attribute" begin
-        pd = parse_dtd("root [<!ATTLIST el opt CDATA #IMPLIED>]")
-        @test pd.attributes[1].default == "#IMPLIED"
-    end
-
-    @testset "#FIXED attribute" begin
-        pd = parse_dtd("""root [<!ATTLIST el method CDATA #FIXED "POST">]""")
-        @test pd.attributes[1].default == "#FIXED \"POST\""
-    end
-
-    @testset "NOTATION attribute type" begin
-        pd = parse_dtd("root [<!ATTLIST fig notation NOTATION (jpeg|png) #IMPLIED>]")
-        @test contains(pd.attributes[1].type, "NOTATION")
-    end
-
-    @testset "multiple attributes in one ATTLIST" begin
-        pd = parse_dtd("""root [<!ATTLIST book
-  id ID #REQUIRED
-  isbn CDATA #IMPLIED
-  format (hardcover|paperback|ebook) "paperback">]""")
-        @test length(pd.attributes) == 3
-        @test pd.attributes[1].name == "id"
-        @test pd.attributes[2].name == "isbn"
-        @test pd.attributes[3].name == "format"
-    end
-
     @testset "attribute defaults (§3.3.2)" begin
         # An attribute that a tag leaves out, but that an ATTLIST gives a default value, is
         # reported with that value as if the tag wrote it: by all four readers, at every
@@ -2726,53 +2542,26 @@ end
 end
 
 #==============================================================================#
-#          XML 1.0 SPEC: ENTITY DECLARATIONS (Section 4.2)                     #
-#==============================================================================#
-@testset "Spec 4.2: Entity Declarations" begin
-    @testset "internal general entity (spec example)" begin
-        pd = parse_dtd("""root [<!ENTITY Pub-Status "This is a pre-release of the specification.">]""")
-        @test pd.entities[1].name == "Pub-Status"
-        @test pd.entities[1].value == "This is a pre-release of the specification."
-        @test pd.entities[1].external_id === nothing
-        @test pd.entities[1].parameter == false
-    end
-
-    @testset "external entity with SYSTEM (spec example)" begin
-        pd = parse_dtd("""root [<!ENTITY open-hatch SYSTEM "http://www.textuality.com/boilerplate/OpenHatch.xml">]""")
-        @test pd.entities[1].name == "open-hatch"
-        @test pd.entities[1].value === nothing
-        @test contains(pd.entities[1].external_id, "SYSTEM")
-        @test contains(pd.entities[1].external_id, "http://www.textuality.com/boilerplate/OpenHatch.xml")
-    end
-
-    @testset "external entity with PUBLIC (spec example)" begin
-        pd = parse_dtd("""root [<!ENTITY open-hatch PUBLIC "-//Textuality//TEXT Standard open-hatch boilerplate//EN" "http://www.textuality.com/boilerplate/OpenHatch.xml">]""")
-        @test pd.entities[1].name == "open-hatch"
-        @test contains(pd.entities[1].external_id, "PUBLIC")
-    end
-
-    @testset "parameter entity" begin
-        pd = parse_dtd("""root [<!ENTITY % YN '"Yes"'>]""")
-        @test pd.entities[1].name == "YN"
-        @test pd.entities[1].parameter == true
-    end
-end
-
-#==============================================================================#
 #         XML 1.0 SPEC: NOTATION DECLARATIONS (Section 4.7)                    #
 #==============================================================================#
 @testset "Spec 4.7: Notation Declarations" begin
+    # The readers apply nothing from a notation declaration, but they read it: the document
+    # reads at every `wellformed` level, and the DTD node keeps the declaration as written.
+    function readings(decl)
+        xml = "<!DOCTYPE root [$decl]><root/>"
+        [(tag(only(elements(doc))), value(only(filter(x -> nodetype(x) == DTD, children(doc)))))
+         for w in (:lenient, :structural, :strict)
+         for doc in (parse(xml, Node; wellformed = w), parse(xml, FlatNode; wellformed = w))]
+    end
+
     @testset "NOTATION with PUBLIC (spec example)" begin
-        pd = parse_dtd("""root [<!NOTATION vrml PUBLIC "VRML 1.0">]""")
-        @test pd.notations[1].name == "vrml"
-        @test contains(pd.notations[1].external_id, "PUBLIC")
-        @test contains(pd.notations[1].external_id, "VRML 1.0")
+        decl = """<!NOTATION vrml PUBLIC "VRML 1.0">"""
+        @test readings(decl) == fill(("root", "root [$decl]"), 6)
     end
 
     @testset "NOTATION with SYSTEM" begin
-        pd = parse_dtd("""root [<!NOTATION jpeg SYSTEM "image/jpeg">]""")
-        @test pd.notations[1].name == "jpeg"
-        @test contains(pd.notations[1].external_id, "SYSTEM")
+        decl = """<!NOTATION jpeg SYSTEM "image/jpeg">"""
+        @test readings(decl) == fill(("root", "root [$decl]"), 6)
     end
 end
 
@@ -3145,11 +2934,6 @@ end
         typed = filter(x -> nodetype(x) != Text, children(doc))
         @test typed[1]["encoding"] == "UTF-8"
         @test nodetype(typed[2]) == DTD
-        pd = parse_dtd(typed[2])
-        @test pd.root == "greeting"
-        @test length(pd.elements) == 1
-        @test pd.elements[1].name == "greeting"
-        @test pd.elements[1].content == "(#PCDATA)"
         @test simple_value(typed[3]) == "Hello, world!"
     end
 
@@ -3832,6 +3616,13 @@ end
     @testset "XML.Raw errors" begin
         @test_throws ErrorException XML.Raw()
         @test_throws ErrorException XML.Raw("arg")
+    end
+
+    @testset "XML.parse_dtd errors and points to the DTD node" begin
+        for x in ("root [<!ELEMENT root (#PCDATA)>]", DTD("root [<!ELEMENT root (#PCDATA)>]"))
+            @test_throws ErrorException XML.parse_dtd(x)
+            @test_throws "the `value` of the `DTD` node" XML.parse_dtd(x)
+        end
     end
 
     @testset "simplevalue binding redirects to simple_value" begin

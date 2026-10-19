@@ -24,7 +24,7 @@ a review of the **Behavioral changes** below.
 | `depth(node)` (1-arg) | `depth(child, root)` |
 | `nodes_equal(a, b)` | `a == b` |
 | `escape!(node)` / `unescape!(node)` | automatic during `XML.write` / `parse` |
-| `DTDBody` | `parse_dtd(...)` / the `DTD` node |
+| `DTDBody` | the `DTD` node |
 | `simplevalue` | `simple_value` (deprecated alias still works) |
 
 Calling a removed function raises an error whose message names the replacement. `DTDBody` is removed

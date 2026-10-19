@@ -352,8 +352,6 @@ for (lbl, s, lz, fl) in (("plain", S, LAZY, FLAT), ("escaped", SESC, LAZY_E, FLA
     row("EzXML stream, $lbl",    @benchmark ezxml_stream($s))
     row("EzXML DOM, $lbl",       @benchmark (d[] = EzXML.parsexml($s)) setup = (d = Ref{Any}(nothing)) teardown = (d[] === nothing || finalize(d[].node); d[] = nothing) evals = 1)
 end
-const DTD_VALUE = XML.value(first(c for c in XML.children(LAZY_M) if XML.nodetype(c) === XML.DTD))
-mrow("parse_dtd, the schema",   @benchmark XML.parse_dtd($DTD_VALUE))
 println("\n(same rows as (1), (2) and (4) over the four documents; the DOCTYPE holds 74 element",
         "\n and 14 attribute-list declarations)")
 
