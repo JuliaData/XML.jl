@@ -422,8 +422,8 @@ discovery) that classify a node but don't need its contents — far cheaper than
 function skip_element!(c::Cursor)
     c.nodetype === Element || return c
     data = _data(c)
-    after = _CURSOR_XT._skip_element_raw(data, _CURSOR_XT._data_start(c.token, data))
-    if after > ncodeunits(data)
+    after = _CURSOR_XT._element_end(data, _CURSOR_XT._data_start(c.token, data))
+    if after == 0 || after > ncodeunits(data)   # the document ends first, or right after it
         c.done = true
         c.held = false
         return c

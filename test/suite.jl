@@ -3627,6 +3627,13 @@ end
         end
     end
 
+    @testset "XMLTokenizer._skip_element_raw is deprecated and keeps its contract" begin
+        skip_raw = XML.XMLTokenizer._skip_element_raw
+        @test (@test_deprecated skip_raw("<a><b/></a><z/>", 1)) == 12    # just past `</a>`
+        @test (@test_deprecated skip_raw("<a></a>", 1)) == 8              # closed at the very end
+        @test (@test_deprecated skip_raw("<a><b>", 1)) == 7               # the document ends first
+    end
+
     @testset "simplevalue binding redirects to simple_value" begin
         el = Element("x", "val")
         @test XML.simplevalue(el) == simple_value(el)
@@ -4730,6 +4737,29 @@ end
             xml = "<p>Hello <b>world</b> and <i>more</i></p>"
             doc = parse(xml, LazyNode)
             @test sourcetext(doc[1]) == xml
+        end
+
+        @testset "an element ends at its own close, past markup-like content" begin
+            # `<`, `>` and close tags inside CDATA, comments, processing instructions and
+            # attribute values; nested elements of the same name; a multi-byte character just
+            # before the close. The element's text stops at its own close, and `<z/>` follows.
+            for inner in ("<![CDATA[</a> <b>]]>", "<![CDATA[]]>", "<!-- </a><b> -->", "<!--></a>-->",
+                          "<!---></a>-->", "<?pi </a> ?>", "<a><a/></a>", "é", "<b x=\"1>2\" y='3>4'/>")
+                xml = "<r><a>" * inner * "</a><z/></r>"
+                @testset "$(repr(inner))" for R in (String, StringView)
+                    src = R === String ? xml : StringView(codeunits(xml))
+                    a = parse(src, LazyNode)[1][1]
+                    @test sourcetext(a) == "<a>" * inner * "</a>"
+                    @test splicetext(a, "<a/>") == "<r><a/><z/></r>"
+                end
+            end
+            # a view that starts past the root of its string
+            sub = SubString("xx<r><a>é<!--></a>--></a><z/></r>", 3)
+            a = parse(sub, LazyNode)[1][1]
+            @test sourcetext(a) == "<a>é<!--></a>--></a>"
+            @test SubString(sub, sourcespan(a)) == sourcetext(a)
+            # an element the document never closes
+            @test_throws "Could not find closing tag" sourcetext(parse("<r><a><b/>", LazyNode)[1][1])
         end
     end
 

@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`Cursor(data, startpos)`**, removed in v0.5: it is the only entry that exposes a byte offset into the source, and nothing in the package or in any registered dependent calls it. Line-end normalization only shortens, so the offset still translates; entity inclusion inserts, so an offset inside a replaced reference has no image. To walk a subtree, take a snapshot and cross back through it: `snapshot = LazyNode(cursor)`, then `Cursor(snapshot)`.
 
+- **`XML.XMLTokenizer._skip_element_raw`**, removed in v0.5: an internal of the tokenizer that XLSX.jl calls to find where an element ends. `sourcespan` and `splicetext` on the element's `LazyNode` now find it with the same byte scan, and are the public way to do it.
+
 ### Removed
 
 - **`XML.parse_dtd`**, with the types it returned (`ParsedDTD`, `ElementDecl`, `AttDecl`, `NotationDecl`): a second reader of the internal subset, with rules of its own, that no registered package calls. The name was neither exported nor declared `public`. Calling it raises an error that points to the `DTD` node, whose `value` is the DOCTYPE text; the readers apply the declarations of the internal subset themselves.
@@ -60,6 +62,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **The README and docstrings no longer misstate what opening a document costs**: they called the opening of a `LazyNode` a no-op whatever the file size, and `Cursor` allocation-free. Yet a `String` with CR line ends or declarations to apply is copied once. `Node` and `FlatNode` copy a mapped document, and a mapped file that needs a rewrite must fit in memory. `sourcespan`, `sourcetext` and `splicetext` now warn that on such a `String` the positions refer to the normalized copy, not to the caller's string. The README writes `XML.Text`, since `Text` alone is ambiguous with `Base.Text` after `using XML`.
 
 - **The migration guide covers tag matching and the declarations applied from v0.4.7**: `MIGRATING_TO_v0.4.md` now says that `Node` and `FlatNode` reject mismatched and unclosed tags at every level. It also says what the declarations of the internal subset change, and lists the refusals of `:strict` that come with them.
+
+- **`sourcetext` on a `LazyNode` element ran the tokenizer over the whole element** ([#157](https://github.com/JuliaData/XML.jl/issues/157)): finding where the element ends built a token for every tag inside it. It now uses the byte scan that `skip_element!` steps with, which builds none. On the 64 MB element of the issue, `sourcetext`, `sourcespan` and `splicetext` drop from about 262 to 66 ms; on one `item` of the benchmark document, `sourcespan` drops from 1.29 µs to 314 ns. An element the document never closes still raises an error.
+
+- **`skip_element!` stopped inside a comment whose text opens with `>` or `->`**: the byte scan it steps with looked for the comment's `-->` from the comment's `<`. In `<!--></a>-->`, the dashes of `<!--` and the `>` after them read as the close, and the `</a>` inside the comment ended the element. The close is now looked for after `<!--`.
 
 ## [0.4.6] - 2026-08-17
 

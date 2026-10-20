@@ -599,10 +599,12 @@ end
 # scan that counts element-nesting depth and respects CDATA / comment / PI / quoted-`>`
 # boundaries. O(subtree bytes) but with a far tighter loop than full tokenization (no
 # token emission, no SubString construction). Used by `skip_element!` for structural
-# walks (e.g. layer discovery) that classify a node but don't need its contents.
+# walks (e.g. layer discovery) that classify a node but don't need its contents, and by
+# `sourcetext(::LazyNode)` to find where an element ends.
 
 # Find the `>` ending the tag whose `<` is at index `i`, skipping quoted attribute
-# values (where `>` may appear literally). Returns the index of that `>` (or `n`).
+# values (where `>` may appear literally). Returns the index of that `>`, or `n + 1` if the
+# document ends first.
 @inline function _scan_tag_end(data::AbstractString, i::Int, n::Int)
     j = i + 1
     @inbounds while j <= n
@@ -617,52 +619,73 @@ end
         end
         j += 1
     end
-    return n
+    return n + 1
 end
 
-# `openpos`: 1-based index of the `<` starting the element to skip. Returns the 1-based
-# index just past its matching close (`</name>` or `/>`), or `ncodeunits(data)+1` if the
-# document ends first (lenient, mirroring the tokenizer's EOF handling).
-function _skip_element_raw(data::AbstractString, openpos::Int)
+# `openpos`: 1-based index of the `<` starting an element. Returns the 1-based index just
+# past its matching close (`</name>` or `/>`), or 0 if the document ends first.
+function _element_end(data::AbstractString, openpos::Int)
     n = ncodeunits(data)
     depth = 0
     i = openpos
     @inbounds while i <= n
         lt = findnext('<', data, i)
-        lt === nothing && return n + 1
+        lt === nothing && return 0
         i = lt
         nxt = (i + 1 <= n) ? codeunit(data, i + 1) : 0x00
         if nxt == UInt8('!')
             nx2 = (i + 2 <= n) ? codeunit(data, i + 2) : 0x00
             if nx2 == UInt8('-')            # <!-- comment -->
-                cl = findnext("-->", data, i)
-                cl === nothing && return n + 1
+                # The close is looked for after the four bytes of `<!--`: a comment's text may
+                # open with `>` or `->`, which would otherwise complete a `-->` with the dashes
+                # of the opening itself.
+                cl = i + 4 <= n ? findnext("-->", data, i + 4) : nothing
+                cl === nothing && return 0
                 i = last(cl) + 1
             elseif nx2 == UInt8('[')        # <![CDATA[ ... ]]>
                 cl = findnext("]]>", data, i)
-                cl === nothing && return n + 1
+                cl === nothing && return 0
                 i = last(cl) + 1
             else                            # <!DOCTYPE ...> / other <! declaration
-                i = _scan_tag_end(data, i, n) + 1
+                e = _scan_tag_end(data, i, n)
+                e > n && return 0
+                i = e + 1
             end
         elseif nxt == UInt8('?')            # <? ... ?>
             cl = findnext("?>", data, i)
-            cl === nothing && return n + 1
+            cl === nothing && return 0
             i = last(cl) + 1
         elseif nxt == UInt8('/')            # </name> close
             e = _scan_tag_end(data, i, n)
+            e > n && return 0
             depth -= 1
             i = e + 1
             depth == 0 && return i
         else                                # <name ...> open or <name .../> self-close
             e = _scan_tag_end(data, i, n)
+            e > n && return 0
             self_closed = e > 1 && codeunit(data, e - 1) == UInt8('/')
             i = e + 1
             self_closed || (depth += 1)
             depth == 0 && return i
         end
     end
-    return n + 1
+    return 0
+end
+
+const _SKIP_ELEMENT_RAW_MSG = """
+    `XML.XMLTokenizer._skip_element_raw` is deprecated and will be removed in XML.jl v0.5.
+    It is internal to the tokenizer. To find where an element ends, take its `LazyNode` and
+    call `sourcespan(node)`, or `splicetext(node, replacement)` to cut it out: both find the
+    end with the same byte scan."""
+
+# The lenient form, kept for callers outside the package that stepped over an element with it:
+# `ncodeunits(data) + 1` when the document ends first, as when the element closes exactly at
+# the end.
+function _skip_element_raw(data::AbstractString, openpos::Int)
+    Base.depwarn(_SKIP_ELEMENT_RAW_MSG, :_skip_element_raw)
+    e = _element_end(data, openpos)
+    e == 0 ? ncodeunits(data) + 1 : e
 end
 
 #-----------------------------------------------------------------------# Utility functions

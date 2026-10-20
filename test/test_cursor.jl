@@ -249,6 +249,9 @@ using XML: Cursor, next!, for_each_child, @for_each_child, skip_element!, eof, n
             ("<r><a/><b><z/></b></r>",                         ["a", "b"]),     # self-close first
             ("<r><a><![CDATA[</a> <b> fake]]></a><b/></r>",    ["a", "b"]),     # fake close in CDATA
             ("<r><a><!-- </a><b><c> --></a><d/></r>",          ["a", "d"]),     # fake tags in comment
+            ("<r><a><!--></a>--></a><d/></r>",                 ["a", "d"]),     # comment text opens with >
+            ("<r><a><!---></a>--></a><d/></r>",                ["a", "d"]),     # comment text opens with ->
+            ("<r><a><![CDATA[]]></a><d/></r>",                 ["a", "d"]),     # empty CDATA section
             ("""<r><a x="1>2"><y/></a><b/></r>""",             ["a", "b"]),     # > inside attr value
             ("<r><a><a><a/></a></a><b/></r>",                  ["a", "b"]),     # nested same name
             ("<r><a><?pi <x> ?></a><b/></r>",                  ["a", "b"]),     # markup-ish PI body

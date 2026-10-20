@@ -416,28 +416,10 @@ function sourcetext(n::LazyNode)
     nt = n.nodetype
     start = _lazy_pos(n)
     if nt === Element
-        iter = _lazy_tokenizer(n)
-        for tok in iter
-            tok.kind === TokenKinds.SELF_CLOSE && return SubString(n.data, start, _token_end(tok, n.data))
-            tok.kind === TokenKinds.TAG_CLOSE && break
-        end
-        depth = 1
-        for tok in iter
-            k = tok.kind
-            if k === TokenKinds.OPEN_TAG
-                depth += 1
-            elseif k === TokenKinds.SELF_CLOSE
-                depth -= 1
-            elseif k === TokenKinds.CLOSE_TAG
-                depth -= 1
-                if depth == 0
-                    result = iterate(iter)
-                    result === nothing && error("Could not find closing '>'")
-                    return SubString(n.data, start, _token_end(result[1], n.data))
-                end
-            end
-        end
-        error("Could not find closing tag")
+        # the byte scan `skip_element!` steps with: no token is built for the content
+        stop = XMLTokenizer._element_end(n.data, start)
+        stop == 0 && error("Could not find closing tag")
+        return SubString(n.data, start, prevind(n.data, stop))
     elseif nt === Comment
         return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), n.data, TokenKinds.COMMENT_CLOSE))
     elseif nt === CData

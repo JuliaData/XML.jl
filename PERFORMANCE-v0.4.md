@@ -204,7 +204,7 @@ libxml2 has no levels: it always enforces well-formedness in full. Its DOM build
 | | time | allocations |
 |---|--:|--:|
 | `sourcespan(::FlatNode)` | 3.5 ns | 0 |
-| `sourcespan(::LazyNode)` | 1.26 µs | 1 |
+| `sourcespan(::LazyNode)` | 314 ns | 1 |
 | `splicetext`, `FlatNode` / `LazyNode` | 281 / 311 µs | 3 / 4, the 13.5 MiB result |
 | `issamenode`, `FlatNode` / `LazyNode` | 2.2 / 1.4 ns | 0 |
 | `depth(::FlatNode)` | 1.8 ns | 0 |
@@ -217,7 +217,7 @@ libxml2 has no levels: it always enforces well-formedness in full. Its DOM build
 
 _Table 8 — the entry points no other table covers._[^entrypoints]
 
-`FlatNode` answers `sourcespan` and `depth` from its store; `LazyNode` has to find the element's end for the first, and `Node`, which keeps no parent link, has to search down from the root for the second and for `siblings`. `splicetext` returns the whole document with one node replaced, so it costs a copy of the document whichever reader asks. `foreach_attr` yields raw tokens and `eachattribute` decoded pairs; on an element whose attributes need no decoding, both are allocation-free, the decoded pairs costing about twice the raw tokens. `xpath` over the descendant axis allocates 17 MiB on this tree.
+`FlatNode` answers `sourcespan` and `depth` from its store; `LazyNode` has to find the element's end for the first, with a byte scan that builds no token, and `Node`, which keeps no parent link, has to search down from the root for the second and for `siblings`. `splicetext` returns the whole document with one node replaced, so it costs a copy of the document whichever reader asks. `foreach_attr` yields raw tokens and `eachattribute` decoded pairs; on an element whose attributes need no decoding, both are allocation-free, the decoded pairs costing about twice the raw tokens. `xpath` over the descendant axis allocates 17 MiB on this tree.
 
 ## Choosing a reader
 
@@ -240,6 +240,6 @@ Stream / low-memory / read-only full-DOM / repeated traversal → **XML.jl**; `F
 
 [^twins]: Table 6 measured 2026-10-04 on Julia 1.13.1 and Table 7 2026-09-11 on Julia 1.13.0, same machine and settings as the rest; BenchmarkTools medians. Source: [`benchmarks/profile.jl`](benchmarks/profile.jl), sections (7) and (8), which generate the escaped and markup twins beside the XMark-style document through the generator's opt-in features, and build the defaults twin from the markup twin in memory.
 
-[^entrypoints]: Table 8: measured 2026-09-02, same settings; source [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl), its last section.
+[^entrypoints]: Table 8: measured 2026-09-02, same settings; source [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl), its last section. The `sourcespan(::LazyNode)` cell was measured on 2026-10-20, with Julia 1.13.2 and the same script.
 
 [^xmark]: XMark is the XML benchmark of A. Schmidt, F. Waas, M. Kersten, M. J. Carey, I. Manolescu and R. Busse, "XMark: A Benchmark for XML Data Management", VLDB 2002, pp. 974–985 ([PDF](https://www.vldb.org/conf/2002/S30P01.pdf), [DOI](https://doi.org/10.1016/B978-155860869-6/50096-2)); D. Barbosa, I. Manolescu and J. X. Yu survey it and its peers in "XML Benchmarks", Encyclopedia of Database Systems, Springer, 2009 ([PDF](https://pages.saclay.inria.fr/ioana.manolescu/PAPERS/Encyclopedia-XMLBenchmarks), [DOI](https://doi.org/10.1007/978-0-387-39940-9_789)). The generator here follows the XMark DTD and vocabulary but is not xmlgen: its factor 1.0 gives a 14 MB document where xmlgen's gives 100 MB.
