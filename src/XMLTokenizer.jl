@@ -679,11 +679,18 @@ const _SKIP_ELEMENT_RAW_MSG = """
     call `sourcespan(node)`, or `splicetext(node, replacement)` to cut it out: both find the
     end with the same byte scan."""
 
+# Once per session: `Base.depwarn` takes a backtrace on every call, even after its message is
+# shown, which costs hundreds of microseconds under `--depwarn=yes` (as `Pkg.test` runs).
+const _SKIP_ELEMENT_RAW_WARNED = Ref(false)
+
 # The lenient form, kept for callers outside the package that stepped over an element with it:
 # `ncodeunits(data) + 1` when the document ends first, as when the element closes exactly at
 # the end.
 function _skip_element_raw(data::AbstractString, openpos::Int)
-    Base.depwarn(_SKIP_ELEMENT_RAW_MSG, :_skip_element_raw)
+    if !_SKIP_ELEMENT_RAW_WARNED[]
+        _SKIP_ELEMENT_RAW_WARNED[] = true
+        Base.depwarn(_SKIP_ELEMENT_RAW_MSG, :_skip_element_raw)
+    end
     e = _element_end(data, openpos)
     e == 0 ? ncodeunits(data) + 1 : e
 end

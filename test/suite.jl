@@ -3629,9 +3629,11 @@ end
 
     @testset "XMLTokenizer._skip_element_raw is deprecated and keeps its contract" begin
         skip_raw = XML.XMLTokenizer._skip_element_raw
+        XML.XMLTokenizer._SKIP_ELEMENT_RAW_WARNED[] = false    # the warning comes once per session
         @test (@test_deprecated skip_raw("<a><b/></a><z/>", 1)) == 12    # just past `</a>`
-        @test (@test_deprecated skip_raw("<a></a>", 1)) == 8              # closed at the very end
-        @test (@test_deprecated skip_raw("<a><b>", 1)) == 7               # the document ends first
+        @test skip_raw("<a></a>", 1) == 8                                 # closed at the very end
+        @test skip_raw("<a><b>", 1) == 7                                  # the document ends first
+        @test (@test_logs skip_raw("<a/>", 1)) == 5                       # and only once
     end
 
     @testset "simplevalue binding redirects to simple_value" begin
