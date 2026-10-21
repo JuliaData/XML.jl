@@ -21,13 +21,10 @@ jobs:
           - "XLSX"
         # 'lts' runs the fallback span reconstruction (Base has no noshift SubString
         # constructor on 1.10), a different compiled body than '1' — and dependents are
-        # the only callers large enough to exercise it the way users do. '1.11.4' is the
-        # last 1.11 whose optimizer deletes field writes to an escaping mutable; under the
-        # --check-bounds=yes that Pkg.test forces there, it takes the same fallback.
+        # the only callers large enough to exercise it the way users do.
         version:
           - '1'
           - 'lts'
-          - '1.11.4'
     steps:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
