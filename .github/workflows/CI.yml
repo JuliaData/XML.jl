@@ -54,7 +54,9 @@ jobs:
     # coverage off lets the numeric allocation guards assert (coverage counters allocate
     # inside the measured calls, so the guards skip themselves under coverage).
     # 'lts' is a third body again: Base has no noshift SubString constructor on 1.10,
-    # so that build selects the two-branch fallback under either flag.
+    # so that build selects the two-branch fallback under either flag. 'pre', the latest
+    # prerelease, runs the next Julia ahead of its release: from 1.14 the default build
+    # selects `Base.raw_substring`, and Base defines `StringView`.
     name: Julia ${{ matrix.version }} - ubuntu-latest - x64 - default-bounds allocation guards
     runs-on: ubuntu-latest
     strategy:
@@ -63,6 +65,7 @@ jobs:
         version:
           - '1'
           - 'lts'
+          - 'pre'
     steps:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3

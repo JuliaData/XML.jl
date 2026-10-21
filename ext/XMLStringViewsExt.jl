@@ -10,25 +10,30 @@ module XMLStringViewsExt
 using XML: XML
 using StringViews: StringView
 
-# Each method returns exactly the concrete type of its argument, which is what keeps the entry
-# type-stable. A `StringView` over a view of a whole `Vector{UInt8}` is rebuilt the same way,
-# since `view(bytes, 1:length(bytes))` has the type of every such view. A `StringView` over
-# anything else gets no method: rebuilt from bytes it would come back as a different type, and
-# the entry refuses it instead, when its document needs the rewrite. The `SubString` forms are
-# what `_drop_bom` produces when such a document opens with an encoding signature.
-const _ByteView = SubArray{UInt8, 1, Vector{UInt8}, Tuple{UnitRange{Int}}, true}
+# From Julia 1.14, Base defines `StringView`, and XML.jl defines these methods for it. A
+# StringViews.jl that takes its type from Base needs nothing more here; defining the methods here
+# too would overwrite XML.jl's own.
+if !(isdefined(Base, :StringView) && StringView === Base.StringView)
+    # Each method returns exactly the concrete type of its argument, which is what keeps the entry
+    # type-stable. A `StringView` over a view of a whole `Vector{UInt8}` is rebuilt the same way,
+    # since `view(bytes, 1:length(bytes))` has the type of every such view. A `StringView` over
+    # anything else gets no method: rebuilt from bytes it would come back as a different type, and
+    # the entry refuses it instead, when its document needs the rewrite. The `SubString` forms are
+    # what `_drop_bom` produces when such a document opens with an encoding signature.
+    const _ByteView = SubArray{UInt8, 1, Vector{UInt8}, Tuple{UnitRange{Int}}, true}
 
-XML._rebuild_source(::StringView{Vector{UInt8}}, bytes::Vector{UInt8}) = StringView(bytes)
-XML._rebuild_source(::SubString{StringView{Vector{UInt8}}}, bytes::Vector{UInt8}) =
-    SubString(StringView(bytes))
-XML._rebuild_source(::StringView{_ByteView}, bytes::Vector{UInt8}) =
-    StringView(view(bytes, 1:length(bytes)))
-XML._rebuild_source(::SubString{StringView{_ByteView}}, bytes::Vector{UInt8}) =
-    SubString(StringView(view(bytes, 1:length(bytes))))
+    XML._rebuild_source(::StringView{Vector{UInt8}}, bytes::Vector{UInt8}) = StringView(bytes)
+    XML._rebuild_source(::SubString{StringView{Vector{UInt8}}}, bytes::Vector{UInt8}) =
+        SubString(StringView(bytes))
+    XML._rebuild_source(::StringView{_ByteView}, bytes::Vector{UInt8}) =
+        StringView(view(bytes, 1:length(bytes)))
+    XML._rebuild_source(::SubString{StringView{_ByteView}}, bytes::Vector{UInt8}) =
+        SubString(StringView(view(bytes, 1:length(bytes))))
 
-# The tokenizer's byte scan reads a string type it has no method for byte by byte. A
-# `StringView` holds its bytes in an array, which the scan searches as it does a `String`'s.
-XML.XMLTokenizer._findbyte(s::Union{StringView, SubString{<:StringView}}, b::UInt8, i::Int) =
-    XML.XMLTokenizer._findbyte_bytes(codeunits(s), b, i)
+    # The tokenizer's byte scan reads a string type it has no method for byte by byte. A
+    # `StringView` holds its bytes in an array, which the scan searches as it does a `String`'s.
+    XML.XMLTokenizer._findbyte(s::Union{StringView, SubString{<:StringView}}, b::UInt8, i::Int) =
+        XML.XMLTokenizer._findbyte_bytes(codeunits(s), b, i)
+end
 
 end

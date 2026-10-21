@@ -309,6 +309,8 @@ doc = open("very_large.xml") do io
 end
 ```
 
+From Julia 1.14, `StringView` is part of Base, so `using XML, Mmap` is enough; on earlier versions it comes from StringViews.jl, as above.
+
 The reader keeps the string type it is given: the document is walked through the mapping instead of being copied into the heap, and accessors return views into the mapped bytes. `Node` and `FlatNode` do not: they copy the document into a `String` before they parse it, so a mapping saves them no memory.
 
 Opening costs one probe of the prolog, about 25 ns on a mapped 14 MB document, LF or CR LF alike:
