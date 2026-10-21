@@ -280,7 +280,10 @@ end
 # heap-boxes the clean-path return, 32 B per value (#105/#113 class). A branch resolved
 # by dispatch costs the clean path nothing.
 _normalize_input_eol(s::String) = occursin('\r', s) ? _rewrite_content_eol(s) : s
-_normalize_input_eol(s::SubString{String}) = occursin('\r', s) ? _rewrite_content_eol(s) : s
+# Under Julia 1.10, a `SubString{String}`'s own search for a character decodes every
+# character; `XMLTokenizer._findbyte` searches its parent's bytes with `memchr` instead.
+_normalize_input_eol(s::SubString{String}) =
+    XMLTokenizer._findbyte(s, UInt8('\r'), 1) === nothing ? s : _rewrite_content_eol(s)
 _normalize_input_eol(s::AbstractString) = s
 
 # §2.11 for a document that was NOT rewritten at the entry: normalize one value's own bytes
