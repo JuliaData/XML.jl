@@ -5182,6 +5182,22 @@ Base.thisind(w::WrappedSource, i::Int) = thisind(w.s, i)
             @test measure(large) == measure(small)
         end
     end
+
+    @testset "declarations are applied in proportion to the document" begin
+        # The default makes the entry walk every start tag of `e`, and changes nothing, since
+        # each tag writes the attribute: the source is kept as it is. The walk searches the
+        # document through the source's own type; a search on the code units of a source like
+        # this one copies them all on each call under Julia 1.13.
+        doc(k) = "<!DOCTYPE r [<!ATTLIST e a CDATA \"d\">]><r>" * repeat("<e a=\"x\"/>", k) * "</r>"
+        small, large = WrappedSource(doc(1_000)), WrappedSource(doc(2_000))
+        @test parse(large, LazyNode) isa LazyNode{WrappedSource}
+        @test length(children(only(elements(parse(large, LazyNode))))) == 2_000
+        measure(s) = @allocated parse(s, LazyNode)          # function barrier
+        measure(small); measure(large)
+        if Base.JLOptions().code_coverage == 0      # coverage counters allocate
+            @test measure(large) < 3 * measure(small)
+        end
+    end
 end
 
 # Each included suite is wrapped in a @testset so a load-time error in one file can't skip the rest.

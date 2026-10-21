@@ -600,34 +600,34 @@ end
 # defaults supplied as `_rewrite_walk!` does. The DOCTYPE is read by the tokenizer. On any
 # form this walk does not expect it returns `(false, nothing)`, and `_rewrite_walk!` reads
 # the document instead; otherwise `(true, bytes)`, `bytes` being `nothing` when nothing was
-# rewritten.
+# rewritten. Every search for a byte goes through `_findbyte_cu`.
 function _rewrite_tags(s::AbstractString, attrs::Dict{String, Vector{_DeclaredAttr}})
     cu = codeunits(s)
     n = length(cu)
     out = nothing
     pos = 1
     written = Bool[]
-    i = findnext(==(UInt8('<')), cu, _after_doctype(s))
+    i = _findbyte_cu(s, cu, UInt8('<'), _after_doctype(s))
     while i !== nothing && i < n
         b = cu[i + 1]
         if b == UInt8('/')                                   # an end tag: nothing in it counts
-            i = findnext(==(UInt8('<')), cu, i + 2)
+            i = _findbyte_cu(s, cu, UInt8('<'), i + 2)
             continue
         elseif b == UInt8('?')                               # a processing instruction
-            j = _find_bytes(cu, (UInt8('?'), UInt8('>')), i + 2)
+            j = _find_bytes(s, cu, (UInt8('?'), UInt8('>')), i + 2)
             j == 0 && return (false, nothing)
-            i = findnext(==(UInt8('<')), cu, j + 2)
+            i = _findbyte_cu(s, cu, UInt8('<'), j + 2)
             continue
         elseif b == UInt8('!')
             if i + 3 <= n && _spells(cu, i + 2, (UInt8('-'), UInt8('-')))
-                j = _find_bytes(cu, (UInt8('-'), UInt8('-'), UInt8('>')), i + 4)
+                j = _find_bytes(s, cu, (UInt8('-'), UInt8('-'), UInt8('>')), i + 4)
             elseif i + 8 <= n && _spells(cu, i + 2, _CDATA_OPENING)
-                j = _find_bytes(cu, (UInt8(']'), UInt8(']'), UInt8('>')), i + 9)
+                j = _find_bytes(s, cu, (UInt8(']'), UInt8(']'), UInt8('>')), i + 9)
             else
                 return (false, nothing)
             end
             j == 0 && return (false, nothing)
-            i = findnext(==(UInt8('<')), cu, j + 3)
+            i = _findbyte_cu(s, cu, UInt8('<'), j + 3)
             continue
         end
         _is_name_start_byte(b) || return (false, nothing)
@@ -678,7 +678,7 @@ function _rewrite_tags(s::AbstractString, attrs::Dict{String, Vector{_DeclaredAt
             (k <= n && (cu[k] == UInt8('"') || cu[k] == UInt8('\''))) || return (false, nothing)
             q = cu[k]
             v0 = k
-            v1 = findnext(==(q), cu, k + 1)
+            v1 = _findbyte_cu(s, cu, q, k + 1)
             v1 === nothing && return (false, nothing)
             k = v1 + 1
             current === nothing && continue
@@ -697,7 +697,7 @@ function _rewrite_tags(s::AbstractString, attrs::Dict{String, Vector{_DeclaredAt
             _write_reduced!(out, inner, nothing, q, 1)
             pos = v1
         end
-        i = findnext(==(UInt8('<')), cu, k)
+        i = _findbyte_cu(s, cu, UInt8('<'), k)
     end
     out === nothing && return (true, nothing)
     pos <= n && Base.write(out, SubString(s, pos))
@@ -717,11 +717,24 @@ end
 
 const _CDATA_OPENING = Tuple(codeunits("[CDATA["))   # after the `<!`
 
-# The index at or after `i` where the bytes `seq` start, or 0.
-function _find_bytes(cu, seq::NTuple{N, UInt8}, i::Int) where {N}
+# The index at or after `i` of the byte `b` in `cu`, the code units of `s`, or `nothing`.
+# Code units that are an array of bytes, as those of a `StringView`, or that belong to a
+# `String` or a `SubString{String}`, are searched with `memchr`. Those of another string
+# type claim to be a dense array too, and Julia 1.13 copies them all on each such search:
+# `XMLTokenizer._findbyte` reads that type byte by byte instead.
+const _StringCodeUnits = Base.CodeUnits{UInt8, <:Union{String, SubString{String}}}
+@inline _findbyte_cu(s::AbstractString, cu, b::UInt8, i::Int) = findnext(==(b), cu, i)
+@inline _findbyte_cu(s::AbstractString, cu::Base.CodeUnits{UInt8}, b::UInt8, i::Int) =
+    XMLTokenizer._findbyte(s, b, i)
+@inline _findbyte_cu(s::AbstractString, cu::_StringCodeUnits, b::UInt8, i::Int) =
+    findnext(==(b), cu, i)
+
+# The first index at or after `i` where the bytes `seq` start in `cu`, the code units of
+# `s`, or 0 if they start nowhere.
+function _find_bytes(s::AbstractString, cu, seq::NTuple{N, UInt8}, i::Int) where {N}
     n = length(cu)
     while true
-        j = findnext(==(seq[1]), cu, i)
+        j = _findbyte_cu(s, cu, seq[1], i)
         (j === nothing || j + N - 1 > n) && return 0
         _spells(cu, j, seq) && return j
         i = j + 1
