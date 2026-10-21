@@ -65,7 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`sourcetext` on a `LazyNode` element ran the tokenizer over the whole element** ([#157](https://github.com/JuliaData/XML.jl/issues/157)): finding where the element ends built a token for every tag inside it. It now uses the byte scan that `skip_element!` steps with, which builds none. On the 64 MB element of the issue, `sourcetext`, `sourcespan` and `splicetext` drop from about 262 to 66 ms; on one `item` of the benchmark document, `sourcespan` drops from 1.29 µs to 314 ns. An element the document never closes still raises an error.
 
-- **`skip_element!` stopped inside a comment whose text opens with `>` or `->`**: the byte scan it steps with looked for the comment's `-->` from the comment's `<`. In `<!--></a>-->`, the dashes of `<!--` and the `>` after them read as the close, and the `</a>` inside the comment ended the element. The close is now looked for after `<!--`.
+- **`skip_element!` stopped inside a comment whose text opens with `>` or `->`**: the byte scan it steps with looked for the comment's `-->` from the comment's `<`. In `<!--></a>-->`, the dashes of `<!--` and the `>` after them read as the close, and the `</a>` inside the comment ended the element. The close is now looked for after `<!--`. The same held for a processing instruction without a target, as in `<?></a>?>`: its close is now looked for after `<?`.
 
 ## [0.4.6] - 2026-08-17
 

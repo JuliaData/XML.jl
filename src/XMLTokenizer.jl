@@ -622,6 +622,44 @@ end
     return n + 1
 end
 
+# The index of the first byte `b` at or after `i`, or `nothing`; `b` is ASCII, so it never falls
+# inside a multi-byte character. A `String` is searched with `memchr`. So is a
+# `SubString{String}`, through its parent's bytes, since its own search for a character decodes
+# every character under Julia 1.10. Any other string type is read byte by byte. On such a type,
+# a search for a character decodes every character, and a byte search on the code units copies
+# them all under Julia 1.13, which takes them for a dense array. The StringViews extension gives
+# `StringView` back its `memchr`.
+@inline function _findbyte(data::AbstractString, b::UInt8, i::Int)
+    n = ncodeunits(data)
+    @inbounds while i <= n
+        codeunit(data, i) == b && return i
+        i += 1
+    end
+    return nothing
+end
+@inline _findbyte(s::String, b::UInt8, i::Int) = findnext(==(Char(b)), s, i)
+@inline _findbyte(s::SubString{String}, b::UInt8, i::Int) =
+    findnext(==(b), view(codeunits(parent(s)), s.offset+1:s.offset+ncodeunits(s)), i)
+
+# Find the end of a comment, a CDATA section or a processing instruction whose text starts at
+# `j`: the first `>` that the bytes `before` precede, all of them within the text. A close thus
+# cannot reuse the bytes of its own opening. Returns the index just past that `>`, or 0 if the
+# document ends first. Only `>` is searched for: a search for a sequence such as `-->` allocates
+# at each occurrence of its first character, on a generic `AbstractString` and on a
+# `SubString{String}` under Julia 1.10.
+@inline function _close_end(data::AbstractString, j::Int, n::Int,
+                            before::NTuple{N, UInt8}) where {N}
+    k = j
+    while k <= n
+        gt = _findbyte(data, UInt8('>'), k)
+        gt === nothing && return 0
+        a = gt - N                          # where `before` starts if it ends at `gt - 1`
+        a >= j && ntuple(m -> codeunit(data, a + m - 1), Val(N)) === before && return gt + 1
+        k = gt + 1
+    end
+    return 0
+end
+
 # `openpos`: 1-based index of the `<` starting an element. Returns the 1-based index just
 # past its matching close (`</name>` or `/>`), or 0 if the document ends first.
 function _element_end(data::AbstractString, openpos::Int)
@@ -629,7 +667,7 @@ function _element_end(data::AbstractString, openpos::Int)
     depth = 0
     i = openpos
     @inbounds while i <= n
-        lt = findnext('<', data, i)
+        lt = _findbyte(data, UInt8('<'), i)
         lt === nothing && return 0
         i = lt
         nxt = (i + 1 <= n) ? codeunit(data, i + 1) : 0x00
@@ -639,22 +677,21 @@ function _element_end(data::AbstractString, openpos::Int)
                 # The close is looked for after the four bytes of `<!--`: a comment's text may
                 # open with `>` or `->`, which would otherwise complete a `-->` with the dashes
                 # of the opening itself.
-                cl = i + 4 <= n ? findnext("-->", data, i + 4) : nothing
-                cl === nothing && return 0
-                i = last(cl) + 1
+                i = _close_end(data, i + 4, n, (UInt8('-'), UInt8('-')))
+                i == 0 && return 0
             elseif nx2 == UInt8('[')        # <![CDATA[ ... ]]>
-                cl = findnext("]]>", data, i)
-                cl === nothing && return 0
-                i = last(cl) + 1
+                i = _close_end(data, i + 3, n, (UInt8(']'), UInt8(']')))
+                i == 0 && return 0
             else                            # <!DOCTYPE ...> / other <! declaration
                 e = _scan_tag_end(data, i, n)
                 e > n && return 0
                 i = e + 1
             end
         elseif nxt == UInt8('?')            # <? ... ?>
-            cl = findnext("?>", data, i)
-            cl === nothing && return 0
-            i = last(cl) + 1
+            # As for a comment, the close is looked for after `<?`: in `<?>`, the `?` of the
+            # opening and the `>` after it do not close.
+            i = _close_end(data, i + 2, n, (UInt8('?'),))
+            i == 0 && return 0
         elseif nxt == UInt8('/')            # </name> close
             e = _scan_tag_end(data, i, n)
             e > n && return 0

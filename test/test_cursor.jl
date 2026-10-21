@@ -255,6 +255,7 @@ using XML: Cursor, next!, for_each_child, @for_each_child, skip_element!, eof, n
             ("""<r><a x="1>2"><y/></a><b/></r>""",             ["a", "b"]),     # > inside attr value
             ("<r><a><a><a/></a></a><b/></r>",                  ["a", "b"]),     # nested same name
             ("<r><a><?pi <x> ?></a><b/></r>",                  ["a", "b"]),     # markup-ish PI body
+            ("<r><a><?></a>?></a><d/></r>",                    ["a", "d"]),     # PI text opens with >
             ("<D><F><P><name>n</name></P></F><F><P/></F></D>", ["F", "F"]),     # minified
         ]
         for (doc, exp) in cases
