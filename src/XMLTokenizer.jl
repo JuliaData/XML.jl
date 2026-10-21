@@ -599,10 +599,12 @@ end
 # scan that counts element-nesting depth and respects CDATA / comment / PI / quoted-`>`
 # boundaries. O(subtree bytes) but with a far tighter loop than full tokenization (no
 # token emission, no SubString construction). Used by `skip_element!` for structural
-# walks (e.g. layer discovery) that classify a node but don't need its contents.
+# walks (e.g. layer discovery) that classify a node but don't need its contents, and by
+# `sourcetext(::LazyNode)` to find where an element ends.
 
 # Find the `>` ending the tag whose `<` is at index `i`, skipping quoted attribute
-# values (where `>` may appear literally). Returns the index of that `>` (or `n`).
+# values (where `>` may appear literally). Returns the index of that `>`, or `n + 1` if the
+# document ends first.
 @inline function _scan_tag_end(data::AbstractString, i::Int, n::Int)
     j = i + 1
     @inbounds while j <= n
@@ -617,52 +619,131 @@ end
         end
         j += 1
     end
-    return n
+    return n + 1
 end
 
-# `openpos`: 1-based index of the `<` starting the element to skip. Returns the 1-based
-# index just past its matching close (`</name>` or `/>`), or `ncodeunits(data)+1` if the
-# document ends first (lenient, mirroring the tokenizer's EOF handling).
-function _skip_element_raw(data::AbstractString, openpos::Int)
+# The index of the first byte `b` at or after `i`, or `nothing`; `b` is ASCII, so it never falls
+# inside a multi-byte character. A `String` is searched through its bytes, with `memchr` past a
+# short stretch. So is a `SubString{String}`, through its parent's bytes, since its own search
+# for a character decodes every character under Julia 1.10. Any other string type is read byte
+# by byte. On such a type, a search for a character decodes every character, and a byte search
+# on the code units copies them all under Julia 1.13, which takes them for a dense array. The
+# StringViews extension searches a `StringView` through its bytes, as a `String`.
+@inline function _findbyte(data::AbstractString, b::UInt8, i::Int)
+    n = ncodeunits(data)
+    @inbounds while i <= n
+        codeunit(data, i) == b && return i
+        i += 1
+    end
+    return nothing
+end
+@inline _findbyte(s::String, b::UInt8, i::Int) = _findbyte_bytes(codeunits(s), b, i)
+@inline _findbyte(s::SubString{String}, b::UInt8, i::Int) =
+    _findbyte_bytes(view(codeunits(parent(s)), s.offset+1:s.offset+ncodeunits(s)), b, i)
+
+# The search through bytes that `memchr` can scan. The first sixteen are read one at a time:
+# between dense tags the byte is mostly found within them, where the call to `memchr` costs
+# more than the loop. `memchr` takes the rest. It searches bytes, not characters, since the
+# stretch read one at a time may end inside a multi-byte character.
+@inline function _findbyte_bytes(bytes::AbstractVector{UInt8}, b::UInt8, i::Int)
+    n = length(bytes)
+    stop = min(n, i + 15)
+    @inbounds while i <= stop
+        bytes[i] == b && return i
+        i += 1
+    end
+    return findnext(==(b), bytes, i)
+end
+
+# Find the end of a comment, a CDATA section or a processing instruction whose text starts at
+# `j`: the first `>` that the bytes `before` precede, all of them within the text. A close thus
+# cannot reuse the bytes of its own opening. Returns the index just past that `>`, or 0 if the
+# document ends first. Only `>` is searched for: a search for a sequence such as `-->` allocates
+# at each occurrence of its first character, on a generic `AbstractString` and on a
+# `SubString{String}` under Julia 1.10.
+@inline function _close_end(data::AbstractString, j::Int, n::Int,
+                            before::NTuple{N, UInt8}) where {N}
+    k = j
+    while k <= n
+        gt = _findbyte(data, UInt8('>'), k)
+        gt === nothing && return 0
+        a = gt - N                          # where `before` starts if it ends at `gt - 1`
+        a >= j && ntuple(m -> codeunit(data, a + m - 1), Val(N)) === before && return gt + 1
+        k = gt + 1
+    end
+    return 0
+end
+
+# `openpos`: 1-based index of the `<` starting an element. Returns the 1-based index just
+# past its matching close (`</name>` or `/>`), or 0 if the document ends first.
+function _element_end(data::AbstractString, openpos::Int)
     n = ncodeunits(data)
     depth = 0
     i = openpos
     @inbounds while i <= n
-        lt = findnext('<', data, i)
-        lt === nothing && return n + 1
+        lt = _findbyte(data, UInt8('<'), i)
+        lt === nothing && return 0
         i = lt
         nxt = (i + 1 <= n) ? codeunit(data, i + 1) : 0x00
         if nxt == UInt8('!')
             nx2 = (i + 2 <= n) ? codeunit(data, i + 2) : 0x00
             if nx2 == UInt8('-')            # <!-- comment -->
-                cl = findnext("-->", data, i)
-                cl === nothing && return n + 1
-                i = last(cl) + 1
+                # The close is looked for after the four bytes of `<!--`: a comment's text may
+                # open with `>` or `->`, which would otherwise complete a `-->` with the dashes
+                # of the opening itself.
+                i = _close_end(data, i + 4, n, (UInt8('-'), UInt8('-')))
+                i == 0 && return 0
             elseif nx2 == UInt8('[')        # <![CDATA[ ... ]]>
-                cl = findnext("]]>", data, i)
-                cl === nothing && return n + 1
-                i = last(cl) + 1
+                i = _close_end(data, i + 3, n, (UInt8(']'), UInt8(']')))
+                i == 0 && return 0
             else                            # <!DOCTYPE ...> / other <! declaration
-                i = _scan_tag_end(data, i, n) + 1
+                e = _scan_tag_end(data, i, n)
+                e > n && return 0
+                i = e + 1
             end
         elseif nxt == UInt8('?')            # <? ... ?>
-            cl = findnext("?>", data, i)
-            cl === nothing && return n + 1
-            i = last(cl) + 1
+            # As for a comment, the close is looked for after `<?`: in `<?>`, the `?` of the
+            # opening and the `>` after it do not close.
+            i = _close_end(data, i + 2, n, (UInt8('?'),))
+            i == 0 && return 0
         elseif nxt == UInt8('/')            # </name> close
             e = _scan_tag_end(data, i, n)
+            e > n && return 0
             depth -= 1
             i = e + 1
             depth == 0 && return i
         else                                # <name ...> open or <name .../> self-close
             e = _scan_tag_end(data, i, n)
+            e > n && return 0
             self_closed = e > 1 && codeunit(data, e - 1) == UInt8('/')
             i = e + 1
             self_closed || (depth += 1)
             depth == 0 && return i
         end
     end
-    return n + 1
+    return 0
+end
+
+const _SKIP_ELEMENT_RAW_MSG = """
+    `XML.XMLTokenizer._skip_element_raw` is deprecated and will be removed in XML.jl v0.5.
+    It is internal to the tokenizer. To find where an element ends, take its `LazyNode` and
+    call `sourcespan(node)`, or `splicetext(node, replacement)` to cut it out: both find the
+    end with the same byte scan."""
+
+# Once per session: `Base.depwarn` takes a backtrace on every call, even after its message is
+# shown, which costs hundreds of microseconds under `--depwarn=yes` (as `Pkg.test` runs).
+const _SKIP_ELEMENT_RAW_WARNED = Ref(false)
+
+# The lenient form, kept for callers outside the package that stepped over an element with it:
+# `ncodeunits(data) + 1` when the document ends first, as when the element closes exactly at
+# the end.
+function _skip_element_raw(data::AbstractString, openpos::Int)
+    if !_SKIP_ELEMENT_RAW_WARNED[]
+        _SKIP_ELEMENT_RAW_WARNED[] = true
+        Base.depwarn(_SKIP_ELEMENT_RAW_MSG, :_skip_element_raw)
+    end
+    e = _element_end(data, openpos)
+    e == 0 ? ncodeunits(data) + 1 : e
 end
 
 #-----------------------------------------------------------------------# Utility functions

@@ -3627,6 +3627,15 @@ end
         end
     end
 
+    @testset "XMLTokenizer._skip_element_raw is deprecated and keeps its contract" begin
+        skip_raw = XML.XMLTokenizer._skip_element_raw
+        XML.XMLTokenizer._SKIP_ELEMENT_RAW_WARNED[] = false    # the warning comes once per session
+        @test (@test_deprecated skip_raw("<a><b/></a><z/>", 1)) == 12    # just past `</a>`
+        @test skip_raw("<a></a>", 1) == 8                                 # closed at the very end
+        @test skip_raw("<a><b>", 1) == 7                                  # the document ends first
+        @test (@test_logs skip_raw("<a/>", 1)) == 5                       # and only once
+    end
+
     @testset "simplevalue binding redirects to simple_value" begin
         el = Element("x", "val")
         @test XML.simplevalue(el) == simple_value(el)
@@ -4731,6 +4740,45 @@ end
             doc = parse(xml, LazyNode)
             @test sourcetext(doc[1]) == xml
         end
+
+        @testset "an element ends at its own close, past markup-like content" begin
+            # `<`, `>` and close tags inside CDATA, comments, processing instructions and
+            # attribute values; nested elements of the same name; a multi-byte character just
+            # before the close. The element's text stops at its own close, and `<z/>` follows.
+            for inner in ("<![CDATA[</a> <b>]]>", "<![CDATA[]]>", "<!-- </a><b> -->", "<!--></a>-->",
+                          "<!---></a>-->", "<?pi </a> ?>", "<?></a>?>", "<a><a/></a>", "é",
+                          "<b x=\"1>2\" y='3>4'/>")
+                xml = "<r><a>" * inner * "</a><z/></r>"
+                @testset "$(repr(inner))" for R in (String, StringView)
+                    src = R === String ? xml : StringView(codeunits(xml))
+                    a = parse(src, LazyNode)[1][1]
+                    @test sourcetext(a) == "<a>" * inner * "</a>"
+                    @test splicetext(a, "<a/>") == "<r><a/><z/></r>"
+                end
+            end
+            # text of every length on both sides of the stretch the scan reads a byte at a time
+            # before `memchr`, with a multi-byte character across its end
+            for len in 0:40
+                inner = "x" * "é"^len * "<b/>" * "<!--" * "é"^len * "-->"
+                xml = "<r><a>" * inner * "</a><z/></r>"
+                for src in (xml, SubString("xx" * xml, 3), StringView(codeunits(xml)))
+                    @test sourcetext(parse(src, LazyNode)[1][1]) == "<a>" * inner * "</a>"
+                end
+            end
+            # a view that starts past the root of its string
+            sub = SubString("xx<r><a>é<!--></a>--></a><z/></r>", 3)
+            a = parse(sub, LazyNode)[1][1]
+            @test sourcetext(a) == "<a>é<!--></a>--></a>"
+            @test SubString(sub, sourcespan(a)) == sourcetext(a)
+            # an element the document never closes, nor a view whose parent goes on to close it
+            @test_throws "Could not find closing tag" sourcetext(parse("<r><a><b/>", LazyNode)[1][1])
+            whole = "<r><a><!-- c --></a></r>"
+            first_child(n) = first(XML.eachchildnode(n))     # reads no further than the child
+            for cut in (SubString(whole, 1, 13), StringView(view(Vector{UInt8}(whole), 1:13)))
+                a = first_child(first_child(parse(cut, LazyNode)))
+                @test_throws "Could not find closing tag" sourcetext(a)
+            end
+        end
     end
 
     @testset "sourcespan" begin
@@ -5112,6 +5160,26 @@ Base.thisind(w::WrappedSource, i::Int) = thisind(w.s, i)
             @test pairsof(attributes(LazyNode(c))) == ["b" => "2"]
             skip_element!(c)
             @test cursor_walk(c) == cursor_walk(skip_element!(at_e(doc)))
+        end
+    end
+
+    @testset "an element's end is found without allocating per comment, CDATA or PI" begin
+        # `sourcetext` and `skip_element!` find where an element ends with a byte scan. A search
+        # for a sequence such as `-->` allocates at each occurrence of its first character on a
+        # source like this one, so the scan searches for single characters only.
+        unit = "<!-- c - </e> --><![CDATA[ ]] </e> ]]><?pi ? </e> ?><y/>"
+        doc(k) = "<r><e>" * repeat(unit, k) * "</e><z/></r>"
+        el(k) = first(elements(only(elements(parse(WrappedSource(doc(k)), LazyNode)))))
+        @test sourcetext(el(100)) == "<e>" * repeat(unit, 100) * "</e>"
+        c = parse(WrappedSource(doc(100)), Cursor)
+        while next!(c) !== nothing && tag(c) != "e" end
+        skip_element!(c)
+        @test next!(c) !== nothing && tag(c) == "z"
+        measure(n) = @allocations sourcetext(n)          # function barrier
+        small, large = el(1), el(100)
+        measure(small); measure(large)
+        if Base.JLOptions().code_coverage == 0      # coverage counters allocate
+            @test measure(large) == measure(small)
         end
     end
 end
