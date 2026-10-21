@@ -623,12 +623,12 @@ end
 end
 
 # The index of the first byte `b` at or after `i`, or `nothing`; `b` is ASCII, so it never falls
-# inside a multi-byte character. A `String` is searched with `memchr`. So is a
-# `SubString{String}`, through its parent's bytes, since its own search for a character decodes
-# every character under Julia 1.10. Any other string type is read byte by byte. On such a type,
-# a search for a character decodes every character, and a byte search on the code units copies
-# them all under Julia 1.13, which takes them for a dense array. The StringViews extension gives
-# `StringView` back its `memchr`.
+# inside a multi-byte character. A `String` is searched through its bytes, with `memchr` past a
+# short stretch. So is a `SubString{String}`, through its parent's bytes, since its own search
+# for a character decodes every character under Julia 1.10. Any other string type is read byte
+# by byte. On such a type, a search for a character decodes every character, and a byte search
+# on the code units copies them all under Julia 1.13, which takes them for a dense array. The
+# StringViews extension searches a `StringView` through its bytes, as a `String`.
 @inline function _findbyte(data::AbstractString, b::UInt8, i::Int)
     n = ncodeunits(data)
     @inbounds while i <= n
@@ -637,9 +637,23 @@ end
     end
     return nothing
 end
-@inline _findbyte(s::String, b::UInt8, i::Int) = findnext(==(Char(b)), s, i)
+@inline _findbyte(s::String, b::UInt8, i::Int) = _findbyte_bytes(codeunits(s), b, i)
 @inline _findbyte(s::SubString{String}, b::UInt8, i::Int) =
-    findnext(==(b), view(codeunits(parent(s)), s.offset+1:s.offset+ncodeunits(s)), i)
+    _findbyte_bytes(view(codeunits(parent(s)), s.offset+1:s.offset+ncodeunits(s)), b, i)
+
+# The search through bytes that `memchr` can scan. The first sixteen are read one at a time:
+# between dense tags the byte is mostly found within them, where the call to `memchr` costs
+# more than the loop. `memchr` takes the rest. It searches bytes, not characters, since the
+# stretch read one at a time may end inside a multi-byte character.
+@inline function _findbyte_bytes(bytes::AbstractVector{UInt8}, b::UInt8, i::Int)
+    n = length(bytes)
+    stop = min(n, i + 15)
+    @inbounds while i <= stop
+        bytes[i] == b && return i
+        i += 1
+    end
+    return findnext(==(b), bytes, i)
+end
 
 # Find the end of a comment, a CDATA section or a processing instruction whose text starts at
 # `j`: the first `>` that the bytes `before` precede, all of them within the text. A close thus

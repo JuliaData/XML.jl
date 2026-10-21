@@ -4756,6 +4756,15 @@ end
                     @test splicetext(a, "<a/>") == "<r><a/><z/></r>"
                 end
             end
+            # text of every length on both sides of the stretch the scan reads a byte at a time
+            # before `memchr`, with a multi-byte character across its end
+            for len in 0:40
+                inner = "x" * "é"^len * "<b/>" * "<!--" * "é"^len * "-->"
+                xml = "<r><a>" * inner * "</a><z/></r>"
+                for src in (xml, SubString("xx" * xml, 3), StringView(codeunits(xml)))
+                    @test sourcetext(parse(src, LazyNode)[1][1]) == "<a>" * inner * "</a>"
+                end
+            end
             # a view that starts past the root of its string
             sub = SubString("xx<r><a>é<!--></a>--></a><z/></r>", 3)
             a = parse(sub, LazyNode)[1][1]

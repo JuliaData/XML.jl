@@ -27,9 +27,8 @@ XML._rebuild_source(::SubString{StringView{_ByteView}}, bytes::Vector{UInt8}) =
     SubString(StringView(view(bytes, 1:length(bytes))))
 
 # The tokenizer's byte scan reads a string type it has no method for byte by byte. A
-# `StringView` searches an ASCII character with `memchr` when its bytes are contiguous, and
-# keeps that search.
+# `StringView` holds its bytes in an array, which the scan searches as it does a `String`'s.
 XML.XMLTokenizer._findbyte(s::Union{StringView, SubString{<:StringView}}, b::UInt8, i::Int) =
-    findnext(==(Char(b)), s, i)
+    XML.XMLTokenizer._findbyte_bytes(codeunits(s), b, i)
 
 end
