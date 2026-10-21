@@ -514,6 +514,29 @@ end
     @test XML.XMLTokenizer._noshift_substring(xml, t1.offset, t1.ncodeunits) == "té"
 end
 
+@testset "token views are rebuilt without a deprecated Base constructor" begin
+    # Julia 1.14 deprecates the noshift `SubString` constructor for `Base.raw_substring`. A process
+    # that turns deprecations into errors reads every kind of token through every reader, so the
+    # body this build selected calls nothing deprecated.
+    code = """
+        using XML
+        doc = "<?xml version='1.0'?><!DOCTYPE r><r a='1'><b>t</b><!--c--><![CDATA[d]]><?p x?></r>"
+        for R in (Node, FlatNode, LazyNode)
+            XML.write(parse(doc, R))
+        end
+        cur = Cursor(doc)
+        while next!(cur) !== nothing
+            nodetype(cur) === Element && (tag(cur); attributes(cur))
+        end
+        """
+    mktemp() do path, io
+        write(io, code)
+        close(io)
+        julia = `$(Base.julia_cmd()) --startup-file=no --depwarn=error`
+        @test success(run(ignorestatus(`$julia --project=$(Base.active_project()) $path`)))
+    end
+end
+
 #-----------------------------------------------------------------------# Edge cases
 @testset "adjacent tags" begin
     xml = "<a></a><b></b>"

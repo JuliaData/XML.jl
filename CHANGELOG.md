@@ -33,6 +33,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Reading under Julia 1.14 no longer calls a deprecated constructor**: the default build rebuilt each token's text with the `SubString` constructor that Julia 1.14 deprecates. Under `Pkg.test`, where deprecation warnings are on, XML.jl's own suite ran for over 40 minutes instead of about one, and its allocation guards failed. The default build now calls `Base.raw_substring`, which replaces that constructor.
+
+- **A `StringView` reads without StringViews.jl under Julia 1.14**: Julia 1.14 defines `StringView` in Base, and XML.jl now defines the methods for that type itself. Without StringViews.jl loaded, a document that declares entities or attribute defaults was refused with an `ArgumentError`, and the byte search read the source one byte at a time.
+
+- **`wellformed = :strict` rejects overlong UTF-8 sequences under Julia 1.14**: Julia 1.14 decodes an overlong sequence where earlier versions raise `Base.InvalidCharError`. `:strict` thus accepted one that decodes to a legal character, such as `\xc1\x81` for `A`; it now raises the same error as on earlier versions.
+
 - **`using XML` no longer conflicts with `Base.eof`** ([#156](https://github.com/JuliaData/XML.jl/issues/156)): `XML.eof` now extends the Base function for `Cursor`, so bare, qualified, and explicitly imported `eof` calls work with both cursors and ordinary Julia streams. Cursor end-of-stream behavior is unchanged.
 
 - **The published libxml2 figures were measured with the C trees never freed** ([#138](https://github.com/JuliaData/XML.jl/issues/138)): EzXML attaches its finalizer to a document's node, not to the document, so the `finalize(doc)` the benchmark cells relied on freed nothing, and a benchmark loop allocates too little in Julia to wake the collector; the trees piled up by the gigabyte within a cell until the machine compressed and swapped. Every C-tree cell now frees its tree per sample, outside the timing, and every figure in `README.md` and `PERFORMANCE-v0.4.md` is republished from one campaign: libxml2's build of the 14 MB document goes from a published 47.6 ms to 37.3 ms, its full extraction from 65 to 58 ms, and the XML.jl figures move within noise.

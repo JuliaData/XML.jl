@@ -569,12 +569,24 @@ type parameter is the same whether or not the document declared anything. Each m
 one concrete type, and the fallback returns `nothing`, which `_apply_declarations` turns into an
 `ArgumentError`: either way its result is the argument's own type, for every source type.
 
-An extension supplies the methods for `StringView`, and is loaded whenever a `StringView` can
-exist at all, since the type comes from the package that extension names.
+From Julia 1.14, Base defines `StringView`, and the methods for it follow. Where the type comes
+from StringViews.jl instead, the extension that package triggers supplies the same methods; it is
+loaded whenever such a `StringView` can exist at all.
 """
 _rebuild_source(::AbstractString, ::Vector{UInt8}) = nothing
 _rebuild_source(::String, bytes::Vector{UInt8}) = String(bytes)
 _rebuild_source(::SubString{String}, bytes::Vector{UInt8}) = SubString(String(bytes))
+if isdefined(Base, :StringView)
+    # As in the StringViews extension, which gives the reasons for the four types.
+    const _ByteView = SubArray{UInt8, 1, Vector{UInt8}, Tuple{UnitRange{Int}}, true}
+    _rebuild_source(::Base.StringView{Vector{UInt8}}, bytes::Vector{UInt8}) = Base.StringView(bytes)
+    _rebuild_source(::SubString{Base.StringView{Vector{UInt8}}}, bytes::Vector{UInt8}) =
+        SubString(Base.StringView(bytes))
+    _rebuild_source(::Base.StringView{_ByteView}, bytes::Vector{UInt8}) =
+        Base.StringView(view(bytes, 1:length(bytes)))
+    _rebuild_source(::SubString{Base.StringView{_ByteView}}, bytes::Vector{UInt8}) =
+        SubString(Base.StringView(view(bytes, 1:length(bytes))))
+end
 
 # One walk of the document: spans that need no work are copied, references to declared names are
 # expanded, the value of an attribute declared with a type other than CDATA is written reduced

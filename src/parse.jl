@@ -205,6 +205,16 @@ end
     return !flagged
 end
 
+# An overlong sequence encodes a character in more bytes than it needs, and is malformed UTF-8.
+# Up to Julia 1.13, `UInt32` raises on it; from 1.14 it returns the code point. Read at load time
+# from the conversion itself: where it raises, the test on each character below folds away.
+const _OVERLONG_DECODES = try
+    UInt32(first("\xc1\x81"))
+    true
+catch
+    false
+end
+
 # The decoding walk over `cu[i:j]`, taken after a flagged byte. An ASCII byte is judged in place;
 # at a byte at or above 0x80 the string's `Char` iteration decodes the sequence from that index,
 # which may run past `j`. Returns the index after the last byte consumed.
@@ -217,6 +227,7 @@ end
             k += 1
         else
             c, k = @something iterate(s, k)
+            _OVERLONG_DECODES && Base.isoverlong(c) && throw(Base.InvalidCharError(c))
             cp = UInt32(c)      # raises `Base.InvalidCharError` on a malformed sequence, as `for c in s` does
             _is_xml_char(cp) || _char_range_error(cp)
         end

@@ -87,15 +87,18 @@ end
 # accessor chains' union returns (#113). Default builds compile the bare noshift store
 # (`substring.jl:39-46` @ 1.12.6); its call needs `@inbounds` plus a callsite
 # `@inline`, since elision reaches one inlining level and Base's self-validating
-# constructor does not inline on its own (#111).
-if hasmethod(SubString{String}, Tuple{String, Int, Int, Val{:noshift}}) &&
-   Base.JLOptions().check_bounds != 1
+# constructor does not inline on its own (#111). From Julia 1.14 that store is
+# `Base.raw_substring`, which takes a 1-based first index; the noshift constructor is
+# deprecated there.
+if isdefined(Base, :raw_substring) && Base.JLOptions().check_bounds != 1
+    @inline _noshift_substring(s::AbstractString, offset::Int, ncu::Int) =
+        @inbounds @inline Base.raw_substring(s, offset + 1, ncu)
+elseif hasmethod(SubString{String}, Tuple{String, Int, Int, Val{:noshift}}) &&
+       Base.JLOptions().check_bounds != 1
     @inline _noshift_substring(s::T, offset::Int, ncu::Int) where {T <: AbstractString} =
         @inbounds @inline SubString{T}(s, offset, ncu, Val(:noshift))
-elseif hasmethod(SubString{String}, Tuple{String, Int, Int, Val{:noshift}}) &&
-       VERSION >= v"1.11.5"
-    # 1.11.5+ under `--check-bounds=yes` (`hasmethod` is a generation test — this body
-    # never calls the noshift constructor): keep the branchless checked shape, whose
+elseif VERSION >= v"1.11.5"
+    # 1.11.5+ under `--check-bounds=yes`: keep the branchless checked shape, whose
     # single construction path leaves union returns unboxed under `yes` (#113).
     _noshift_substring(s::AbstractString, offset::Int, ncu::Int) =
         @inline _checked_substring(s, offset, ncu)
@@ -629,8 +632,9 @@ end
 # short stretch. So is a `SubString{String}`, through its parent's bytes, since its own search
 # for a character decodes every character under Julia 1.10. Any other string type is read byte
 # by byte. On such a type, a search for a character decodes every character, and a byte search
-# on the code units copies them all under Julia 1.13, which takes them for a dense array. The
-# StringViews extension searches a `StringView` through its bytes, as a `String`.
+# on the code units copies them all under Julia 1.13, which takes them for a dense array. A
+# `StringView` is searched through its bytes, as a `String`: by the method below from Julia
+# 1.14, where Base defines the type, and by the StringViews extension before.
 @inline function _findbyte(data::AbstractString, b::UInt8, i::Int)
     n = ncodeunits(data)
     @inbounds while i <= n
@@ -642,6 +646,10 @@ end
 @inline _findbyte(s::String, b::UInt8, i::Int) = _findbyte_bytes(codeunits(s), b, i)
 @inline _findbyte(s::SubString{String}, b::UInt8, i::Int) =
     _findbyte_bytes(view(codeunits(parent(s)), s.offset+1:s.offset+ncodeunits(s)), b, i)
+if isdefined(Base, :StringView)
+    @inline _findbyte(s::Union{Base.StringView, SubString{<:Base.StringView}}, b::UInt8, i::Int) =
+        _findbyte_bytes(codeunits(s), b, i)
+end
 
 # The search through bytes that `memchr` can scan. The first sixteen are read one at a time:
 # between dense tags the byte is mostly found within them, where the call to `memchr` costs

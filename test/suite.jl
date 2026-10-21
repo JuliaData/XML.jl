@@ -322,9 +322,12 @@ end
                         ("￾", "FFFE"), ("￿", "FFFF"), ("\xed\xa0\x80", "D800"), ("\xed\xbf\xbf", "DFFF"))
             @test_throws "character U+$cp is outside the legal XML range" parse("<root>$s</root>", Node; wellformed=:strict)
         end
-        # A malformed sequence is not a character: the decode raises `Base.InvalidCharError`.
+        # A malformed sequence is not a character: the decode raises `Base.InvalidCharError`. So is
+        # an overlong one, even where its bits would make a legal character.
         @test_throws Base.InvalidCharError parse("<root>a\xffb</root>", Node; wellformed=:strict)
         @test_throws Base.InvalidCharError parse("<root>a\xc0\x80b</root>", Node; wellformed=:strict)
+        @test_throws Base.InvalidCharError parse("<root>a\xc1\x81b</root>", Node; wellformed=:strict)
+        @test_throws Base.InvalidCharError parse("<root>a\xe0\x81\x81b</root>", Node; wellformed=:strict)
 
         # The decoding loop the scan replaces is its specification, written to return its verdict
         # rather than throw it (a throw costs a backtrace, and the scan's own throws are the ones
@@ -1310,6 +1313,31 @@ end
         @test_throws ArgumentError parse(other, Cursor)
         plain = StringView(codeunits("<!DOCTYPE r [<!ELEMENT r ANY>]><r>&amp;</r>"))
         @test simple_value(only(elements(parse(plain, LazyNode)))) == "&"
+
+        # From Julia 1.14, `StringView` is a type of Base. A process that never loads StringViews.jl
+        # rewrites such a document the same way, and searches its bytes as the extension does.
+        if isdefined(Base, :StringView)
+            code = """
+                using XML
+                check(ok, what) = ok || error("Base.StringView without StringViews.jl: ", what)
+                check(Base.get_extension(XML, :XMLStringViewsExt) === nothing, "extension loaded")
+                sv = Base.StringView(Vector{UInt8}(codeunits(
+                    "<!DOCTYPE r [<!ENTITY t 'hi'><!ATTLIST r d CDATA 'v'>]><r a='&t;'>&t;</r>")))
+                r = only(elements(parse(sv, LazyNode)))
+                check(collect(attributes(r)) == ["a" => "hi", "d" => "v"], "attributes")
+                check(value(only(children(r))) == "hi", "text")
+                check(parse(sv, Cursor) isa Cursor{typeof(sv)}, "Cursor type")
+                generic = which(XML.XMLTokenizer._findbyte, Tuple{AbstractString, UInt8, Int})
+                check(which(XML.XMLTokenizer._findbyte, Tuple{typeof(sv), UInt8, Int}) !== generic,
+                      "byte search")
+                """
+            mktemp() do path, io
+                write(io, code)
+                close(io)
+                julia = `$(Base.julia_cmd()) --startup-file=no --depwarn=error`
+                @test success(run(ignorestatus(`$julia --project=$(Base.active_project()) $path`)))
+            end
+        end
     end
 
     @testset "expansion is bounded, at every wellformed level" begin
