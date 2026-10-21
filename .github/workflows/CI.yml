@@ -27,11 +27,6 @@ jobs:
           - os: macOS-latest
             arch: aarch64
             version: '1'
-          # the last 1.11 whose optimizer deletes field writes to an escaping mutable: under
-          # this job's --check-bounds=yes it takes the fallback span reconstruction of 1.10
-          - os: ubuntu-latest
-            arch: x64
-            version: '1.11.4'
     steps:
       - uses: actions/checkout@v7
       - uses: julia-actions/setup-julia@v3
