@@ -140,7 +140,7 @@ function _xpath_tokenize(expr::AbstractString)
                 i = j
             end
 
-        elseif isspace(c)
+        elseif c == ' ' || c == '\t' || c == '\n' || c == '\r'   # XPath white space is XML's
             i += 1
 
         else
