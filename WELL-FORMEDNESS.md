@@ -1,6 +1,6 @@
 # Well-formedness and validation in XML.jl
 
-XML.jl checks that a document is well-formed, at three levels. It never checks that a document is valid: it is a non-validating processor. This page says what each level rejects, what validation would add, and when an undeclared entity is an error. The README gives the [short version](README.md#well-formedness-and-validation-checks).
+XML.jl checks that a document is well-formed, at three levels. It never checks that a document is valid: it is a non-validating processor. This page says what each level rejects, what validation would add, how the declarations of the internal subset are read, and when an undeclared entity is an error. The README gives the [short version](README.md#well-formedness-and-validation-checks).
 
 ## Well-formed and valid
 
@@ -32,7 +32,7 @@ XML 1.0 defines two [classes of processors](https://www.w3.org/TR/xml/#proc-type
 |---|---|
 | every level, `:lenient` included | mismatched or unclosed tags<br>an attribute written twice<br>an entity that refers to itself<br>an entity expansion beyond 40 levels or 64 MiB<br>replacement text that is not balanced |
 | `:structural`, the default | several root elements or none<br>text outside the root<br>an invalid element name<br>`<` in an attribute value<br>a misplaced XML declaration or DOCTYPE |
-| `:strict` | `--` in a comment<br>an invalid processing-instruction target<br>a character outside the allowed range<br>a reference to an undeclared entity where that rule applies (see [below](#undeclared-entities)), to an unparsed entity, or to an external entity from an attribute value<br>a parameter-entity reference inside a declaration<br>a default value that holds `<` |
+| `:strict` | `--` in a comment<br>an invalid processing-instruction target<br>a character outside the allowed range<br>a reference to an undeclared entity where that rule applies (see [below](#undeclared-entities)), to an unparsed entity, or to an external entity from an attribute value<br>a parameter-entity reference inside a declaration<br>a default value that holds `<`<br>an ATTLIST declaration its reader cannot follow (see [below](#declarations-of-the-internal-subset)) |
 
 Every row is a well-formedness rule. The first row comes with building a tree: a reader must know which element each end tag closes, and which value each attribute name holds. The entity rules of that row are checked when the document is read in, by all four readers.
 
@@ -42,6 +42,17 @@ parse("<a/><b/>", Node; wellformed = :lenient)  # Document (2 children)
 ```
 
 What `:strict` costs, by document shape, is in [Table 7](PERFORMANCE-v0.4.md#well-formedness-levels).
+
+## Declarations of the internal subset
+
+XML.jl reads the declarations of the internal subset for what they supply: the values of entities and the default values of attributes. It does not check all of their syntax, even under `:strict`:
+
+- an ENTITY declaration that lacks a required space is read all the same: `<!ENTITYe "x">` declares `e`;
+- an ATTLIST declaration that its reader cannot follow, such as one with a missing space or a misspelled keyword, is ignored whole below `:strict`, and supplies no default value; `:strict` refuses it;
+- the inside of an enumeration in an ATTLIST, between its parentheses, is not checked;
+- ELEMENT and NOTATION declarations are skipped to their `>`, since a non-validating processor does not use them.
+
+In a declaration, a no-break space (U+00A0) reads as white space before a name, and as part of the name after it.
 
 ## Streaming readers
 

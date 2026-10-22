@@ -2511,18 +2511,25 @@ end
             @test reported(xml; levels = (:lenient,)) == fill(["a" => "<"], 4)
         end
 
-        @testset "a malformed ATTLIST is ignored, never refused" begin
+        @testset "a malformed ATTLIST is ignored below :strict, refused at :strict" begin
             # A misspelled keyword, `#FIXED` without its value or the space before it, the
             # default before the keyword, two keywords (W3C ibm60n01 to ibm60n08), an
-            # enumeration still open where the subset ends: the declaration cannot be read,
-            # so none of its definitions supplies anything.
+            # enumeration still open where the subset ends, a missing space (o-p53fail1,
+            # not-wf-sa-064), a no-break space read into the element's name: the declaration
+            # does not follow rule [52]. Below `:strict` it is ignored whole, so none of its
+            # definitions supplies anything; `:strict` refuses it.
             for subset in ("<!ATTLIST d a CDATA #required>", "<!ATTLIST d a CDATA #Implied>",
                            "<!ATTLIST d a CDATA !IMPLIED>", "<!ATTLIST d a CDATA #FIXED >",
                            """<!ATTLIST d a CDATA #FIXED"v">""", """<!ATTLIST d a CDATA "v" #FIXED>""",
                            "<!ATTLIST d a CDATA #REQUIRED #IMPLIED>",
                            """<!ATTLIST d b CDATA "2" a CDATA #required>""",
-                           "<!ATTLIST d a (x|y")
-                @test reported(withsubset(subset)) == fill(none, 8)
+                           "<!ATTLIST d a (x|y", """<!ATTLISTd a CDATA "v">""",
+                           """<!ATTLIST d a CDATA"v">""", "<!ATTLIST d a CDATA#IMPLIED>",
+                           "<!ATTLIST d" * Char(0xa0) * "a CDATA \"v\">")
+                xml = withsubset(subset)
+                @test reported(xml; levels = (:lenient, :structural)) == fill(none, 6)
+                @test_throws "malformed ATTLIST" parse(xml, Node; wellformed = :strict)
+                @test_throws "malformed ATTLIST" parse(xml, FlatNode; wellformed = :strict)
             end
         end
 
