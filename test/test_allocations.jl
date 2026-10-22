@@ -31,6 +31,8 @@ measure_value(x)     = @allocated _use(value(x))
 measure_simple(x)    = @allocated _use(simple_value(x))
 measure_is_simple(x) = @allocated _use(is_simple_value(x))
 measure_simple_test(x) = @allocated is_simple(x)
+measure_sourcetext(x) = @allocated _use(sourcetext(x))
+measure_sourcespan(x) = @allocated length(sourcespan(x))
 function measure_eachattr(x)
     @allocated begin
         s = 0
@@ -108,6 +110,10 @@ end
         for x in (slz, sfl, scu, snd)
             @test is_simple_value(x) == "hello"
         end
+        for (x, xml) in ((lz, attr_xml), (fl, attr_xml), (slz, simple_xml), (sfl, simple_xml))
+            @test sourcetext(x) == xml
+            @test xml[sourcespan(x)] == xml
+        end
     end
 
     # compile every barrier specialization before measuring
@@ -119,6 +125,8 @@ end
     foreach(measure_simple, (slz, sfl, scu, snd))
     foreach(measure_is_simple, (slz, sfl, scu, snd))
     foreach(measure_simple_test, (slz, sfl, scu, snd))
+    foreach(measure_sourcetext, (lz, fl, slz, sfl))
+    foreach(measure_sourcespan, (lz, fl, slz, sfl))
 
     if _NO_COVERAGE
         @testset "by-key attribute reads" begin
@@ -167,6 +175,17 @@ end
 
         @testset "eachattribute streams without allocating" begin
             @test measure_eachattr(lz) == 0
+        end
+
+        @testset "sourcetext and sourcespan" begin
+            @test measure_sourcetext(lz) == 0
+            @test measure_sourcetext(fl) == 0
+            @test measure_sourcetext(slz) == 0
+            @test measure_sourcetext(sfl) == 0
+            @test measure_sourcespan(lz) == 0
+            @test measure_sourcespan(fl) == 0
+            @test measure_sourcespan(slz) == 0
+            @test measure_sourcespan(sfl) == 0
         end
     end
 end
