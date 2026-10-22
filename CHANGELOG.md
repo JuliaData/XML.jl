@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Spaces that XML does not count as white space are kept as content**: Julia's `isspace` counts more than the space, tab, CR and LF of XML. `XML.write` took a text made only of `&#160;` (U+00A0) or U+3000 between two elements for layout, and dropped it, when it wrote a `Node` or a `LazyNode` with `normalize = true`. Under Julia 1.14, U+2028 and U+2029 were dropped too. In an XPath expression, such a space raised a `StringIndexError`; it is now an unexpected character.
+
 - **Reading under Julia 1.14 no longer calls a deprecated constructor**: the default build rebuilt each token's text with the `SubString` constructor that Julia 1.14 deprecates. Under `Pkg.test`, where deprecation warnings are on, XML.jl's own suite ran for over 40 minutes instead of about one, and its allocation guards failed. The default build now calls `Base.raw_substring`, which replaces that constructor.
 
 - **A `StringView` reads without StringViews.jl under Julia 1.14**: Julia 1.14 defines `StringView` in Base, and XML.jl now defines the methods for that type itself. Without StringViews.jl loaded, a document that declares entities or attribute defaults was refused with an `ArgumentError`, and the byte search read the source one byte at a time.

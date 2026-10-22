@@ -82,10 +82,15 @@ function _print_attrs(io::IO, attributes)
     end
 end
 
+# XML white space (§2.3) is space, tab, CR and LF only: a text made of other spaces, such as
+# U+00A0, is content. Read on the code units, since no byte of a character beyond ASCII is one
+# of those four.
+_is_xml_blank(s::AbstractString) = all(XMLTokenizer.is_whitespace, codeunits(s))
+
 # Whitespace-only Text — emitted by the parser to round-trip source whitespace; pretty
 # printing regenerates indentation from the tree shape and drops these.
 @inline function _is_ignorable_text(node::Node)
-    node.nodetype === Text && !isnothing(node.value) && all(isspace, node.value)
+    node.nodetype === Text && !isnothing(node.value) && _is_xml_blank(node.value)
 end
 
 # Mixed content = at least one Text/CData child carrying actual (non-whitespace) data.
@@ -94,7 +99,7 @@ function _has_significant_text(children)
     for c in children
         nt = c.nodetype
         if nt === Text
-            (!isnothing(c.value) && !all(isspace, c.value)) && return true
+            (!isnothing(c.value) && !_is_xml_blank(c.value)) && return true
         elseif nt === CData
             return true
         end

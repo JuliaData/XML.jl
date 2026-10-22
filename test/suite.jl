@@ -780,6 +780,15 @@ end
         xml = "<root>$(nbsp) y $(nbsp)</root>"
         doc = parse(xml, Node)
         @test simple_value(doc[1]) == "$(nbsp) y $(nbsp)"
+
+        # Nor are the other spaces that Julia's `isspace` counts: a text made only of them is
+        # content, which the writer keeps where it drops the white space between two elements.
+        for sp in (Char(0xa0), Char(0x3000), Char(0x2028))
+            between = "<root><a/>$(sp)<b/></root>"
+            @test occursin(sp, XML.write(parse(between, Node)))
+            @test occursin(sp, XML.write(parse(between, LazyNode); normalize = true))
+        end
+        @test XML.write(parse("<root><a/> <b/></root>", Node)) == "<root>\n  <a/>\n  <b/>\n</root>"
     end
 end
 
@@ -3906,6 +3915,10 @@ end
     @testset "whitespace in expression" begin
         results = xpath(doc, " / root / users / user ")
         @test length(results) == 3
+        # XPath white space is XML's: a no-break or an ideographic space is a character the
+        # expression does not allow
+        @test_throws "Unexpected character" xpath(doc, "/root" * Char(0xa0))
+        @test_throws "Unexpected character" xpath(doc, Char(0x3000) * "/root")
     end
 
     @testset "error: empty @" begin
