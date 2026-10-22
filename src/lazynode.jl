@@ -432,7 +432,9 @@ function sourcetext(n::LazyNode)
         return SubString(n.data, start, _scan_to_close(_lazy_tokenizer(n), n.data, TokenKinds.DOCTYPE_CLOSE))
     elseif nt === Text
         return raw(n.token, n.data)
-    elseif nt === Document
+    else
+        # `Document`, the one kind left. A last `elseif` would let the chain return `nothing`
+        # too, and that union return is boxed at every call that does not inline this one.
         return SubString(n.data)
     end
 end
