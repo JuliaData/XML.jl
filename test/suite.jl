@@ -3912,17 +3912,50 @@ end
         @test tag(results[1]) == "ns:item"
     end
 
+    @testset "names follow XML's Name rule" begin
+        doc2 = parse("""<r><é a="1">x</é><é>y</é><n ü="2" a.b="3"/><漢字>z</漢字></r>""", Node)
+        @test length(xpath(doc2, "//é")) == 2
+        @test length(xpath(doc2, "/r/é")) == 2
+        @test value.(xpath(doc2, "//@ü")) == ["2"]
+        @test length(xpath(doc2, "//é[@a]")) == 1
+        @test value.(xpath(doc2, "//é/text()")) == ["x", "y"]
+        @test tag.(xpath(doc2, "//*[@ü]")) == ["n"]
+        @test tag.(xpath(doc2, "//*[@ü='2']")) == ["n"]
+        @test tag.(xpath(doc2, "//漢字")) == ["漢字"]
+        @test value.(xpath(doc2, "//@a.b")) == ["3"]
+        # Marks, the middle dot and non-ASCII digits are name characters: Hindi and Thai names
+        # carry vowel signs, a decomposed "é" carries a combining accent
+        for nm in (String(Char[0x939, 0x93f, 0x928, 0x94d, 0x926, 0x940]),   # Hindi "hindī"
+                   String(Char[0xe0a, 0xe37, 0xe48, 0xe2d]),                 # Thai "chue"
+                   "cafe" * Char(0x301), "a" * Char(0xb7) * "b", "x" * Char(0x967))
+            d = parse("<r><$nm $nm=\"v\"/></r>", Node)
+            @test tag.(xpath(d, "//$nm")) == [nm]
+            @test value.(xpath(d, "//@$nm")) == ["v"]
+            @test tag.(xpath(d, "//*[@$nm='v']")) == [nm]
+        end
+        # µ is a letter, but not a name character in XML
+        @test_throws "Unexpected character" xpath(doc2, "//" * Char(0xb5))
+    end
+
     @testset "whitespace in expression" begin
         results = xpath(doc, " / root / users / user ")
         @test length(results) == 3
+        @test length(xpath(doc, "/root/users/user[ @role = 'admin' ]")) == 2
+        @test length(xpath(doc, "/root/users/user[\t1\n]")) == 1
         # XPath white space is XML's: a no-break or an ideographic space is a character the
         # expression does not allow
         @test_throws "Unexpected character" xpath(doc, "/root" * Char(0xa0))
         @test_throws "Unexpected character" xpath(doc, Char(0x3000) * "/root")
+        # in a predicate too, where a line separator is white space for isspace from Julia 1.14
+        @test_throws "Unsupported XPath predicate" xpath(doc, "/root/users/user[" * Char(0xa0) * "1]")
+        @test_throws "Unsupported XPath predicate" xpath(doc, "/root/users/user[@role" * Char(0xa0) * "='admin']")
+        @test_throws "Unsupported XPath predicate" xpath(doc, "/root/users/user[1" * Char(0x2028) * "]")
     end
 
     @testset "error: empty @" begin
         @test_throws ErrorException xpath(doc, "/root/@")
+        # a digit cannot start a name
+        @test_throws ErrorException xpath(doc, "//user/@1")
     end
 
     @testset "error: unknown function" begin

@@ -61,6 +61,36 @@ struct XPathToken
     value::String
 end
 
+#-----------------------------------------------------------------------------# Names and white space
+
+# A name in an expression follows XML 1.0's Name rule (fifth edition, §2.3), except that it cannot
+# start with ":". These are the non-ASCII code points of NameStartChar, then those NameChar adds.
+const _NAME_START_RANGES = (0xC0:0xD6, 0xD8:0xF6, 0xF8:0x2FF, 0x370:0x37D, 0x37F:0x1FFF,
+    0x200C:0x200D, 0x2070:0x218F, 0x2C00:0x2FEF, 0x3001:0xD7FF, 0xF900:0xFDCF, 0xFDF0:0xFFFD,
+    0x10000:0xEFFFF)
+const _NAME_CHAR_RANGES = (0xB7:0xB7, 0x300:0x36F, 0x203F:0x2040)
+
+_in_ranges(c::Char, ranges) = !isascii(c) && isvalid(c) && any(r -> codepoint(c) in r, ranges)
+_xpath_name_start(c::Char) = ('a' <= c <= 'z') || ('A' <= c <= 'Z') || c == '_' ||
+    _in_ranges(c, _NAME_START_RANGES)
+_xpath_name_char(c::Char) = _xpath_name_start(c) || ('0' <= c <= '9') || c == '-' || c == '.' ||
+    c == ':' || _in_ranges(c, _NAME_CHAR_RANGES)
+
+# The index just past the name that starts at index i of s, or i when no name starts there
+function _xpath_name_end(s::AbstractString, i::Int)
+    n = ncodeunits(s)
+    (i <= n && _xpath_name_start(s[i])) || return i
+    j = nextind(s, i)
+    while j <= n && _xpath_name_char(s[j])
+        j = nextind(s, j)
+    end
+    j
+end
+_is_xpath_name(s::AbstractString) = !isempty(s) && _xpath_name_end(s, 1) == ncodeunits(s) + 1
+
+# XPath white space is XML's: space, tab, line feed and carriage return
+_is_xpath_space(c::Char) = c == ' ' || c == '\t' || c == '\n' || c == '\r'
+
 #-----------------------------------------------------------------------------# Tokenizer
 
 # Lex an XPath expression into a flat token stream. Whitespace is discarded; unterminated
@@ -100,24 +130,18 @@ function _xpath_tokenize(expr::AbstractString)
         elseif c == '['
             j = findnext(']', s, i + 1)
             isnothing(j) && error("Unterminated predicate in XPath: $(repr(s))")
-            push!(tokens, XPathToken(XPATH_PREDICATE, SubString(s, i + 1, j - 1)))
+            push!(tokens, XPathToken(XPATH_PREDICATE, SubString(s, i + 1, prevind(s, j))))
             i = j + 1
 
         elseif c == '@'
-            j = i + 1
-            while j <= n && (isletter(s[j]) || s[j] == '-' || s[j] == '_' || s[j] == ':' || isdigit(s[j]))
-                j += 1
-            end
-            j == i + 1 && error("Empty attribute name after @ in XPath: $(repr(s))")
-            push!(tokens, XPathToken(XPATH_ATTRIBUTE, SubString(s, i + 1, j - 1)))
+            j = _xpath_name_end(s, i + 1)
+            j == i + 1 && error("Expected an attribute name after @ in XPath: $(repr(s))")
+            push!(tokens, XPathToken(XPATH_ATTRIBUTE, SubString(s, i + 1, prevind(s, j))))
             i = j
 
-        elseif isletter(c) || c == '_'
-            j = i + 1
-            while j <= n && (isletter(s[j]) || s[j] == '-' || s[j] == '_' || s[j] == ':' || isdigit(s[j]) || s[j] == '.')
-                j += 1
-            end
-            name = SubString(s, i, j - 1)
+        elseif _xpath_name_start(c)
+            j = _xpath_name_end(s, i)
+            name = SubString(s, i, prevind(s, j))
             # An axis specifier ("axis::test", e.g. child::, descendant::, following-sibling::) is
             # out of this subset. Reject it rather than treat "axis::test" as a literal element name
             # (the "::" is swept into the name scan), which silently matches nothing. A single ":"
@@ -140,7 +164,7 @@ function _xpath_tokenize(expr::AbstractString)
                 i = j
             end
 
-        elseif c == ' ' || c == '\t' || c == '\n' || c == '\r'   # XPath white space is XML's
+        elseif _is_xpath_space(c)
             i += 1
 
         else
@@ -152,18 +176,19 @@ end
 
 #-----------------------------------------------------------------------------# Predicate evaluation
 
-const _RE_ATTR_PRED = r"^@([A-Za-z_:][\w.\-:]*)$"
-const _RE_ATTR_VAL_PRED = r"^@([A-Za-z_:][\w.\-:]*)\s*=\s*['\"]([^'\"]*)['\"]$"
+# The attribute name is captured loosely, then checked with the rule of the tokenizer's names
+const _RE_ATTR_PRED = r"^@([^ \t\n\r='\"]+)$"
+const _RE_ATTR_VAL_PRED = r"^@([^ \t\n\r='\"]+)[ \t\n\r]*=[ \t\n\r]*['\"]([^'\"]*)['\"]$"
 
 # Filter `nodes` by the body of a `[...]` predicate. Supports positional indices `[n]`
 # (1-based; out-of-range yields empty), `[last()]`, `[@attr]` (has-attribute), and
 # `[@attr='value']` / `[@attr="value"]` (attribute equals literal). Anything else errors.
 # `root` is accepted for symmetry with `_xpath_step` but is unused by current predicates.
 function _eval_predicate(predicate::AbstractString, nodes::Vector{Node{S}}, root::Node{S}) where S
-    s = strip(predicate)
+    s = strip(_is_xpath_space, predicate)
 
-    # Positional: [n]
-    pos = tryparse(Int, s)
+    # Positional: [n] (tryparse would skip any white space isspace knows, not only XPath's)
+    pos = any(isspace, s) ? nothing : tryparse(Int, s)
     if !isnothing(pos)
         1 <= pos <= length(nodes) || return Node{S}[]
         return [nodes[pos]]
@@ -177,14 +202,14 @@ function _eval_predicate(predicate::AbstractString, nodes::Vector{Node{S}}, root
 
     # [@attr] — has attribute
     m = match(_RE_ATTR_PRED, s)
-    if !isnothing(m)
+    if !isnothing(m) && _is_xpath_name(m.captures[1])
         attr_name = m.captures[1]
         return filter(n -> n.nodetype === Element && haskey(n, attr_name), nodes)
     end
 
     # [@attr='value'] or [@attr="value"]
     m = match(_RE_ATTR_VAL_PRED, s)
-    if !isnothing(m)
+    if !isnothing(m) && _is_xpath_name(m.captures[1])
         attr_name = m.captures[1]
         attr_val = m.captures[2]
         return filter(n -> n.nodetype === Element && get(n, attr_name, nothing) == attr_val, nodes)
@@ -286,6 +311,9 @@ Supports a practical subset of XPath 1.0:
 - Attribute predicates (`[@attr]`, `[@attr='value']`)
 - `text()` and `node()` functions
 - Attribute selection (`@attr`) — returns `Text` nodes containing attribute values
+
+Names follow XML 1.0's Name rule, in any script (`//é`, `//@ü`). White space is XML's (space,
+tab, line feed, carriage return), inside predicates too.
 
 # Examples
 ```julia

@@ -35,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **XPath reads names as XML defines them**: a name with a non-ASCII character, such as `//é`, `//@ü` or `//*[@ü]`, raised a `StringIndexError`. Names now follow XML 1.0's Name rule, without a leading `:` as in XPath, in every part of an expression. The vowel signs of Hindi or Thai names, combining accents and `·` are thus part of a name. `//@a.b` returned nothing, as the `.` ended the attribute name. `@1x` and `@:x`, which matched before, now raise an error. Inside a predicate, white space is now XML's, as in the rest of the expression.
+
 - **`sourcetext` and `sourcespan` on a `LazyNode` no longer allocate**: the chain that picks the node kind in `sourcetext` had no final branch, so it could also return `nothing`, and each call returned its `SubString` in a 32-byte box. `sourcespan`, which calls it, allocated the same 32 bytes. A loop that takes the source text of 200,000 elements now makes half the allocations.
 
 - **Spaces that XML does not count as white space are kept as content**: Julia's `isspace` counts more than the space, tab, CR and LF of XML. `XML.write` took a text made only of `&#160;` (U+00A0) or U+3000 between two elements for layout, and dropped it, when it wrote a `Node` or a `LazyNode` with `normalize = true`. Under Julia 1.14, U+2028 and U+2029 were dropped too. In an XPath expression, such a space raised a `StringIndexError`; it is now an unexpected character.
