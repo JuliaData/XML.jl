@@ -241,6 +241,10 @@ xpath(root, "//b/text()")    # Text nodes inside all <b>s
 | `node()` | All node children |
 | `@attr` | Attribute value (as a `Text` node) |
 
+Names follow XML's Name rule, in any script: `//é`, `//@ü` and `//漢字` are all valid queries.
+
+White space between the parts of an expression, predicates included, is XML's: space, tab, line feed and carriage return.
+
 <br>
 
 ## `Cursor`
