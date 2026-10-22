@@ -87,7 +87,8 @@ const _TOKENIZED_TYPES = ("ID", "IDREF", "IDREFS", "ENTITY", "ENTITIES", "NMTOKE
 # closing `>`. The definitions are `nothing` when the declaration does not follow the grammar — a
 # misspelled keyword, `#FIXED` without its value or the space before it, a default before its
 # keyword, a parameter-entity reference — and the declaration is then skipped as a whole: no
-# reading of a faulty declaration is a safe one. It never raises.
+# reading of a faulty declaration is a safe one. It never raises; under `:strict`, the reader of
+# the internal subset refuses the declaration it skips.
 function _read_attlist(s::String, pos::Int)
     n = ncodeunits(s)
     skipped(p) = ("", nothing, _dtd_skip_to_close(s, p))

@@ -215,7 +215,12 @@ function _read_subset!(r::_SubsetReader, s::String, pos::Int, subset::Bool)
             end
             r.strict === nothing || decl.parameter || _record_entity!(r.strict, decl, s, start, pos)
         elseif c == '<' && startswith(SubString(s, pos), "<!ATTLIST")
+            start = pos
             element, defs, pos = _read_attlist(s, pos + ncodeunits("<!ATTLIST"))
+            # a declaration the reader skips does not follow rule [52]: ignored whole below
+            # `:strict`, refused at `:strict`
+            defs === nothing && r.strict !== nothing &&
+                _malformed_attlist(SubString(s, start, prevind(s, min(pos, ncodeunits(s) + 1))))
             defs === nothing || _declare_attributes!(r, element, defs)
             if r.strict !== nothing && defs !== nothing
                 rank = length(r.strict.order)
@@ -1100,6 +1105,9 @@ function _check_default_refs(text::AbstractString, rec::_StrictRecord, values::D
         i = findnext(==(UInt8('&')), cu, next)
     end
 end
+
+@noinline _malformed_attlist(decl::AbstractString) = error("not well-formed: malformed ATTLIST ",
+    "declaration ", repr(first(decl, 60)), length(decl) > 60 ? "…" : "", " (XML 1.0 §3.3)")
 
 @noinline _bad_default(element, attribute, what, section) = error("not well-formed: the default ",
     "value of attribute \"", attribute, "\" of \"", element, "\" ", what, " (XML 1.0 ", section,
