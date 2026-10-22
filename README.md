@@ -54,7 +54,7 @@ XML.jl provides four readers behind one set of accessors (`nodetype`, `tag`, `at
 
 Rules of thumb:
 
-- one forward pass → `Cursor` (fastest scan, ~zero allocation; a `String` with CR line ends or declarations to apply is copied once)
+- one forward pass → `Cursor` (fastest scan, ~zero allocation; a `String` with CR line ends or declarations to apply is copied once, and [`XML.sourceview`](#reading-a-string-without-the-copy) avoids the copy for line ends)
 - extract a little from a large document → `LazyNode` (opening scans a `String` once and copies it only when it has CR line ends or declarations to apply, then a cost per node touched)
 - read-heavy full document, repeated traversals → `FlatNode` (the random-access read API of `Node` at almost none of its GC cost: fastest build and walk, O(1) revisits)
 - build or edit documents → `Node`
@@ -245,7 +245,7 @@ xpath(root, "//b/text()")    # Text nodes inside all <b>s
 
 ## `Cursor`
 
-The forward, StAX-style pull reader: one mutable cursor walks the document in document order, with no tree and one tokenizing scan. It allocates almost nothing, except one copy of a `String` that has CR line ends or declarations to apply. Advance with `next!`; read the current position with the usual accessors (`nodetype`, `tag`, `attributes`, `value`, `depth`, `is_simple`, `simple_value`):
+The forward, StAX-style pull reader: one mutable cursor walks the document in document order, with no tree and one tokenizing scan. It allocates almost nothing, except one copy of a `String` that has CR line ends or declarations to apply ([`XML.sourceview`](#reading-a-string-without-the-copy) avoids the copy for line ends). Advance with `next!`; read the current position with the usual accessors (`nodetype`, `tag`, `attributes`, `value`, `depth`, `is_simple`, `simple_value`):
 
 ```julia
 cur = Cursor(xml_string)
@@ -295,6 +295,24 @@ get(n, key, default)         # single-attribute read without building Attributes
 XML.write(n)                 # zero-copy: returns node's original source text
 XML.write(n; normalize=true) # re-parse + pretty-print, collapses source whitespace
 ```
+
+### Reading a `String` without the copy
+
+`Cursor` and `LazyNode` normalize the line ends of a `String` once, when they open it, which copies the whole document when it holds a CR. A scan that reads few values can skip that copy with `XML.sourceview`:
+
+```julia
+cur = Cursor(XML.sourceview(xml_string))
+doc = parse(XML.sourceview(xml_string), LazyNode)
+```
+
+The document is then read where it lies, like the memory-mapped `StringView` below:
+
+- each value is normalized as it is read, and is the same as through the `String`;
+- `sourcetext` and `sourcespan` refer to the bytes of `xml_string`, CRs included;
+- `tag`, `sourcetext` and a value with nothing to normalize are views of another string type than `SubString{String}`, which `String(v)` converts;
+- a document whose internal subset declares something to apply is still rewritten, into a copy.
+
+A full read costs more this way, since each value is normalized as it is read, so the copy stays the default. `XML.sourceview` also takes a `SubString{String}`. It is public API, though not exported.
 
 ### Memory-mapped files
 

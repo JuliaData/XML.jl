@@ -12,10 +12,10 @@ export
     xpath,
     h
 
-# `escape`/`unescape` are supported API but stay unexported (the bare names are too
-# generic to bring into scope with `using XML`). The `public` keyword only parses on
+# `escape`/`unescape` and `sourceview` are supported API but stay unexported (the bare names
+# are too generic to bring into scope with `using XML`). The `public` keyword only parses on
 # Julia 1.11+, hence the guarded `eval` — a no-op on 1.10, which has no such notion.
-VERSION >= v"1.11" && eval(Meta.parse("public escape, unescape"))
+VERSION >= v"1.11" && eval(Meta.parse("public escape, unescape, sourceview"))
 
 include("XMLTokenizer.jl")
 using .XMLTokenizer:
@@ -34,6 +34,7 @@ include("write.jl")      # XML writer: _write_xml/_write_escaped + XML.write ent
 include("parse.jl")      # BOM normalization, Base.read entry points, the VPA parser
 include("dtd.jl")        # DOCTYPE declaration readers — leaf, plain string scanning
 include("entities.jl")   # internal general entities §4.4 (needs dtd.jl's declaration reader)
+include("sourceview.jl") # XML.sourceview: a `String` read where it lies (needs the readers and entities.jl)
 #-----------------------------------------------------------------------------# h (HTML/XML element builder)
 """
     h(tag, children...; attrs...)

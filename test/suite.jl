@@ -1308,7 +1308,7 @@ end
         end
         # Any other source type that the document needs rewritten for is refused, with a message
         # that says how to pass it; one with nothing to rewrite is read as it stands.
-        other = StringView(codeunits(dd))
+        other = StringView(view(Vector{UInt8}(dd), 1:1:ncodeunits(dd)))
         @test_throws ArgumentError parse(other, LazyNode)
         @test_throws ArgumentError parse(other, Cursor)
         plain = StringView(codeunits("<!DOCTYPE r [<!ELEMENT r ANY>]><r>&amp;</r>"))
@@ -5225,6 +5225,92 @@ Base.thisind(w::WrappedSource, i::Int) = thisind(w.s, i)
         if Base.JLOptions().code_coverage == 0      # coverage counters allocate
             @test measure(large) < 3 * measure(small)
         end
+    end
+end
+
+# A `String` that holds a CR is copied at the entry, where its line ends are normalized once.
+# Through `XML.sourceview` it is read where it lies, each value normalized as it is read: the
+# values are those of the `String`, and positions refer to the caller's own bytes.
+@testset "XML.sourceview reads a String where it lies" begin
+    doc = "<?xml version=\"1.0\"?>\r\n<r a=\"x\r\ny\">\r\n<e>t\r\nu</e><!--c\r\n--><f/>\r\n</r>"
+    lazyvals(n) = vcat([(nodetype(n), tag(n), value(n), (a = attributes(n); a === nothing ? a : collect(a)))],
+                       [lazyvals(c) for c in children(n)]...)
+    function cursorvals(src)
+        c, out = Cursor(src), []
+        while next!(c) !== nothing
+            push!(out, (nodetype(c), tag(c), value(c)))
+        end
+        return out
+    end
+
+    @testset "public, not exported" begin
+        if VERSION >= v"1.11"   # `Base.ispublic` and the `public` notion exist from 1.11
+            @test Base.ispublic(XML, :sourceview)
+        end
+        @test !Base.isexported(XML, :sourceview)
+    end
+
+    @testset "$(typeof(given))" for given in (doc, SubString("xx" * doc * "yy", 3, ncodeunits(doc) + 2))
+        src = XML.sourceview(given)
+        @test src isa AbstractString
+        @test given isa String || src isa SubString
+        @test src == given
+
+        # the values of the `String`, normalized (§2.11, §3.3.3) as they are read
+        @test lazyvals(parse(src, LazyNode)) == lazyvals(parse(given, LazyNode))
+        @test cursorvals(src) == cursorvals(given)
+        r = only(elements(parse(src, LazyNode)))
+        @test attributes(r)["a"] == "x y"
+        e = first(elements(r))
+        @test value(only(children(e))) == "t\nu"
+
+        # the readers keep the source's type: views of it where the `String` gives a
+        # `SubString{String}`, a `String` for a value that was normalized
+        viewtype = typeof(XML.sourceview(doc))
+        @test tag(r) isa SubString{viewtype}
+        @test value(only(children(e))) isa String
+        @test attributes(r)["a"] isa SubString{String}
+        @test String(tag(r)) == "r"
+
+        # the source text and its positions are those of the caller's bytes, CRs included
+        @test sourcetext(e) == "<e>t\r\nu</e>"
+        @test given[sourcespan(e)] == sourcetext(e)
+        @test sourcetext(first(elements(only(elements(parse(given, LazyNode)))))) == "<e>t\nu</e>"
+
+        # `Node` and `FlatNode` copy their source into a `String`, as they do any source
+        @test parse(src, Node) == parse(given, Node)
+        @test nodetype(parse(src, FlatNode)) == Document
+    end
+
+    @testset "no copy at the entry" begin
+        big = repeat("<e a=\"1\">t\r\n</e>", 10_000)
+        lazy(s) = @allocated parse(s, LazyNode)           # function barrier
+        cursor(s) = @allocated Cursor(s)
+        src = XML.sourceview("<r>" * big * "</r>")
+        lazy(src); cursor(src)
+        if Base.JLOptions().code_coverage == 0      # coverage counters allocate
+            @test lazy(src) < 1_000
+            @test cursor(src) < 1_000
+            @test lazy("<r>" * big * "</r>") > ncodeunits(big)   # the `String` is copied
+        end
+    end
+
+    @testset "a document that declares something to apply" begin
+        # The rewrite is a copy, returned as the type the reader was given, so the reader's type
+        # parameter is the one a document that declares nothing gets; an encoding signature
+        # makes it a `SubString` of that type.
+        dd = "<!DOCTYPE r [<!ENTITY t \"hi\"><!ATTLIST r d CDATA \"v\">]>\r\n<r a=\"&t;\">&t;</r>"
+        bom = Char(0xfeff)
+        for (given, plain) in ((dd, "<r/>"), (SubString("x" * dd, 2), SubString("x<r/>", 2)),
+                               (bom * dd, bom * "<r/>"))
+            src = XML.sourceview(given)
+            @test typeof(parse(src, LazyNode)) === typeof(parse(XML.sourceview(plain), LazyNode))
+            @test typeof(parse(src, Cursor)) === typeof(parse(XML.sourceview(plain), Cursor))
+            r = only(elements(parse(src, LazyNode)))
+            @test collect(attributes(r)) == ["a" => "hi", "d" => "v"]
+            @test value(only(children(r))) == "hi"
+        end
+        @test typeof(@inferred XML._apply_declarations(XML.sourceview(dd))) === typeof(XML.sourceview(dd))
     end
 end
 
