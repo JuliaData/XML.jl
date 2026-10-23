@@ -1315,11 +1315,17 @@ end
             @test collect(attributes(r)) == ["a" => "hi", "n" => "p q", "d" => "v"]
             @test value(only(children(r))) == "hi"
         end
+        # and so is one over a slice `view(v, i:j)` that starts past the vector's first byte
+        padded = Vector{UInt8}("pad" * dd)
+        slice = StringView(view(padded, 4:length(padded)))
+        @test collect(attributes(only(elements(parse(slice, LazyNode))))) ==
+              ["a" => "hi", "n" => "p q", "d" => "v"]
         # Any other source type that the document needs rewritten for is refused, with a message
         # that says how to pass it; one with nothing to rewrite is read as it stands.
         other = StringView(view(Vector{UInt8}(dd), 1:1:ncodeunits(dd)))
         @test_throws ArgumentError parse(other, LazyNode)
         @test_throws ArgumentError parse(other, Cursor)
+        @test_throws ArgumentError parse(LazyString(dd), LazyNode)
         plain = StringView(codeunits("<!DOCTYPE r [<!ELEMENT r ANY>]><r>&amp;</r>"))
         @test simple_value(only(elements(parse(plain, LazyNode)))) == "&"
 

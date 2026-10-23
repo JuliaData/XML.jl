@@ -15,11 +15,22 @@ document was handed in as — so navigating a large document through `LazyNode` 
 its text data. The materialized [`attributes`](@ref) dict is the one exception: its pairs are
 always `SubString{String}`, so a non-`String` document has each attribute's own bytes copied.
 
-A document whose internal subset declares something to apply is first rewritten into a copy of
-the same string type (see [`sourcetext`](@ref)), and the views point into that copy. `String`,
-`SubString{String}` and, with StringViews.jl loaded, a `StringView` over a `Vector{UInt8}` or
-over a view of a whole one can be rebuilt; for any other source type, such a document raises
-an `ArgumentError`.
+A document that the declarations of its DOCTYPE change — an entity it uses, a default attribute
+value it receives, the spaces of an attribute declared with a type other than CDATA — is read
+from a copy with these changes made, of the same string type (see [`sourcetext`](@ref)), and the
+views point into that copy. The copy can be made for:
+
+- a `String`, or a `SubString{String}` such as `view(str, i:j)`;
+- a `StringView` over a byte vector `v` (a `Vector{UInt8}`), as for a memory-mapped file, or
+  over a slice `view(v, i:j)` of it, written without a step; `StringView` comes from Base from
+  Julia 1.14, and from StringViews.jl before;
+- the result of [`sourceview`](@ref).
+
+On any other string type, such a document raises an `ArgumentError`: for example a `LazyString`,
+or a `StringView` over a view of `v` written with a step, such as `view(v, i:2:j)` or
+`view(v, i:1:j)`. Read it with [`Node`](@ref) or [`FlatNode`](@ref), which convert any string to
+a `String`, or pass `String(s)`. A document that its DOCTYPE does not change is read from any
+string type.
 
 `LazyNode` takes no `wellformed` keyword: it checks only the rules on entities and accepts
 mismatched tags, so read a document that must be checked with [`Node`](@ref) or
@@ -35,8 +46,8 @@ traversals are dramatically slower, since each pass re-scans the whole document,
 `Node` tree is built once and then walked cheaply.
 
 - **Forward streaming of a large document** → [`Cursor`](@ref) — fastest, and allocation-free
-  over a `String` document, except one copy when its lines end in CR or its internal subset
-  declares something to apply.
+  over a `String` document, except one copy when its lines end in CR or when the declarations
+  of its DOCTYPE change it.
 - **Repeated or random access** → [`Node`](@ref) — builds the tree once.
 - **`LazyNode`** → low-memory, *read-once* navigation, or as a holdable snapshot of a
   [`Cursor`](@ref) position (`LazyNode(c)` / `Cursor(::LazyNode)`).
@@ -405,10 +416,10 @@ or reformatting.  This is the zero-copy counterpart of [`write`](@ref) for lazy 
 Being zero-copy, it reports the bytes of the document the reader actually holds. A `String`
 document whose lines end in CR is normalized when it is read in, so its source text is the
 normalized one; a document held as any other string type — a view over a memory-mapped file,
-say — keeps its own line ends, so its source text carries them. A document whose internal
-subset declares something to apply — a general entity it references, an attribute default, an
-attribute declared with a type other than CDATA — is rewritten when it is read in (see
-[`LazyNode`](@ref) for the source types). Its source text is then the rewritten one:
+say — keeps its own line ends, so its source text carries them. A document that the
+declarations of its DOCTYPE change — an entity it uses, a default attribute value it receives,
+an attribute declared with a type other than CDATA — is rewritten when it is read in (see
+[`LazyNode`](@ref) for the string types this works on). Its source text is then the rewritten one:
 replacement texts included (§4.4.2), defaults supplied (§3.3.2), values reduced (§3.3.3).
 Reported *values* are normalized either way.
 """

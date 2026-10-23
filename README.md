@@ -314,7 +314,7 @@ The document is then read where it lies, like the memory-mapped `StringView` bel
 - each value is normalized as it is read, and is the same as through the `String`;
 - `sourcetext` and `sourcespan` refer to the bytes of `xml_string`, CRs included;
 - `tag`, `sourcetext` and a value with nothing to normalize are views of another string type than `SubString{String}`, which `String(v)` converts;
-- a document whose internal subset declares something to apply is still rewritten, into a copy.
+- a document that the declarations of its DOCTYPE change is still read from a rewritten copy, to which `sourcetext` and `sourcespan` then refer (see [String types and DOCTYPE declarations](#string-types-and-doctype-declarations)).
 
 A full read costs more this way, since each value is normalized as it is read, so the copy stays the default. `XML.sourceview` also takes a `SubString{String}`. It is public API, though not exported.
 
@@ -341,12 +341,24 @@ Opening costs one probe of the prolog, about 25 ns on a mapped 14 MB document, L
 - the line-end normalization the specification requires happens on each value as it is read;
 - a file written with CR LF or a lone CR thus copies only the values you actually ask for, and only those that carry a line end.
 
-The exception is a document whose internal subset declares something to apply: general entities it references, attribute defaults, attributes of a type other than CDATA. The reader rewrites such a document before the parse (XML 1.0 §4.4.2, §3.3.2, §3.3.3), into a copy in the heap whenever anything changes.
+The exception is a document that the declarations of its DOCTYPE change: the entities it uses, the default attribute values it receives, the spaces of the attributes declared with a type other than CDATA (XML 1.0 §4.4.2, §3.3.2, §3.3.3). The reader then reads a copy of it in the heap, with these changes made (see [String types and DOCTYPE declarations](#string-types-and-doctype-declarations)).
 
 > [!WARNING]
 > This is a limitation for a file too large for memory. XML.jl does not refuse such a document, but the rewritten copy can exceed the physical memory. The system then either swaps memory to disk, which can make the reading very long, or refuses the allocation.
 
 `sourcetext` is the one accessor that shows the file's own bytes. It is a zero-copy view of the document the reader holds, which for a mapped file that needs no rewrite is the file itself. See [Memory-mapped sources](PERFORMANCE-v0.4.md#memory-mapped-sources) for the measured figures.
+
+### String types and DOCTYPE declarations
+
+`Node` and `FlatNode` convert their source to a `String` before they read it, whatever its string type. They thus apply the declarations of its DOCTYPE to a document of any string type.
+
+`Cursor` and `LazyNode` keep the string type they are given. When the declarations of its DOCTYPE change a document, they read a copy of it with these changes made, of that same string type. The changes are the entities the document uses, the default attribute values it receives, and the spaces removed from the attributes declared with a type other than CDATA. The copy can be made for:
+
+- a `String`, or a `SubString{String}` such as `view(str, i:j)`;
+- a `StringView` over a byte vector `v` (a `Vector{UInt8}`), as for a memory-mapped file, or over a slice `view(v, i:j)` of it, written without a step;
+- the result of `XML.sourceview`.
+
+On any other string type, such a document raises an `ArgumentError`. Two examples are a `LazyString`, and a `StringView` over a view of `v` written with a step, such as `view(v, i:2:j)` or `view(v, i:1:j)`. Read such a document with `Node` or `FlatNode`, or pass `String(s)` to `Cursor` or `LazyNode`. A document that its DOCTYPE does not change is read from any string type.
 
 <br>
 
