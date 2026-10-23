@@ -47,6 +47,52 @@ end
         @test unescape(escape(s)) == s
     end
 
+    @testset "escaped text and attribute values read back as written" begin
+        # A reader turns a written CR into a line feed (XML 1.0 §2.11), and a written tab, line
+        # feed or CR in an attribute value into a space (§3.3.3); a character reference keeps them.
+        @test escape("a\r\nb") == "a&#13;\nb"
+        @test escape("x\r\ny\tz"; attribute = true) == "x&#13;&#10;y&#9;z"
+        for s in ("a\r\nb", "a\rb", "x\r\ny\tz", "tab\tline\nend\r", "é & <ü> \"'\r")
+            @test value(only(children(parse("<t>" * escape(s) * "</t>", Node)[1]))) == s
+            @test parse("<t a=\"" * escape(s; attribute = true) * "\"/>", Node)[1]["a"] == s
+            @test unescape(escape(s)) == s
+            @test unescape(escape(s; attribute = true)) == s
+        end
+        # the rules `XML.write` applies to text and to attribute values
+        s = "x\r\ny\tz & <q> \"'"
+        @test XML.write(Element("t", Text(s))) == "<t>" * escape(s) * "</t>"
+        @test XML.write(Element("t"; a = s)) == "<t a=\"" * escape(s; attribute = true) * "\"/>"
+    end
+
+    @testset "escape agrees with the rule, character by character" begin
+        # Up to 32 bytes a string is read through a table, past it searched by `memchr`; both
+        # must write what the rule writes, character by character.
+        text = Dict('&' => "&amp;", '<' => "&lt;", '>' => "&gt;", '"' => "&quot;",
+                    '\'' => "&apos;", '\r' => "&#13;")
+        attr = merge(text, Dict('\t' => "&#9;", '\n' => "&#10;"))
+        rule(s, m) = join(get(m, c, string(c)) for c in s)
+        alphabet = ['a', 'é', ' ', '&', '<', '>', '"', '\'', '\r', '\t', '\n', '漢']
+        x = UInt32(1)
+        for len in (0, 1, 2, 10, 31, 32, 33, 34, 64, 100, 300), _ in 1:20
+            chars = Char[]
+            for _ in 1:len
+                x = x * UInt32(1664525) + UInt32(1013904223)   # a fixed pseudo-random sequence
+                push!(chars, alphabet[(x >> 16) % length(alphabet) + 1])
+            end
+            s = String(chars)
+            @test escape(s) == rule(s, text)
+            @test escape(s; attribute = true) == rule(s, attr)
+        end
+        for s in ("&" * "a"^31, "a"^31 * "\r", "a"^32 * "&", "\r" * "a"^32, "&<>\"'\r"^6)
+            @test escape(s) == rule(s, text)
+            @test escape(s; attribute = true) == rule(s, attr)
+        end
+        # a string with nothing to escape comes back as it is, short or long
+        for plain in ("12345", repeat("plain text ", 10))
+            @test pointer(escape(plain)) == pointer(plain)
+        end
+    end
+
     @testset "idempotent unescape" begin
         s = "plain text with no entities"
         @test unescape(s) == s

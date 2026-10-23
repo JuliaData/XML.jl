@@ -1,17 +1,118 @@
 #-----------------------------------------------------------------------------# escape/unescape
-const ESCAPE_CHARS = ('&' => "&amp;", '<' => "&lt;", '>' => "&gt;", '\'' => "&apos;", '"' => "&quot;")
+
+# The two escaping rules, one for text and one for attribute values, each written in one pass
+# to an IO with no intermediate string. `escape` returns them as a `String`, and `XML.write`
+# writes them as it serializes, so a string escaped either way reads back the same.
+#
+# Text: the five predefined entities, and a literal CR as a character reference. A conforming
+# reader normalizes literal CR / CR LF in content to LF (XML 1.0 §2.11), so only the reference
+# form comes back from a round-trip. Attribute values additionally escape literal #x9/#xA as
+# character references: a conforming reader normalizes literal white space in attribute values
+# to spaces (§3.3.3).
+const _TEXT_ESCAPED = (UInt8('&'), UInt8('<'), UInt8('>'), UInt8('"'), UInt8('\''), UInt8('\r'))
+const _ATTR_ESCAPED = (_TEXT_ESCAPED..., UInt8('\t'), UInt8('\n'))
+_byte_table(bytes) = (t = falses(256); for b in bytes; t[b + 1] = true; end; NTuple{256, Bool}(t))
+const _TEXT_TABLE = _byte_table(_TEXT_ESCAPED)
+const _ATTR_TABLE = _byte_table(_ATTR_ESCAPED)
+
+@inline function _reference(b::UInt8)
+    b == UInt8('&') ? "&amp;" : b == UInt8('<') ? "&lt;" : b == UInt8('>') ? "&gt;" :
+    b == UInt8('"') ? "&quot;" : b == UInt8('\'') ? "&apos;" : b == UInt8('\t') ? "&#9;" :
+    b == UInt8('\n') ? "&#10;" : "&#13;"
+end
+
+@inline _write_run(io::IO, s::String, a::Int, b::Int) =
+    b >= a && GC.@preserve s Base.unsafe_write(io, pointer(s, a), (b - a + 1) % UInt)
+
+# Up to this many bytes, a string is read one byte at a time through the table. Past it, each
+# byte to escape has its next position found by `memchr`, which reads many bytes at a time, and
+# the nearest one is written next, as `replace` does with several patterns: a few calls to
+# `memchr` cost more than the loop over a short string, and less over a long one.
+const _ESCAPE_TABLE_MAX = 32
+
+function _escape_by_table(io::IO, s::String, table::NTuple{256, Bool})
+    start = 1
+    n = ncodeunits(s)
+    @inbounds for i in 1:n
+        b = codeunit(s, i)
+        if table[b + 1]
+            _write_run(io, s, start, i - 1)
+            print(io, _reference(b))
+            start = i + 1
+        end
+    end
+    _write_run(io, s, start, n)
+    nothing
+end
+
+# The next position at or after `i` of each byte to escape, `ncodeunits(s) + 1` for none.
+@inline _next_positions(s::String, bytes::Tuple, i::Int) =
+    map(b -> something(findnext(==(b), codeunits(s), i), ncodeunits(s) + 1), bytes)
+
+function _escape_by_memchr(io::IO, s::String, bytes::Tuple, next::Tuple)
+    n = ncodeunits(s)
+    start = 1
+    while true
+        p, k = findmin(next)
+        p > n && break
+        b = @inbounds bytes[k]
+        _write_run(io, s, start, p - 1)
+        print(io, _reference(b))
+        start = p + 1
+        next = Base.setindex(next, something(findnext(==(b), codeunits(s), start), n + 1), k)
+    end
+    _write_run(io, s, start, n)
+    nothing
+end
+
+@inline function _write_escaped_with(io::IO, s::String, table, bytes)
+    ncodeunits(s) <= _ESCAPE_TABLE_MAX && return _escape_by_table(io, s, table)
+    _escape_by_memchr(io, s, bytes, _next_positions(s, bytes, 1))
+end
+# Writes `s` by the rule for text or, with `attribute = true`, by the rule for an attribute
+# value. Each branch calls the writer with its own table, so the call stays type-stable.
+_write_escaped(io::IO, s::String; attribute::Bool = false) =
+    attribute ? _write_escaped_with(io, s, _ATTR_TABLE, _ATTR_ESCAPED) :
+                _write_escaped_with(io, s, _TEXT_TABLE, _TEXT_ESCAPED)
+
+# `escape` returns its argument itself when nothing in it needs escaping, and otherwise writes
+# it once, without searching it again.
+function _escape_string(s::String, table, bytes)
+    n = ncodeunits(s)
+    hint = n + (n >> 3) + 16
+    if n <= _ESCAPE_TABLE_MAX
+        any(i -> @inbounds(table[codeunit(s, i) + 1]), 1:n) || return s
+        return sprint(_escape_by_table, s, table; sizehint = hint)
+    end
+    next = _next_positions(s, bytes, 1)
+    minimum(next) > n && return s
+    sprint(_escape_by_memchr, s, bytes, next; sizehint = hint)
+end
 
 """
-    escape(x::AbstractString) -> String
+    escape(x::AbstractString; attribute::Bool = false) -> String
 
-Escape the five XML predefined entities: `&` `<` `>` `'` `"`.
+Escape `x` for an XML document, so that a reader gives it back as written.
+
+`&`, `<`, `>`, `'` and `"` are written as the five predefined entities, and a carriage return as
+`&#13;`: a reader turns a carriage return written as such into a line feed (XML 1.0 §2.11). With
+`attribute = true`, for the value of an attribute, a tab and a line feed are also written as
+`&#9;` and `&#10;`: a reader turns each of them into a space there (§3.3.3). These are the rules
+that [`XML.write`](@ref) applies to text and to attribute values.
+
+```julia
+XML.escape("a < b\\r\\n")                 # "a &lt; b&#13;\\n"
+XML.escape("x\\ty"; attribute = true)    # "x&#9;y"
+```
 
 !!! note "Changed in v0.4"
     `escape` is no longer idempotent.  In previous versions, already-escaped sequences like
     `&amp;` were left untouched.  Now every `&` is escaped, so `escape("&amp;")` produces
     `"&amp;amp;"`.  Call `escape` only on raw, unescaped text.
 """
-escape(x::AbstractString) = replace(x, ESCAPE_CHARS...)
+escape(x::AbstractString; attribute::Bool = false) =
+    attribute ? _escape_string(String(x), _ATTR_TABLE, _ATTR_ESCAPED) :
+                _escape_string(String(x), _TEXT_TABLE, _TEXT_ESCAPED)
 
 # The five names XML 1.0 §4.6 predefines, which need no declaration, and the characters they
 # denote, index for index. `_predefined_at` below reads a name against them, for the decoder
