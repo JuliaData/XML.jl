@@ -1414,6 +1414,31 @@ end
         # and a modest nesting is not
         @test occursin("<d>xxxx</d>", XML._apply_declarations(
             "<!DOCTYPE d [<!ENTITY c0 \"x\"><!ENTITY c1 \"&c0;&c0;\"><!ENTITY c2 \"&c1;&c1;\">]><d>&c2;</d>"))
+        # the bounds measure what a document amplifies, not its size: a reference read past the
+        # first 64 MiB of a large document is included,
+        big = "<!DOCTYPE d [<!ENTITY e \"x\">]><d>" * repeat("a", 65 * 2^20) * "&e;</d>"
+        @test endswith(XML._apply_declarations(big), "ax</d>")
+        # and so are the uses of an entity that write some thirty times the document, past 64 MiB
+        many = "<!DOCTYPE d [<!ENTITY e \"" * repeat("y", 100) * "\">]><d>" *
+               repeat("&e;", 700_000) * "</d>"
+        @test ncodeunits(XML._apply_declarations(many)) > 70_000_000
+        # an entity bomb whose leaf is empty writes nothing: what it reads is what is bounded
+        empty = "<!ENTITY z0 \"\">" *
+                join(["<!ENTITY z$i \"" * repeat("&z$(i-1);", 10) * "\">" for i in 1:7])
+        for w in (:lenient, :structural, :strict)
+            @test_throws ErrorException parse("<!DOCTYPE d [" * empty * "]><d>&z7;</d>", Node;
+                                              wellformed = w)
+        end
+        # a default value copied into many start tags makes the rewritten document grow without
+        # any entity, and that growth is bounded as well
+        supplied = "<!DOCTYPE r [<!ATTLIST e a CDATA \"" * repeat("x", 20_000) * "\">]><r>" *
+                   repeat("<e/>", 10_000) * "</r>"
+        @test_throws ErrorException XML._apply_declarations(supplied)
+        # `:strict` checks a default value through the entities it names even when an earlier
+        # declaration of the attribute binds, so that walk is bounded too
+        ignored = "<!DOCTYPE d [" * empty * "<!ATTLIST d a CDATA \"x\"><!ATTLIST d a CDATA \"&z7;\">]><d/>"
+        @test only(elements(parse(ignored, Node)))["a"] == "x"
+        @test_throws ErrorException parse(ignored, Node; wellformed = :strict)
     end
 
     @testset "§5.1 cutoff: declarations after an unread parameter entity are not used" begin
@@ -1455,9 +1480,11 @@ end
         deep = "<!ENTITY % p0 \"<!ENTITY e 'x'>\">" * join("<!ENTITY % p$i \"&#37;p$(i-1);\">" for i in 1:60)
         laughs = "<!ENTITY % a0 \"" * repeat(" ", 1000) * "\">" *
                  join("<!ENTITY % a$i \"" * repeat("&#37;a$(i-1);", 10) * "\">" for i in 1:9)
+        empty = "<!ENTITY % z0 \"\">" *
+                join("<!ENTITY % z$i \"" * repeat("&#37;z$(i-1);", 10) * "\">" for i in 1:7)
         for subset in ("<!ENTITY % p \"&#37;p;\"> %p;",
                        "<!ENTITY % p \"&#37;q;\"><!ENTITY % q \"&#37;p;\"> %p;",
-                       deep * "%p60;", laughs * "%a9;")
+                       deep * "%p60;", laughs * "%a9;", empty * "%z7;")
             xml = "<!DOCTYPE d [" * subset * "]><d/>"
             for w in (:lenient, :structural, :strict), R in (Node, FlatNode)
                 @test_throws ErrorException parse(xml, R; wellformed = w)

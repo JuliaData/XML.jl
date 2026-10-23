@@ -8,15 +8,25 @@
 # `markup` below turns on — `&#60;` in a declaration is already a `<` and can open an element,
 # while `&e;` is still a reference.
 
+# What the declarations of a document have made the readers read so far, against the size of
+# the document itself: the counter the bounds of inclusion check (see `_charge!`).
+mutable struct _Budget
+    const doc::Int                   # bytes of the document
+    read::Int                        # bytes of replacement text read so far
+end
+_Budget(doc::Integer) = _Budget(Int(doc), 0)
+
 """
 The general entities a document's internal subset declares, with the one bit that decides how
 inclusion can be implemented: `markup` is true when some replacement text, once character
 references resolve and nested references expand, carries a `<`. Without it every reference is a
-text substitution; with it, inclusion has to produce structure.
+text substitution; with it, inclusion has to produce structure. `budget` is the document's, which
+every inclusion draws on.
 """
 struct InternalEntities
     values::Dict{String, String}   # name => replacement text, first declaration binding (§4.2)
     markup::Bool
+    budget::_Budget
 end
 
 Base.isempty(e::InternalEntities) = isempty(e.values)
@@ -119,18 +129,20 @@ mutable struct _SubsetReader
     const attributes::Dict{String, Vector{_DeclaredAttr}}   # element => its attributes, in order
     const standalone::Bool
     const including::Vector{String}          # parameter entities being included, outermost first
-    included::Int                            # bytes of replacement text read so far
+    const budget::_Budget                    # what the subset's inclusions have read
     cut::Bool                                # §5.1's cutoff has been reached
     const strict::Union{Nothing, _StrictRecord}   # filled only when `:strict` reads the subset
 end
 
 function _subset_declarations(body::AbstractString, standalone::Bool = false,
-                              strict::Union{Nothing, _StrictRecord} = nothing)
+                              strict::Union{Nothing, _StrictRecord} = nothing,
+                              budget::_Budget = _Budget(ncodeunits(body)))
     lb = findfirst('[', body)
     lb === nothing && return nothing
     s = String(body)
     r = _SubsetReader(Dict{String, String}(), Dict{String, String}(),
-                      Dict{String, Vector{_DeclaredAttr}}(), standalone, String[], 0, false, strict)
+                      Dict{String, Vector{_DeclaredAttr}}(), standalone, String[], budget, false,
+                      strict)
     _read_subset!(r, s, nextind(s, lb), true)
     r
 end
@@ -142,7 +154,7 @@ function _declare_attributes!(r::_SubsetReader, element::String, defs::Vector{_A
     for d in defs
         any(a -> a.name == d.name, declared) && continue
         supplied = d.literal === nothing ? nothing :
-                   _supplied_text(d.literal, r.entities, d.tokenized)
+                   _supplied_text(d.literal, r.entities, d.tokenized, r.budget)
         push!(declared, _DeclaredAttr(d.name, d.tokenized, supplied))
     end
 end
@@ -152,9 +164,10 @@ end
 # quotes written as character references, so that it can stand between double quotes. Character
 # references and the five predefined entities stay as written, for the readers to decode. A
 # value of a type other than CDATA is written reduced, as a value written in a tag is (§3.3.3).
-function _supplied_text(literal::String, entities::Dict{String, String}, tokenized::Bool)
+function _supplied_text(literal::String, entities::Dict{String, String}, tokenized::Bool,
+                        budget::_Budget)
     io = IOBuffer()
-    ents = InternalEntities(entities, false)
+    ents = InternalEntities(entities, false, budget)
     if tokenized
         _write_reduced!(io, literal, ents, UInt8('"'), 1)
     else
@@ -186,9 +199,7 @@ function _read_subset!(r::_SubsetReader, s::String, pos::Int, subset::Bool)
                     join([r.including; name], " -> "))
                 length(r.including) >= _MAX_ENTITY_DEPTH &&
                     error("entity expansion exceeded $(_MAX_ENTITY_DEPTH) levels of nesting")
-                r.included += ncodeunits(text)
-                r.included > _MAX_ENTITY_EXPANSION &&
-                    error("entity expansion exceeded $(_MAX_ENTITY_EXPANSION) bytes")
+                _charge!(r.budget, ncodeunits(text))
                 push!(r.including, name)
                 _read_subset!(r, text, 1, false)
                 pop!(r.including)
@@ -297,18 +308,21 @@ entities, and the attributes that ask for work, by element — a value to supply
 struct _Declarations
     entities::Union{Nothing, InternalEntities}
     attributes::Union{Nothing, Dict{String, Vector{_DeclaredAttr}}}
+    budget::_Budget
 end
 
 function _declarations(xml::AbstractString)
     _has_doctype(xml) || return nothing
     body = _doctype_body(xml)
     body === nothing && return nothing
-    r = _subset_declarations(body, _declares_standalone(xml))
+    budget = _Budget(ncodeunits(xml))
+    r = _subset_declarations(body, _declares_standalone(xml), nothing, budget)
     r === nothing && return nothing
-    ents = isempty(r.entities) ? nothing : InternalEntities(r.entities, _check_and_scan(r.entities))
+    ents = isempty(r.entities) ? nothing :
+           InternalEntities(r.entities, _check_and_scan(r.entities), budget)
     attrs = _working_attributes(r.attributes)
     ents === nothing && attrs === nothing && return nothing
-    _Declarations(ents, attrs)
+    _Declarations(ents, attrs, budget)
 end
 
 # The declared attributes that ask for work; an attribute declared CDATA with no default asks
@@ -335,10 +349,43 @@ _internal_entities(xml::AbstractString) = (d = _declarations(xml); d === nothing
 #-----------------------------------------------------------------------------# inclusion (§4.4.2)
 # Nested declarations amplify without any cycle — ten entities each naming the previous one ten
 # times reach 10^10 bytes at depth ten — so the No Recursion constraint is not enough and expansion carries
-# its own bounds. Both are refused at every `wellformed` level: an unbounded expansion is a
+# its own bounds. All are refused at every `wellformed` level: an unbounded expansion is a
 # termination hazard, not a conformance question.
+#
+# Besides the depth, they follow Expat's two counters, each set against the document's own size:
+# the bytes read — the document's, and each replacement text read to include an entity, a
+# parameter entity included — and the bytes the rewritten document reaches, the default values
+# it receives included. Either may pass its allowance only while it stays within
+# `_MAX_AMPLIFICATION` times the document, so that a large document is read whatever its size,
+# while a small one that amplifies is refused early. The first bounds the time and the second
+# the memory: a bomb whose leaf entity is empty writes nothing, and a default value supplied to
+# many elements is read once.
 const _MAX_ENTITY_DEPTH = 40
-const _MAX_ENTITY_EXPANSION = 64 * 1024 * 1024   # bytes an expanded document may reach
+const _READ_ALLOWANCE = 8 * 1024 * 1024          # bytes read that any document may reach
+const _WRITE_ALLOWANCE = 64 * 1024 * 1024        # bytes of rewritten document, likewise
+const _MAX_AMPLIFICATION = 100
+
+# Charges the reading of a replacement text of `n` bytes to the document's budget.
+function _charge!(b::_Budget, n::Int)
+    b.read += n
+    total = b.doc + b.read
+    total >= _READ_ALLOWANCE && total > _MAX_AMPLIFICATION * b.doc && _read_exceeded()
+    nothing
+end
+_charge!(e::InternalEntities, n::Int) = _charge!(e.budget, n)
+_charge!(::Nothing, ::Int) = nothing            # no entity declared: `_replacement` finds none
+
+# Checks the rewritten document, `n` bytes long so far.
+_check_written(b::_Budget, n::Int) =
+    (n >= _WRITE_ALLOWANCE && n > _MAX_AMPLIFICATION * b.doc && _write_exceeded(); nothing)
+_check_written(e::InternalEntities, n::Int) = _check_written(e.budget, n)
+_check_written(::Nothing, ::Int) = nothing
+
+@noinline _read_exceeded() = error("entity expansion exceeded its bound: the document and the ",
+    "replacement texts it includes reach more than 8 MiB, and more than ", _MAX_AMPLIFICATION,
+    " times the document's size")
+@noinline _write_exceeded() = error("the declarations of the DOCTYPE make the document larger ",
+    "than 64 MiB, and more than ", _MAX_AMPLIFICATION, " times its own size")
 
 # A reference to a declared general entity is replaced by its replacement text, and that text's
 # own references with it (§4.4.2). Everything else is copied through untouched — a character
@@ -410,13 +457,15 @@ function _expand_refs!(io::IOBuffer, s::AbstractString, ents::InternalEntities, 
         rep = get(ents.values, name, nothing)
         if rep === nothing
             Base.write(io, SubString(s, amp, j))
-        elseif !literal && d !== nothing && occursin('<', rep)
-            _rewrite_walk!(io, rep, d, depth + 1, name)
         else
-            _expand_refs!(io, rep, ents, depth + 1, literal, d)
+            _charge!(ents, ncodeunits(rep))
+            if !literal && d !== nothing && occursin('<', rep)
+                _rewrite_walk!(io, rep, d, depth + 1, name)
+            else
+                _expand_refs!(io, rep, ents, depth + 1, literal, d)
+            end
+            _check_written(ents, io.size)
         end
-        io.size > _MAX_ENTITY_EXPANSION &&
-            error("entity expansion exceeded $(_MAX_ENTITY_EXPANSION) bytes")
         i = nextind(s, j)
     end
     io
@@ -497,10 +546,10 @@ function _write_reduced!(io::IOBuffer, s::AbstractString, ents::Union{Nothing, I
             j = _name_end(cu, i + 1, n)
             rep = j > 0 ? _replacement(ents, SubString(s, i + 1, prevind(s, j))) : nothing
             if rep !== nothing
+                _charge!(ents, ncodeunits(rep))
                 started, pending =
                     _write_reduced!(io, rep, ents, q, depth + 1, started, pending)
-                io.size > _MAX_ENTITY_EXPANSION &&
-                    error("entity expansion exceeded $(_MAX_ENTITY_EXPANSION) bytes")
+                _check_written(ents, io.size)
                 i = j + 1
                 continue
             end
@@ -604,7 +653,7 @@ end
 # the walk over start tags alone then does the same work in less time.
 function _rewritten_bytes(s::AbstractString, d::_Declarations)
     if d.entities === nothing
-        done, bytes = _rewrite_tags(s, d.attributes)
+        done, bytes = _rewrite_tags(s, d.attributes, d.budget)
         done && return bytes
     end
     out = _rewrite_walk!(nothing, s, d, 1)
@@ -619,7 +668,8 @@ end
 # form this walk does not expect it returns `(false, nothing)`, and `_rewrite_walk!` reads
 # the document instead; otherwise `(true, bytes)`, `bytes` being `nothing` when nothing was
 # rewritten. Every search for a byte goes through `_findbyte_cu`.
-function _rewrite_tags(s::AbstractString, attrs::Dict{String, Vector{_DeclaredAttr}})
+function _rewrite_tags(s::AbstractString, attrs::Dict{String, Vector{_DeclaredAttr}},
+                       budget::_Budget = _Budget(ncodeunits(s)))
     cu = codeunits(s)
     n = length(cu)
     out = nothing
@@ -673,6 +723,7 @@ function _rewrite_tags(s::AbstractString, attrs::Dict{String, Vector{_DeclaredAt
                         out === nothing && (out = IOBuffer(sizehint = n))
                         Base.write(out, SubString(s, pos, prevind(s, k)))
                         Base.write(out, ' ', att.name, "=\"", att.supplied, '"')
+                        _check_written(budget, out.size)
                         pos = k
                     end
                 end
@@ -825,6 +876,7 @@ function _rewrite_walk!(out::Union{Nothing, IOBuffer}, s::AbstractString, d::_De
                 out === nothing && (out = IOBuffer(sizehint = ncodeunits(s)))
                 Base.write(out, SubString(s, pos, prevind(s, start)))
                 Base.write(out, ' ', a.name, "=\"", a.supplied, '"')
+                _check_written(d.budget, out.size)
                 pos = start
             end
             current = nothing
@@ -918,9 +970,9 @@ function _strict_context(xml::AbstractString)
     _check_pe_refs_in_markup(body)
     standalone = _declares_standalone(xml)
     rec = _StrictRecord()
-    r = _subset_declarations(body, standalone, rec)
+    r = _subset_declarations(body, standalone, rec, _Budget(ncodeunits(xml)))
     names = standalone || (!_names_external_subset(body) && !rec.pe_refs)
-    r === nothing || _check_defaults(rec, r.entities, names)
+    r === nothing || _check_defaults(rec, r.entities, names, r.budget)
     _StrictContext(names, isempty(rec.external) ? nothing : rec.external,
                    isempty(rec.unparsed) ? nothing : rec.unparsed)
 end
@@ -1056,16 +1108,20 @@ end
 # The constraints on each default value (§3.1, §4.1), checked with the declarations, whether
 # a tag receives the value or not. `rank` counts the general entities declared before the
 # ATTLIST, among which an entity the value names must be where "Entity Declared" binds. An
-# entity's text is checked through, as an attribute value that names it would include it.
-function _check_defaults(rec::_StrictRecord, values::Dict{String, String}, names::Bool)
+# entity's text is checked through, as an attribute value that names it would include it, and
+# read within the same bounds as an inclusion: the value of a declaration that does not bind is
+# checked too, and no inclusion has read its entities before.
+function _check_defaults(rec::_StrictRecord, values::Dict{String, String}, names::Bool,
+                         budget::_Budget)
     for (element, attribute, literal, rank) in rec.defaults
         occursin('<', literal) && _bad_default(element, attribute, "holds a `<`", "§3.1")
-        _check_default_refs(literal, rec, values, names, rank, element, attribute, 1)
+        _check_default_refs(literal, rec, values, names, rank, element, attribute, 1, budget)
     end
 end
 
 function _check_default_refs(text::AbstractString, rec::_StrictRecord, values::Dict{String, String},
-                             names::Bool, rank::Int, element::String, attribute::String, depth::Int)
+                             names::Bool, rank::Int, element::String, attribute::String, depth::Int,
+                             budget::_Budget)
     depth > _MAX_ENTITY_DEPTH && return              # a cycle is refused before the parse
     cu = codeunits(text)
     n = length(cu)
@@ -1097,8 +1153,9 @@ function _check_default_refs(text::AbstractString, rec::_StrictRecord, values::D
                     occursin('<', rep) &&
                         _bad_default(element, attribute, "holds a `<` through entity \"$ref\"",
                                      "§3.1")
+                    _charge!(budget, ncodeunits(rep))
                     _check_default_refs(rep, rec, values, names, rank, element, attribute,
-                                        depth + 1)
+                                        depth + 1, budget)
                 end
             end
         end
