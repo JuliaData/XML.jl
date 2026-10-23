@@ -12,8 +12,8 @@ instead, as it is read:
 - the values are those the `String` gives, with line ends, attribute values and references
   normalized;
 - `sourcetext` and `sourcespan` refer to the bytes of `s`, carriage returns included;
-- nothing is copied, unless the internal subset declares something to apply, which rewrites the
-  document.
+- nothing is copied, unless the declarations of the DOCTYPE change the document, which is then
+  read from a rewritten copy, to which `sourcetext` and `sourcespan` refer.
 
 This suits a scan that reads few values, such as finding one element in a large document. A full
 read costs more than through the `String`, since each value is normalized as it is read. `Node`

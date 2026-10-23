@@ -40,9 +40,11 @@ with [`next!`](@ref); read the current position with [`nodetype`](@ref),
 [`is_simple`](@ref), [`simple_value`](@ref).
 (`parse(Cursor, data)` also works.) The `read` forms apply the same byte-level
 BOM normalization as the tree readers: UTF-8 BOM strip, UTF-16 LE/BE transcoding.
-Like [`LazyNode`](@ref), the cursor reads a document whose internal subset declares
-something to apply from a rewritten copy of the same string type; for a source type that
-cannot be rebuilt, such a document raises an `ArgumentError`. The cursor takes no `wellformed`
+Like [`LazyNode`](@ref), the cursor reads a document that the declarations of its DOCTYPE
+change from a copy with these changes made, of the same string type. The copy can be made for a
+`String`, a `SubString{String}`, a `StringView` over a byte vector `v` or over a slice
+`view(v, i:j)` of it, and the result of [`sourceview`](@ref); on any other string type, such a
+document raises an `ArgumentError` (see [`LazyNode`](@ref)). The cursor takes no `wellformed`
 keyword: it checks only the rules on entities and accepts mismatched tags, so read a document
 that must be checked with [`Node`](@ref) or [`FlatNode`](@ref).
 
