@@ -23,14 +23,14 @@ using .XMLTokenizer:
     TokenKinds, Token, Tokenizer, TokenizerState, _init_state, _noshift_substring
 
 # Include order is the dependency contract: types before readers, readers before entry points.
-include("escape.jl")     # ESCAPE_CHARS + escape/unescape — leaf, everything below may call it
+include("escape.jl")     # escaping rules + escape/unescape — leaf, everything below may call it
 include("node.jl")       # NodeType, Attributes, Node + accessors/navigation/equality/mutation/show
 include("xpath.jl")      # xpath over Node trees (needs Node + accessors)
 include("lazynode.jl")   # LazyNode reader (needs NodeType/Attributes; extends the generic accessors)
 include("cursor.jl")     # Cursor pull reader (needs NodeType/Attributes)
 include("flatnode.jl")   # FlatNode read-only columnar reader (needs node.jl types; checks live in parse.jl)
 include("identity.jl")   # structural ==/hash bindings + issamenode (needs all reader types above)
-include("write.jl")      # XML writer: _write_xml/_write_escaped + XML.write entry points
+include("write.jl")      # XML writer: _write_xml + XML.write entry points
 include("parse.jl")      # BOM normalization, Base.read entry points, the VPA parser
 include("dtd.jl")        # DOCTYPE declaration readers — leaf, plain string scanning
 include("entities.jl")   # internal general entities §4.4 (needs dtd.jl's declaration reader)

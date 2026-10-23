@@ -1,33 +1,7 @@
 #-----------------------------------------------------------------------------# show (text/xml)
 
-# Write XML-escaped content directly to IO (single pass, no intermediate string).
-# Literal CR is escaped as a character reference: a conforming reader normalizes literal
-# CR / CR LF in content to LF (XML 1.0 §2.11), so only the reference form comes back from a
-# round-trip — the character-data counterpart of the attribute rule below.
-function _write_escaped(io::IO, s::String)
-    start = 1
-    i = 1
-    n = ncodeunits(s)
-    @inbounds while i <= n
-        b = codeunit(s, i)
-        esc = if b == UInt8('&'); "&amp;"
-        elseif b == UInt8('<'); "&lt;"
-        elseif b == UInt8('>'); "&gt;"
-        elseif b == UInt8('"'); "&quot;"
-        elseif b == UInt8('\''); "&apos;"
-        elseif b == UInt8('\r'); "&#13;"
-        else
-            i += 1
-            continue
-        end
-        i > start && GC.@preserve s Base.unsafe_write(io, pointer(s, start), (i - start) % UInt)
-        print(io, esc)
-        i += 1
-        start = i
-    end
-    start <= n && GC.@preserve s Base.unsafe_write(io, pointer(s, start), (n - start + 1) % UInt)
-    nothing
-end
+# Text and attribute values are escaped by `_write_escaped`, in escape.jl: the rules that
+# `escape` applies.
 
 # Cached indentation strings to avoid repeated allocation
 const _MAX_CACHED_INDENT = 64
@@ -35,36 +9,6 @@ const _INDENT_STRINGS = [" " ^ n for n in 0:_MAX_CACHED_INDENT]
 @inline function _indent_str(n::Int)
     0 <= n <= _MAX_CACHED_INDENT && return @inbounds _INDENT_STRINGS[n + 1]
     " " ^ n
-end
-
-# Attribute values additionally escape literal #x9/#xA/#xD as character references: a
-# conforming reader normalizes literal white space in attribute values to spaces
-# (XML 1.0 §3.3.3), so only the reference form comes back from a round-trip.
-function _write_attr_escaped(io::IO, s::String)
-    start = 1
-    i = 1
-    n = ncodeunits(s)
-    @inbounds while i <= n
-        b = codeunit(s, i)
-        esc = if b == UInt8('&'); "&amp;"
-        elseif b == UInt8('<'); "&lt;"
-        elseif b == UInt8('>'); "&gt;"
-        elseif b == UInt8('"'); "&quot;"
-        elseif b == UInt8('\''); "&apos;"
-        elseif b == UInt8('\t'); "&#9;"
-        elseif b == UInt8('\n'); "&#10;"
-        elseif b == UInt8('\r'); "&#13;"
-        else
-            i += 1
-            continue
-        end
-        i > start && GC.@preserve s Base.unsafe_write(io, pointer(s, start), (i - start) % UInt)
-        print(io, esc)
-        i += 1
-        start = i
-    end
-    start <= n && GC.@preserve s Base.unsafe_write(io, pointer(s, start), (n - start + 1) % UInt)
-    nothing
 end
 
 # Serialize `key="escaped-value"` pairs for an attributes vector (no leading space outside).
@@ -77,7 +21,7 @@ function _print_attrs(io::IO, attributes)
         Base.write(io, k)
         Base.write(io, UInt8('='))
         Base.write(io, UInt8('"'))
-        _write_attr_escaped(io, v)
+        _write_escaped(io, v; attribute = true)
         Base.write(io, UInt8('"'))
     end
 end
