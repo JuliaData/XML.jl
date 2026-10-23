@@ -46,8 +46,8 @@ traversals are dramatically slower, since each pass re-scans the whole document,
 `Node` tree is built once and then walked cheaply.
 
 - **Forward streaming of a large document** → [`Cursor`](@ref) — fastest, and allocation-free
-  over a `String` document, except one copy when its lines end in CR or when the declarations
-  of its DOCTYPE change it.
+  over a `String` or `SubString{String}` document, except one copy when its lines end in CR or
+  when the declarations of its DOCTYPE change it.
 - **Repeated or random access** → [`Node`](@ref) — builds the tree once.
 - **`LazyNode`** → low-memory, *read-once* navigation, or as a holdable snapshot of a
   [`Cursor`](@ref) position (`LazyNode(c)` / `Cursor(::LazyNode)`).
@@ -413,15 +413,15 @@ end
 Return the original source text of the node as a `SubString`, with no parsing, escaping,
 or reformatting.  This is the zero-copy counterpart of [`write`](@ref) for lazy nodes.
 
-Being zero-copy, it reports the bytes of the document the reader actually holds. A `String`
-document whose lines end in CR is normalized when it is read in, so its source text is the
-normalized one; a document held as any other string type — a view over a memory-mapped file,
-say — keeps its own line ends, so its source text carries them. A document that the
-declarations of its DOCTYPE change — an entity it uses, a default attribute value it receives,
-an attribute declared with a type other than CDATA — is rewritten when it is read in (see
-[`LazyNode`](@ref) for the string types this works on). Its source text is then the rewritten one:
-replacement texts included (§4.4.2), defaults supplied (§3.3.2), values reduced (§3.3.3).
-Reported *values* are normalized either way.
+Being zero-copy, it reports the bytes of the document the reader actually holds. A `String` or
+`SubString{String}` document whose lines end in CR is normalized when it is read in, so its
+source text is the normalized one; a document held as any other string type — a view over a
+memory-mapped file, say — keeps its own line ends, so its source text carries them. A document
+that the declarations of its DOCTYPE change — an entity it uses, a default attribute value it
+receives, an attribute declared with a type other than CDATA — is rewritten when it is read in
+(see [`LazyNode`](@ref) for the string types this works on). Its source text is then the
+rewritten one: replacement texts included (§4.4.2), defaults supplied (§3.3.2), values reduced
+(§3.3.3). Reported *values* are normalized either way.
 """
 function sourcetext(n::LazyNode)
     nt = n.nodetype
@@ -457,9 +457,9 @@ The range of *valid character indices* of the node's original source text within
 retained source string, so that `source[sourcespan(n)] == sourcetext(n)` — the positional
 counterpart of [`sourcetext`](@ref), for consumers that need *where* the node lives rather
 than its text (verbatim excision and splicing, error context). The retained string is the one
-the reader holds. For a `String` whose lines end in CR, normalized when it was read in, or for a
-document rewritten then (see [`sourcetext`](@ref)), it is that copy. The indices then do not
-apply to the text the reader was given.
+the reader holds. For a `String` or `SubString{String}` whose lines end in CR, normalized when
+it was read in, or for a document rewritten then (see [`sourcetext`](@ref)), it is that copy.
+The indices then do not apply to the text the reader was given.
 
 The bounds are character indices, not code units: the library performs the `prevind`
 computation, so a node ending on a multi-byte character yields indices that are safe to
@@ -492,8 +492,8 @@ The node's document source with the node's own text replaced by `replacement` �
 entirely by default. This is the packaged, multi-byte-safe form of splicing around
 [`sourcespan`](@ref): `Base.splice!`'s remove-and-insert, applied to the retained source
 and returning a new `String` (nothing is mutated). The retained source is the one
-[`sourcespan`](@ref) describes: for a `String` whose lines end in CR, the result has the
-normalized line ends.
+[`sourcespan`](@ref) describes: for a `String` or `SubString{String}` whose lines end in CR,
+the result has the normalized line ends.
 
 Defined for the two source-retaining readers (`LazyNode`, `FlatNode`).
 """

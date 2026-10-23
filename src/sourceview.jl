@@ -3,14 +3,14 @@
     XML.sourceview(s::Union{String, SubString{String}}) -> AbstractString
 
 Return `s` as a source that `Cursor` and `parse(·, LazyNode)` read where it lies, without the copy
-they make of a `String` that holds a carriage return.
+they make of a `String` or `SubString{String}` that holds a carriage return.
 
-A `String` source has its line ends normalized once, at the entry (XML 1.0 §2.11), which copies
-the whole document when it holds a CR. The source returned here is normalized value by value
-instead, as it is read:
+A `String` or `SubString{String}` source has its line ends normalized once, at the entry (XML 1.0
+§2.11), which copies the whole document when it holds a CR. The source returned here is
+normalized value by value instead, as it is read:
 
-- the values are those the `String` gives, with line ends, attribute values and references
-  normalized;
+- the values are the same as when `s` itself is read, with line ends, attribute values and
+  references normalized;
 - `sourcetext` and `sourcespan` refer to the bytes of `s`, carriage returns included;
 - nothing is copied, unless the declarations of the DOCTYPE change the document, which is then
   read from a rewritten copy, to which `sourcetext` and `sourcespan` refer.

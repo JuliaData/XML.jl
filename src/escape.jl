@@ -366,10 +366,13 @@ end
 # DISPATCH rather than by a runtime test, which is what keeps the common path's accessor
 # bodies byte-identical:
 #
-#   - a `String`-backed document is rewritten here, once, at the entry (next to the BOM
-#     handling). A CR-free one — the entire LF world — comes back unchanged after a single
-#     memchr-backed scan; a CR-carrying one is rewritten, and every downstream span, token
-#     and zero-copy view then lives in the normalized document;
+#   - a `String`-backed document, a `String` or a `SubString{String}`, is rewritten here,
+#     once, at the entry (next to the BOM handling). A CR-free one — the entire LF world —
+#     comes back unchanged after a single memchr-backed scan; a CR-carrying one is
+#     rewritten, and every downstream span, token and zero-copy view then lives in the
+#     normalized document. A `SubString{String}` comes back as a view of the rewritten
+#     `String`, as from the DOCTYPE's rewrite, so that the reader's type is the argument's
+#     whatever the line ends;
 #   - a document held as any other string type — a `StringView` over a memory-mapped file
 #     being the case the README documents — would have to be copied into the heap to be
 #     rewritten here, which is the one thing the mapping exists to avoid. It is left alone,
@@ -384,7 +387,8 @@ _normalize_input_eol(s::String) = occursin('\r', s) ? _rewrite_content_eol(s) : 
 # Under Julia 1.10, a `SubString{String}`'s own search for a character decodes every
 # character; `XMLTokenizer._findbyte` searches its parent's bytes with `memchr` instead.
 _normalize_input_eol(s::SubString{String}) =
-    XMLTokenizer._findbyte(s, UInt8('\r'), 1) === nothing ? s : _rewrite_content_eol(s)
+    XMLTokenizer._findbyte(s, UInt8('\r'), 1) === nothing ? s :
+        SubString(_rewrite_content_eol(s))
 _normalize_input_eol(s::AbstractString) = s
 
 # §2.11 for a document that was NOT rewritten at the entry: normalize one value's own bytes
