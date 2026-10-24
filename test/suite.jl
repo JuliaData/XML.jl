@@ -4390,6 +4390,21 @@ end
             # the LazyNode → Cursor bridge walks the normalized copy, not the raw input
             @test any(==("x\ny"), cursor_values(Cursor(only(elements(only(elements(lz)))))))
         end
+
+        @testset "a SubString{String} source keeps its type, with or without a CR" begin
+            # the copy that normalizes a CR is a view of the rewritten `String`, as the copy
+            # made for the DOCTYPE is: the reader's type follows the argument's type, not the
+            # document's line ends
+            @test @inferred(XML._normalize_input_eol(SubString("p\r\nq"))) == "p\nq"
+            for doc in ("<r>a\nb</r>", "<r>a\r\nb</r>")
+                sub = SubString("<x/>" * doc, 5)                # a view past its parent's start
+                lz = @inferred parse(sub, LazyNode)
+                @test lz isa LazyNode{SubString{String}}
+                @test value(only(children(only(children(lz))))) == "a\nb"
+                @test @inferred(LazyNode(sub, Document)) isa LazyNode{SubString{String}}
+                @test @inferred(Cursor(sub)) isa Cursor{SubString{String}}
+            end
+        end
     end
 
     @testset "Declaration attributes" begin
