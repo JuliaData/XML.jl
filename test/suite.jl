@@ -4002,13 +4002,17 @@ end
         @test length(xpath(doc, "/root/users/user[ @role = 'admin' ]")) == 2
         @test length(xpath(doc, "/root/users/user[\t1\n]")) == 1
         # XPath white space is XML's: a no-break or an ideographic space is a character the
-        # expression does not allow
-        @test_throws "Unexpected character" xpath(doc, "/root" * Char(0xa0))
-        @test_throws "Unexpected character" xpath(doc, Char(0x3000) * "/root")
+        # expression does not allow, and since it prints as a space, the error names its code
+        @test_throws "(U+00A0) in XPath" xpath(doc, "/root" * Char(0xa0))
+        @test_throws "only the space, tab, CR and LF" xpath(doc, "/root" * Char(0xa0))
+        @test_throws "(U+3000)" xpath(doc, Char(0x3000) * "/root")
         # in a predicate too, where a line separator is white space for isspace from Julia 1.14
-        @test_throws "Unsupported XPath predicate" xpath(doc, "/root/users/user[" * Char(0xa0) * "1]")
-        @test_throws "Unsupported XPath predicate" xpath(doc, "/root/users/user[@role" * Char(0xa0) * "='admin']")
-        @test_throws "Unsupported XPath predicate" xpath(doc, "/root/users/user[1" * Char(0x2028) * "]")
+        @test_throws "holds U+00A0" xpath(doc, "/root/users/user[" * Char(0xa0) * "1]")
+        @test_throws "holds U+00A0" xpath(doc, "/root/users/user[@role" * Char(0xa0) * "='admin']")
+        @test_throws "holds U+2028" xpath(doc, "/root/users/user[1" * Char(0x2028) * "]")
+        # any other character keeps the message it had, its code added
+        @test_throws "Unexpected character '!' (U+0021)" xpath(doc, "/root/!bad")
+        @test_throws "Unsupported XPath predicate: [@role~'admin']" xpath(doc, "/root/users/user[@role~'admin']")
     end
 
     @testset "error: empty @" begin
