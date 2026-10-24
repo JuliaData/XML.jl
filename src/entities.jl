@@ -661,6 +661,12 @@ function _rewritten_bytes(s::AbstractString, d::_Declarations)
     out === nothing ? nothing : take!(out)
 end
 
+# The output buffer of the walks, for a source of `n` bytes: an eighth more, so that entity
+# texts a little longer than their references, or a few default values, fit without regrowing
+# it. A regrown buffer costs a second one, and from Julia 1.11 the rewritten document keeps the
+# larger one, since `take!` and `String` take its memory as it is.
+_rewrite_buffer(n::Int) = IOBuffer(sizehint = n + n >> 3 + 64)
+
 # The walk over start tags, for a DTD that declares attributes and no general entity. The bytes
 # between two tags are stepped over by a search for `<`; a comment, a CDATA section and a
 # processing instruction to their ends; the start tag of an element the table does not name to
@@ -721,7 +727,7 @@ function _rewrite_tags(s::AbstractString, attrs::Dict{String, Vector{_DeclaredAt
                     for a in eachindex(current)
                         att = current[a]
                         (written[a] || att.supplied === nothing) && continue
-                        out === nothing && (out = IOBuffer(sizehint = n))
+                        out === nothing && (out = _rewrite_buffer(n))
                         Base.write(out, SubString(s, pos, prevind(s, k)))
                         Base.write(out, ' ', att.name, "=\"", att.supplied, '"')
                         _check_written(budget, out.size)
@@ -762,7 +768,7 @@ function _rewrite_tags(s::AbstractString, attrs::Dict{String, Vector{_DeclaredAt
             reduce_value || continue
             inner = SubString(s, v0 + 1, prevind(s, v1))
             _changes_when_reduced(inner, nothing) || continue
-            out === nothing && (out = IOBuffer(sizehint = n))
+            out === nothing && (out = _rewrite_buffer(n))
             Base.write(out, SubString(s, pos, v0))
             _write_reduced!(out, inner, nothing, q, 1)
             pos = v1
@@ -860,7 +866,7 @@ function _rewrite_walk!(out::Union{Nothing, IOBuffer}, s::AbstractString, d::_De
                               prevind(span, lastindex(span)))
             _changes_when_reduced(inner, ents) || continue
             start = tok.offset - base + 1
-            out === nothing && (out = IOBuffer(sizehint = ncodeunits(s)))
+            out === nothing && (out = _rewrite_buffer(ncodeunits(s)))
             Base.write(out, SubString(s, pos, prevind(s, start)))
             q = codeunit(span, 1)
             Base.write(out, q)
@@ -874,7 +880,7 @@ function _rewrite_walk!(out::Union{Nothing, IOBuffer}, s::AbstractString, d::_De
             for i in eachindex(current)
                 a = current[i]
                 (written[i] || a.supplied === nothing) && continue
-                out === nothing && (out = IOBuffer(sizehint = ncodeunits(s)))
+                out === nothing && (out = _rewrite_buffer(ncodeunits(s)))
                 Base.write(out, SubString(s, pos, prevind(s, start)))
                 Base.write(out, ' ', a.name, "=\"", a.supplied, '"')
                 _check_written(d.budget, out.size)
@@ -893,7 +899,7 @@ function _rewrite_walk!(out::Union{Nothing, IOBuffer}, s::AbstractString, d::_De
                 continue
         end
         start = tok.offset - base + 1
-        out === nothing && (out = IOBuffer(sizehint = ncodeunits(s)))
+        out === nothing && (out = _rewrite_buffer(ncodeunits(s)))
         Base.write(out, SubString(s, pos, prevind(s, start)))
         if tok.kind === XMLTokenizer.TokenKinds.ATTR_VALUE
             # the span carries its delimiters; only what they enclose is expanded, in literal
