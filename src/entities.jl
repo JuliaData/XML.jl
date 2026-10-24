@@ -11,10 +11,10 @@
 # What the declarations of a document have made the readers read so far, against the size of
 # the document itself: the counter the bounds of inclusion check (see `_charge!`).
 mutable struct _Budget
-    const doc::Int                   # bytes of the document
-    read::Int                        # bytes of replacement text read so far
+    const doc::Int64                 # bytes of the document
+    read::Int64                      # bytes of replacement text read so far
 end
-_Budget(doc::Integer) = _Budget(Int(doc), 0)
+_Budget(doc::Integer) = _Budget(Int64(doc), Int64(0))
 
 """
 The general entities a document's internal subset declares, with the one bit that decides how
@@ -359,7 +359,8 @@ _internal_entities(xml::AbstractString) = (d = _declarations(xml); d === nothing
 # `_MAX_AMPLIFICATION` times the document, so that a large document is read whatever its size,
 # while a small one that amplifies is refused early. The first bounds the time and the second
 # the memory: a bomb whose leaf entity is empty writes nothing, and a default value supplied to
-# many elements is read once.
+# many elements is read once. The counts are 64-bit and the ratio is taken by a division, as
+# libxml2 takes it, so that no size overflows, not even with a 32-bit `Int`.
 const _MAX_ENTITY_DEPTH = 40
 const _READ_ALLOWANCE = 8 * 1024 * 1024          # bytes read that any document may reach
 const _WRITE_ALLOWANCE = 64 * 1024 * 1024        # bytes of rewritten document, likewise
@@ -369,7 +370,7 @@ const _MAX_AMPLIFICATION = 100
 function _charge!(b::_Budget, n::Int)
     b.read += n
     total = b.doc + b.read
-    total >= _READ_ALLOWANCE && total > _MAX_AMPLIFICATION * b.doc && _read_exceeded()
+    total >= _READ_ALLOWANCE && total ÷ _MAX_AMPLIFICATION > b.doc && _read_exceeded()
     nothing
 end
 _charge!(e::InternalEntities, n::Int) = _charge!(e.budget, n)
@@ -377,7 +378,7 @@ _charge!(::Nothing, ::Int) = nothing            # no entity declared: `_replacem
 
 # Checks the rewritten document, `n` bytes long so far.
 _check_written(b::_Budget, n::Int) =
-    (n >= _WRITE_ALLOWANCE && n > _MAX_AMPLIFICATION * b.doc && _write_exceeded(); nothing)
+    (n >= _WRITE_ALLOWANCE && n ÷ _MAX_AMPLIFICATION > b.doc && _write_exceeded(); nothing)
 _check_written(e::InternalEntities, n::Int) = _check_written(e.budget, n)
 _check_written(::Nothing, ::Int) = nothing
 

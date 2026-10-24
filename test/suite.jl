@@ -1439,6 +1439,11 @@ end
         ignored = "<!DOCTYPE d [" * empty * "<!ATTLIST d a CDATA \"x\"><!ATTLIST d a CDATA \"&z7;\">]><d/>"
         @test only(elements(parse(ignored, Node)))["a"] == "x"
         @test_throws ErrorException parse(ignored, Node; wellformed = :strict)
+        # no size overflows the bounds: with a 32-bit `Int`, 100 times a 22 MB document would
+        # not fit, and a size of 10^17 bytes plays that part here
+        huge = XML._Budget(Int64(10)^17)
+        @test XML._charge!(huge, 10^9) === nothing
+        @test XML._check_written(huge, 10^9) === nothing
     end
 
     @testset "§5.1 cutoff: declarations after an unread parameter entity are not used" begin
