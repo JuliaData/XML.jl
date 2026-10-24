@@ -91,6 +91,12 @@ _is_xpath_name(s::AbstractString) = !isempty(s) && _xpath_name_end(s, 1) == ncod
 # XPath white space is XML's: space, tab, line feed and carriage return
 _is_xpath_space(c::Char) = c == ' ' || c == '\t' || c == '\n' || c == '\r'
 
+# A character that an error message has to name by its code: other white space prints as a
+# space, as the no-break space does, and some characters do not print at all
+_xpath_unseen(c::Char) = !_is_xpath_space(c) && (isspace(c) || !isprint(c))
+_xpath_code(c::Char) = isvalid(c) ? "U+" * uppercase(string(UInt32(c), base = 16, pad = 4)) :
+                                    "an invalid byte sequence"
+
 #-----------------------------------------------------------------------------# Tokenizer
 
 # Lex an XPath expression into a flat token stream. Whitespace is discarded; unterminated
@@ -168,7 +174,8 @@ function _xpath_tokenize(expr::AbstractString)
             i += 1
 
         else
-            error("Unexpected character '$(c)' in XPath: $(repr(s))")
+            error("Unexpected character ", repr(c), " (", _xpath_code(c), ") in XPath: ", repr(s),
+                  isspace(c) ? "; only the space, tab, CR and LF are XPath white space" : "")
         end
     end
     tokens
@@ -215,6 +222,10 @@ function _eval_predicate(predicate::AbstractString, nodes::Vector{Node{S}}, root
         return filter(n -> n.nodetype === Element && get(n, attr_name, nothing) == attr_val, nodes)
     end
 
+    k = findfirst(_xpath_unseen, predicate)
+    k === nothing || error("Unsupported XPath predicate: [", predicate, "] holds ",
+                           _xpath_code(predicate[k]), ", which is not XPath white space: only ",
+                           "the space, tab, CR and LF are")
     error("Unsupported XPath predicate: [$predicate]")
 end
 
