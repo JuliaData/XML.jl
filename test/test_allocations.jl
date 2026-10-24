@@ -345,6 +345,23 @@ measure_entry_bytes(s)  = @allocated XML._apply_declarations(s)
     end
 end
 
+# Entry rewrite — the contract for a document it makes longer: one buffer, sized on the source
+# with room to spare, so that entity texts a little longer than their references, or a few
+# default values, fit in it. A regrown buffer costs a second one and, from Julia 1.11, stays
+# attached to the rewritten document, which `take!` and `String` build without a copy.
+@testset "Entry rewrite: room for a document that grows a little" begin
+    items = repeat("<e a=\"1\">t</e>", 20_000)
+    longer = "<!DOCTYPE d [<!ENTITY w \"word\">]><d>" * replace(items, "t" => "&w;") * "</d>"
+    supplied = "<!DOCTYPE d [<!ATTLIST q b CDATA \"y\">]><d>" * items * "<q/></d>"
+    for s in (longer, supplied)
+        @test ncodeunits(XML._apply_declarations(s)) > ncodeunits(s)
+        measure_entry_bytes(s)                                     # warm-up
+        if _NO_COVERAGE
+            @test measure_entry_bytes(s) < 3 * ncodeunits(s) ÷ 2
+        end
+    end
+end
+
 # `:strict` reference check — the contract: on a token that carries a `&`, the check reads the
 # code units and copies nothing on a span it accepts, so the level allocates exactly what
 # `:structural` allocates on a document full of references. The direct guard holds the check
