@@ -151,8 +151,9 @@ Review these even if your code compiles unchanged:
    attributes declared with a type other than CDATA are normalized (XML 1.0 §4.4.2, §3.3.2,
    §3.3.3). With `<!DOCTYPE r [<!ENTITY e "zz">]><r>&e;</r>`, the text of `r` is `"zz"`, where
    0.3.x and v0.4.6 returned `"&e;"`. Every reader, at every level, rejects an entity that refers
-   to itself, an expansion beyond 40 levels or 64 MiB, and replacement text that is not balanced
-   (§4.3.2).
+   to itself, entities nested more than 40 levels deep, declarations that cost more than their
+   bounds (see [WELL-FORMEDNESS.md](WELL-FORMEDNESS.md#what-the-declarations-may-cost)), and
+   replacement text that is not balanced (§4.3.2).
 
 7. **Inter-element whitespace is preserved.** `parse`/`read` keep whitespace-only text between
    elements as `Text` nodes (0.3.x dropped it by default). So `children(root)` may include leading

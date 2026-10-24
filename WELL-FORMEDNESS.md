@@ -30,7 +30,7 @@ XML 1.0 defines two [classes of processors](https://www.w3.org/TR/xml/#proc-type
 
 | level | rejects |
 |---|---|
-| every level, `:lenient` included | mismatched or unclosed tags<br>an attribute written twice<br>an entity that refers to itself<br>an entity expansion beyond 40 levels or 64 MiB<br>replacement text that is not balanced |
+| every level, `:lenient` included | mismatched or unclosed tags<br>an attribute written twice<br>an entity that refers to itself<br>entities nested more than 40 levels deep<br>declarations that cost more than their bounds (see [below](#what-the-declarations-may-cost))<br>replacement text that is not balanced |
 | `:structural`, the default | several root elements or none<br>text outside the root<br>an invalid element name<br>`<` in an attribute value<br>a misplaced XML declaration or DOCTYPE |
 | `:strict` | `--` in a comment<br>an invalid processing-instruction target<br>a character outside the allowed range<br>a reference to an undeclared entity where that rule applies (see [below](#undeclared-entities)), to an unparsed entity, or to an external entity from an attribute value<br>a parameter-entity reference inside a declaration<br>a default value that holds `<`<br>an ATTLIST declaration its reader cannot follow (see [below](#declarations-of-the-internal-subset)) |
 
@@ -53,6 +53,15 @@ XML.jl reads the declarations of the internal subset for what they supply: the v
 - ELEMENT and NOTATION declarations are skipped to their `>`, since a non-validating processor does not use them.
 
 In a declaration, a no-break space (U+00A0) reads as white space before a name, and as part of the name after it.
+
+## What the declarations may cost
+
+The declarations of a DOCTYPE can make a small document costly to read: an entity can name another one many times, and a default value is copied into every start tag of its element. Every reader, at every level, refuses a document whose declarations pass two bounds at once on one of two counts:
+
+- the bytes read, those of the document and those of the entity texts it includes, beyond 8 MiB and beyond 100 times the size of the document;
+- the size of the document once its declarations are applied, beyond 64 MiB and beyond 100 times its own size.
+
+A large document is thus read whatever its size, as long as its declarations do not make it more than 100 times larger. For example, `<!ENTITY z0 "">`, named ten times by `z1`, itself named ten times by `z2`, and so on up to `z7`, would make a 426-byte document read 44 MB of entity text. It is refused after 8 MiB, although the rewritten document would be no larger. The two counts follow those of [Expat](https://libexpat.github.io/), with its values: 8 MiB and 100 times for what it reads, 64 MiB and 100 times for the memory it allocates.
 
 ## Streaming readers
 
