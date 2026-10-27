@@ -283,7 +283,7 @@ doc = read("file.xml", LazyNode)
 - A traversal costs only the bytes it steps over: descending to a target is O(bytes before it).
 - Nothing is cached, so repeated visits cost again.
 
-It is unbeatable for descents and kilobyte-scale documents. For whole-tree walks (134 ms against ~29/~71 ms build + walk on the 14 MB document below) and repeated queries, build `FlatNode` or `Node` instead: see [Performance by access pattern](#performance-by-access-pattern).
+It is unbeatable for descents and kilobyte-scale documents. For whole-tree walks (129 ms against ~29/~68 ms build + walk on the 14 MB document below) and repeated queries, build `FlatNode` or `Node` instead: see [Performance by access pattern](#performance-by-access-pattern).
 
 For streaming and high-throughput workloads, several extra accessors avoid materializing intermediate collections:
 
@@ -308,7 +308,7 @@ XML 1.0 asks a reader to turn each CR LF pair, and each lone CR, into a line fee
 - `sourcetext` and `sourcespan` refer to the bytes of the string you passed, CRs included;
 - a document that the declarations of its DOCTYPE change is read from a rewritten copy, to which `sourcetext` and `sourcespan` then refer (see [String types and DOCTYPE declarations](#string-types-and-doctype-declarations)).
 
-`Node` and `FlatNode` copy their source into a `String` anyway, and normalize its line ends once, as they read it.
+`Node` and `FlatNode` normalize the line ends once, at the entry, in a copy of a document that holds a CR. `sourcetext`, `sourcespan` and `splicetext` on a `FlatNode` refer to that copy, whose lines end in LF: to edit a file and keep its line ends, read it with `LazyNode`.
 
 ### Memory-mapped files
 
@@ -405,17 +405,17 @@ One number cannot rank the readers — cost depends on what you do with the docu
 
 | | build | walk every node | extract all values | DOM size in memory |
 |---|--:|--:|--:|--:|
-| `Cursor` | — (streams) | 22.9 ms (its one scan) | — | — (no DOM) |
-| `LazyNode` | 20 ns (reads the prolog) | 134 ms (re-tokenizes) | — | — (source only) |
-| `FlatNode` | 26.0 ms | 2.96 ms | 3.1 ms | 54.9 MiB |
-| `Node` | 67.6 ms | 3.36 ms | 3.6 ms | 71.6 MiB |
-| EzXML (libxml2) | 37.3 ms | — | — | — |
+| `Cursor` | — (streams) | 20.5 ms (its one scan) | — | — (no DOM) |
+| `LazyNode` | 19 ns (reads the prolog) | 129 ms (re-tokenizes) | — | — (source only) |
+| `FlatNode` | 26.5 ms | 2.88 ms | 2.93 ms | 54.9 MiB |
+| `Node` | 64.1 ms | 3.44 ms | 3.65 ms | 71.6 MiB |
+| EzXML (libxml2) | 37.4 ms | — | — | — |
 
 Reading the table: `Cursor`'s walk *is* its parse — one tokenizing scan, nothing retained. `LazyNode` materializes nothing, so its open reads only the prolog, without allocating. The source is rewritten once only when its internal subset declares something to apply: general entities, attribute defaults, attributes of a type other than CDATA. After that it costs per node visited. That still makes it the pick for touching a *fraction* of a large document, and, as the walk column shows, the wrong tool for visiting all of it.
 
-`FlatNode` builds ~2.6× faster than `Node` and holds ~23% less memory. Its `parent` and `depth` are O(1), where `Node` searches from the root. Whole-tree walks are close, because `Node`'s exact-size children vectors keep its locality sharp. Pure value extraction is close too, with the flat store slightly faster: 3.1 against 3.6 ms, since a per-value `SubString` view costs two integer stores. `FlatNode` builds ~1.4× faster than even libxml2, and `Node`'s gap to the C library is materialization, not scanning (see [PERFORMANCE-v0.4.md](PERFORMANCE-v0.4.md)).
+`FlatNode` builds ~2.4× faster than `Node` and holds ~23% less memory. Its `parent` and `depth` are O(1), where `Node` searches from the root. Whole-tree walks are close, because `Node`'s exact-size children vectors keep its locality sharp. Pure value extraction is close too, with the flat store slightly faster: 2.93 against 3.65 ms, since a per-value `SubString` view costs two integer stores. `FlatNode` builds ~1.4× faster than even libxml2, and `Node`'s gap to the C library is materialization, not scanning (see [PERFORMANCE-v0.4.md](PERFORMANCE-v0.4.md)).
 
-_Measured 2026-09-02, and the `LazyNode` row 2026-10-27, Apple M5 (single-threaded), Julia 1.12.7, EzXML 1.2.3; BenchmarkTools medians._
+_Measured 2026-10-27, Apple M5 (single-threaded), Julia 1.13.3, EzXML 1.2.3; BenchmarkTools medians._
 
 <br>
 
@@ -427,12 +427,12 @@ What the constructions this document lacks cost, what each `wellformed` level ad
 
 | Benchmark | XML.jl | EzXML | LightXML | XMLDict |
 |---|--:|--:|--:|--:|
-| Parse, small | 13.0 µs | 11.3 µs | 11.2 µs | 117 µs |
-| Parse, medium | 63.3 ms | 37.7 ms | 37.3 ms | 330 ms |
-| Write, small | 5.90 µs | 5.95 µs | 58.1 µs | — |
-| Write, medium | 24.7 ms | 21.0 ms | 30.5 ms | — |
-| Collect tags, small | 0.338 µs | 1.06 µs | 1.73 µs | — |
-| Collect tags, medium | 4.73 ms | 9.13 ms | 13.3 ms | — |
+| Parse, small | 13.0 µs | 11.2 µs | 11.0 µs | 124 µs |
+| Parse, medium | 63.4 ms | 37.7 ms | 37.7 ms | 318 ms |
+| Write, small | 4.14 µs | 5.65 µs | 57.4 µs | — |
+| Write, medium | 18.2 ms | 20.6 ms | 30.7 ms | — |
+| Collect tags, small | 0.345 µs | 1.06 µs | 1.76 µs | — |
+| Collect tags, medium | 4.84 ms | 9.92 ms | 13.6 ms | — |
 
 EzXML and LightXML wrap libxml2 (C): faster on raw parse, slower on in-Julia traversal.
 Times include garbage collection; [PERFORMANCE](PERFORMANCE-v0.4.md) breaks each of its rows
@@ -440,4 +440,4 @@ into the stable GC-free work and the per-session GC share.
 
 For the per-access-pattern decomposition (streaming / partial reads / full DOM / stage breakdown) and the theory behind these numbers, see [**PERFORMANCE-v0.4.md**](PERFORMANCE-v0.4.md).
 
-_Measured 2026-10-04, Apple M5 (single-threaded), Julia 1.13.1; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3), XMLDict 0.4.2. Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl)._
+_Measured 2026-10-27, Apple M5 (single-threaded), Julia 1.13.3; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3), XMLDict 0.4.2. Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl)._

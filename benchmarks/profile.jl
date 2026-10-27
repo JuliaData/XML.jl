@@ -192,9 +192,9 @@ println("\n(same recursive traversal for the three readers; a traversal that all
 #--------------------------------------------------------------# (5) MEMORY-MAPPED SOURCE
 # What a document held as something other than a `String` costs at the entry, and what a
 # partial read costs after that — the workload the README documents memory mapping for. The
-# document is mapped instead of read, and a CR LF twin is generated once beside it, because
-# a document's line ends determine whether the entry passes the mapping through or
-# rewrites it into the heap.
+# document is mapped instead of read, and a CR LF twin is generated once beside it: no
+# document is rewritten for its line ends, so the twin prices the normalization of each
+# value as it is read, every line end being one CR to fold.
 using Mmap, StringViews
 
 const FILE_CRLF = joinpath(@__DIR__, "data", "xmark_crlf.xml")
@@ -341,16 +341,42 @@ let e = token_shares(SESC)
     println("  escaped twin, tokens carrying a reference:  text ", pct(e.text_ref),
             "  attribute values ", pct(e.attr_ref))
 end
-for (lbl, s, lz, fl) in (("plain", S, LAZY, FLAT), ("escaped", SESC, LAZY_E, FLAT_E),
-                          ("markup", SM, LAZY_M, FLAT_M), ("defaults", SD, LAZY_D, FLAT_D))
-    row("Cursor stream, $lbl",   @benchmark cursor_stream($s))
-    row("parse → DOM, $lbl",     @benchmark parse($s, Node))
-    row("parse SubString, $lbl", @benchmark parse($s, SSNode))
-    row("LazyNode walk, $lbl",   @benchmark traverse_walk($lz))
-    row("attr sweep, $lbl",      @benchmark attr_sweep($lz))
-    row("FlatNode walk, $lbl",   @benchmark traverse_walk($fl))
-    row("EzXML stream, $lbl",    @benchmark ezxml_stream($s))
-    row("EzXML DOM, $lbl",       @benchmark (d[] = EzXML.parsexml($s)) setup = (d = Ref{Any}(nothing)) teardown = (d[] === nothing || finalize(d[].node); d[] = nothing) evals = 1)
+# The columns of (7) and the levels of (8) are read against one another, and a cell run
+# minutes after another can drift by more than the difference between them. So the cells
+# compared alternate instead: each round runs every one of them for 1 s, in an order that
+# rotates from one round to the next, and a cell prints the median of its rounds' medians,
+# with the median of their GC shares as its tail.
+function rounds(bs, nrounds)
+    foreach(tune!, bs)
+    rs = [BenchmarkTools.Trial[] for _ in bs]
+    for k in 1:nrounds, j in circshift(collect(eachindex(bs)), k)
+        push!(rs[j], run(bs[j]; seconds = 1))
+    end
+    rs
+end
+function rrow(label, r)
+    t  = median([median(x).time for x in r]) / 1e6
+    gc = median([median(x).gctime for x in r]) / 1e6
+    tail = gc < 0.05 ? "" : string(" (GC ", round(gc, digits = 1), ")")
+    println(rpad("  " * label, 26), lpad(round(t, digits = 2), 8), " ms", rpad(tail, 12),
+            lpad(last(r).allocs, 10), " allocs", lpad(mib(last(r)), 8), " MiB")
+end
+ezxml_dom(s) = @benchmarkable (d[] = EzXML.parsexml($s)) setup = (d = Ref{Any}(nothing)) teardown = (d[] === nothing || finalize(d[].node); d[] = nothing) evals = 1
+
+# The rows of (7) on one document, the four documents of a row alternating over 5 rounds.
+rows7(s, lz, fl) = Any[@benchmarkable(cursor_stream($s)), @benchmarkable(parse($s, Node)),
+                       @benchmarkable(parse($s, SSNode)), @benchmarkable(traverse_walk($lz)),
+                       @benchmarkable(attr_sweep($lz)), @benchmarkable(traverse_walk($fl)),
+                       @benchmarkable(ezxml_stream($s)), ezxml_dom(s)]
+let docs = (("plain", S, LAZY, FLAT), ("escaped", SESC, LAZY_E, FLAT_E),
+            ("markup", SM, LAZY_M, FLAT_M), ("defaults", SD, LAZY_D, FLAT_D)),
+    bs = [rows7(s, lz, fl) for (_, s, lz, fl) in docs]
+    for (j, name) in enumerate(("Cursor stream", "parse → DOM", "parse SubString", "LazyNode walk",
+                                "attr sweep", "FlatNode walk", "EzXML stream", "EzXML DOM"))
+        for (d, r) in zip(docs, rounds([b[j] for b in bs], 5))
+            rrow("$name, $(d[1])", r)
+        end
+    end
 end
 println("\n(same rows as (1), (2) and (4) over the four documents; the DOCTYPE holds 74 element",
         "\n and 14 attribute-list declarations)")
@@ -369,17 +395,26 @@ println("\n=== (8) WELL-FORMEDNESS LEVELS — what :strict adds ===")
 println("  text share of the bytes:  plain ", pct(token_shares(S).text), "  escaped ",
         pct(token_shares(SESC).text), "  text-only ", pct(token_shares(TEXT_ONLY).text),
         " (", round(ncodeunits(TEXT_ONLY) / 1e6, digits = 1), " MB)")
-row("plain :lenient",        @benchmark parse($S, Node; wellformed = :lenient))
-row("plain :structural",     @benchmark parse($S, Node; wellformed = :structural))
-row("plain :strict",         @benchmark parse($S, Node; wellformed = :strict))
-row("escaped :structural",   @benchmark parse($SESC, Node; wellformed = :structural))
-row("escaped :strict",       @benchmark parse($SESC, Node; wellformed = :strict))
-row("text-only :structural", @benchmark parse($TEXT_ONLY, Node; wellformed = :structural))
-row("text-only :strict",     @benchmark parse($TEXT_ONLY, Node; wellformed = :strict))
-# libxml2 has no levels: it always enforces well-formedness in full, so its rows are the reference
-# of a parser that checks everything, on the same three documents.
-for (lbl, s) in (("plain", S), ("escaped", SESC), ("text-only", TEXT_ONLY))
-    row("EzXML DOM, $lbl",       @benchmark (d[] = EzXML.parsexml($s)) setup = (d = Ref{Any}(nothing)) teardown = (d[] === nothing || finalize(d[].node); d[] = nothing) evals = 1)
+# The levels of one document alternate over 15 rounds with libxml2, which has no levels: it
+# always enforces well-formedness in full, so its row is the reference of a parser that checks
+# everything. A ratio is taken round by round, on the times net of their GC shares.
+net(x) = median(x).time - median(x).gctime
+function ratio(a, b)
+    q = net.(a) ./ net.(b)
+    string("median ", round(median(q), digits = 3), ", quartiles ",
+           join(round.(quantile(q, [0.25, 0.75]), digits = 3), " to "))
+end
+for (lbl, s, levels) in (("plain", S, (:lenient, :structural, :strict)),
+                         ("escaped", SESC, (:structural, :strict)),
+                         ("text-only", TEXT_ONLY, (:structural, :strict)))
+    rs = rounds(push!(Any[@benchmarkable(parse($s, Node; wellformed = $w)) for w in levels],
+                      ezxml_dom(s)), 15)
+    lv = Dict(zip(levels, rs))
+    foreach(w -> rrow("$lbl :$w", lv[w]), levels)
+    rrow("EzXML DOM, $lbl", last(rs))
+    println("  $lbl, :strict / :structural per round: ", ratio(lv[:strict], lv[:structural]))
+    :lenient in levels &&
+        println("  $lbl, :structural / :lenient per round: ", ratio(lv[:structural], lv[:lenient]))
 end
 println("\n(the character-range scan costs by the span, not the byte; the reference check",
         "\n runs only on a token that carries a `&`, so never on the plain document)")

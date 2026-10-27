@@ -354,7 +354,8 @@ end
     splicetext(n::FlatNode, replacement::AbstractString = "") -> String
 
 Same contract as the `LazyNode` method; the node's span is answered in O(1) from the
-store.
+store. The result is built from the document the store holds, normalized when it holds a CR:
+its line ends are then LF, where `splicetext` on a `LazyNode` keeps the ones it was given.
 """
 splicetext(n::FlatNode, replacement::AbstractString = "") =
     _splice_span(n.store.source, sourcespan(n), replacement)
