@@ -118,14 +118,15 @@ end
     elseif nt === DTD
         iter = _lazy_tokenizer(n)
         iterate(iter)  # DOCTYPE_OPEN
-        return lstrip(_read_eol(raw(iterate(iter)[1], n.data)))
+        # strip, then normalize: the same text, in the types the branches above return
+        return _read_eol(lstrip(raw(iterate(iter)[1], n.data)))
     elseif nt === ProcessingInstruction
         iter = _lazy_tokenizer(n)
         iterate(iter)  # PI_OPEN
         result = iterate(iter)
         result === nothing && return nothing
         result[1].kind === TokenKinds.PI_CONTENT || return nothing
-        content = lstrip(_read_eol(raw(result[1], n.data)))
+        content = _read_eol(lstrip(raw(result[1], n.data)))
         return isempty(content) ? nothing : content
     end
     nothing

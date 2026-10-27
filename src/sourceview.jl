@@ -69,6 +69,10 @@ else
     _viewed(x::SubString{SourceView}) =
         SubString(x.string.s, x.offset + 1, thisind(x.string.s, x.offset + x.ncodeunits))
 
+    # A view converts in one copy of the bytes it views, where `String(::AbstractString)`
+    # rebuilds the text a character at a time.
+    Base.String(x::SubString{SourceView}) = String(_viewed(x))
+
     const _CharEquals = Base.Fix2{<:Union{typeof(isequal), typeof(==)}, <:AbstractChar}
     Base.findnext(p::_CharEquals, x::_SourceViews, i::Integer) = findnext(p, _viewed(x), i)
     Base.findprev(p::_CharEquals, x::_SourceViews, i::Integer) = findprev(p, _viewed(x), i)

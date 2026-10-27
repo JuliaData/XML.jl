@@ -225,13 +225,14 @@ end
         return _read_eol(raw(iterate(it)[1], _data(c)))
     elseif nt === DTD
         it = _rescan(c); iterate(it)            # DOCTYPE_OPEN
-        return lstrip(_read_eol(raw(iterate(it)[1], _data(c))))
+        # strip, then normalize: the same text, in the types the branches above return
+        return _read_eol(lstrip(raw(iterate(it)[1], _data(c))))
     elseif nt === ProcessingInstruction
         it = _rescan(c); iterate(it)            # PI_OPEN
         r = iterate(it)
         r === nothing && return nothing
         r[1].kind === _CURSOR_XT.TokenKinds.PI_CONTENT || return nothing
-        content = lstrip(_read_eol(raw(r[1], _data(c))))
+        content = _read_eol(lstrip(raw(r[1], _data(c))))
         return isempty(content) ? nothing : content
     end
     nothing
