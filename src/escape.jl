@@ -300,16 +300,18 @@ function _unescape_entity(m::AbstractString)
 end
 
 """
-    unescape(x::AbstractString) -> String
+    unescape(x::AbstractString) -> Union{typeof(x), String}
     unescape(x::SubString{String}) -> SubString{String}
 
 Unescape XML entities in `x`: the five predefined entities (`&amp;` `&lt;` `&gt;` `&apos;`
 `&quot;`) and numeric character references (`&#123;`, `&#xAB;`). Each reference is processed
 exactly once (no double-unescaping); an `&` that starts no reference is kept as written.
 
-A `SubString{String}` that carries no reference is returned unchanged with no allocation —
-the common case for typical XML attribute and text content. A value that carries one costs
-one allocation, the decoded string itself.
+A value that carries no reference is returned as it is, without a copy: `x` itself, whatever
+its type. A value that carries one costs one allocation, the decoded `String`; a
+`SubString{String}` receives it as a `SubString{String}`, so that the result keeps the
+argument's type. A `String` or a `SubString{String}` without a reference thus costs no
+allocation, the common case for typical XML attribute and text content.
 """
 function unescape(x::AbstractString)
     occursin('&', x) || return string(x)

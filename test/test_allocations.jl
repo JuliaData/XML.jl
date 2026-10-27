@@ -90,6 +90,16 @@ end
         end
     end
 
+    # What `unescape` does not decode, it returns as it is: a `String` or a
+    # `SubString{String}` costs no allocation, also when its `&` starts no reference.
+    @testset "unescape allocates nothing for a value it does not decode" begin
+        for x in ("plain text", SubString("plain text"), "AT&T", SubString("AT&T"))
+            @test unescape(x) === x
+            measure_unescape(x)
+            _NO_COVERAGE && @test measure_unescape(x) == 0
+        end
+    end
+
     @testset "guarded fixtures read correctly" begin
         for x in (lz, fl, cu, nd)
             @test get(x, "r", nothing) == "A1"
