@@ -5451,6 +5451,31 @@ end
         end
     end
 
+    # `value` returns a union of concrete types, as through the `String`: an abstract member
+    # would box each value at the call. Its DTD and PI branches strip the leading white
+    # space before normalizing, which gives the same text.
+    @testset "value returns a union of concrete types" begin
+        viewtype = typeof(XML.sourceview(doc))
+        for T in (LazyNode{viewtype}, Cursor{viewtype})
+            @test all(isconcretetype, Base.uniontypes(only(Base.return_types(value, (T,)))))
+        end
+        pd = "<?pi \r\n  a\r\nb?><!DOCTYPE r [\r\n<!ELEMENT r ANY>\r\n]>\r\n<r/>"
+        @test lazyvals(parse(XML.sourceview(pd), LazyNode)) == lazyvals(parse(pd, LazyNode))
+        @test cursorvals(XML.sourceview(pd)) == cursorvals(pd)
+        @test [value(n) for n in children(parse(XML.sourceview(pd), LazyNode))][1:2] ==
+              ["a\nb", "r [\n<!ELEMENT r ANY>\n]"]
+    end
+
+    @testset "a view converts to a String in one copy" begin
+        v = tag(only(elements(parse(XML.sourceview(doc), LazyNode))))
+        copies(x) = @allocations String(x)          # function barrier
+        copies(v)
+        @test String(v) == "r"
+        if Base.JLOptions().code_coverage == 0      # coverage counters allocate
+            @test copies(v) == 1
+        end
+    end
+
     @testset "a document that declares something to apply" begin
         # The rewrite is a copy, returned as the type the reader was given, so the reader's type
         # parameter is the one a document that declares nothing gets; an encoding signature
