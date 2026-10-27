@@ -54,8 +54,8 @@ XML.jl provides four readers behind one set of accessors (`nodetype`, `tag`, `at
 
 Rules of thumb:
 
-- one forward pass → `Cursor` (fastest scan, ~zero allocation; a `String` or `SubString{String}` with CR line ends or declarations to apply is copied once, and [`XML.sourceview`](#reading-a-string-without-the-copy) avoids the copy for line ends)
-- extract a little from a large document → `LazyNode` (opening scans a `String` or `SubString{String}` once and copies it only when it has CR line ends or declarations to apply, then a cost per node touched)
+- one forward pass → `Cursor` (fastest scan, ~zero allocation; a document with declarations to apply is copied once)
+- extract a little from a large document → `LazyNode` (opening copies nothing unless the document has declarations to apply, then a cost per node touched)
 - read-heavy full document, repeated traversals → `FlatNode` (the random-access read API of `Node` at almost none of its GC cost: fastest build and walk, O(1) revisits)
 - build or edit documents → `Node`
 
@@ -249,7 +249,7 @@ White space between the parts of an expression, predicates included, is XML's: s
 
 ## `Cursor`
 
-The forward, StAX-style pull reader: one mutable cursor walks the document in document order, with no tree and one tokenizing scan. It allocates almost nothing, except one copy of a `String` or `SubString{String}` that has CR line ends or declarations to apply ([`XML.sourceview`](#reading-a-string-without-the-copy) avoids the copy for line ends). Advance with `next!`; read the current position with the usual accessors (`nodetype`, `tag`, `attributes`, `value`, `depth`, `is_simple`, `simple_value`):
+The forward, StAX-style pull reader: one mutable cursor walks the document in document order, with no tree and one tokenizing scan. It allocates almost nothing, except one copy of a document that has declarations to apply. Advance with `next!`; read the current position with the usual accessors (`nodetype`, `tag`, `attributes`, `value`, `depth`, `is_simple`, `simple_value`):
 
 ```julia
 cur = Cursor(xml_string)
@@ -279,11 +279,11 @@ doc = read("file.xml", LazyNode)
 
 `LazyNode` is for *partial* reads only:
 
-- Opening builds nothing. A `String` or `SubString{String}` source is scanned once for CR line ends (0.21 ms on the 14 MB document below), and copied only when it has some; any other string type is not scanned at all. A source whose internal subset declares something to apply is rewritten, as described [below](#memory-mapped-files).
+- Opening builds nothing and reads only the prolog: line ends are normalized value by value, as each value is read (see [Line ends](#line-ends)). A source whose internal subset declares something to apply is rewritten, as described [below](#memory-mapped-files).
 - A traversal costs only the bytes it steps over: descending to a target is O(bytes before it).
 - Nothing is cached, so repeated visits cost again.
 
-It is unbeatable for descents and kilobyte-scale documents. For whole-tree walks (131 ms against ~29/~71 ms build + walk on the 14 MB document below) and repeated queries, build `FlatNode` or `Node` instead: see [Performance by access pattern](#performance-by-access-pattern).
+It is unbeatable for descents and kilobyte-scale documents. For whole-tree walks (134 ms against ~29/~71 ms build + walk on the 14 MB document below) and repeated queries, build `FlatNode` or `Node` instead: see [Performance by access pattern](#performance-by-access-pattern).
 
 For streaming and high-throughput workloads, several extra accessors avoid materializing intermediate collections:
 
@@ -300,23 +300,15 @@ XML.write(n)                 # zero-copy: returns node's original source text
 XML.write(n; normalize=true) # re-parse + pretty-print, collapses source whitespace
 ```
 
-### Reading a `String` without the copy
+### Line ends
 
-`Cursor` and `LazyNode` normalize the line ends of a `String` or a `SubString{String}` once, when they open it, which copies the whole document when it holds a CR. A scan that reads few values can skip that copy with `XML.sourceview`:
+XML 1.0 asks a reader to turn each CR LF pair, and each lone CR, into a line feed (§2.11). `Cursor` and `LazyNode` do it value by value, as each value is read, so they never copy a document for its line ends:
 
-```julia
-cur = Cursor(XML.sourceview(xml_string))
-doc = parse(XML.sourceview(xml_string), LazyNode)
-```
+- a value is the same whatever the line ends of the file, and is normalized only when you ask for it;
+- `sourcetext` and `sourcespan` refer to the bytes of the string you passed, CRs included;
+- a document that the declarations of its DOCTYPE change is read from a rewritten copy, to which `sourcetext` and `sourcespan` then refer (see [String types and DOCTYPE declarations](#string-types-and-doctype-declarations)).
 
-The document is then read where it lies, like the memory-mapped `StringView` below:
-
-- each value is normalized as it is read, and is the same as through the `String`;
-- `sourcetext` and `sourcespan` refer to the bytes of `xml_string`, CRs included;
-- `tag`, `sourcetext` and a value with nothing to normalize are views of another string type than `SubString{String}`, which `String(v)` converts;
-- a document that the declarations of its DOCTYPE change is still read from a rewritten copy, to which `sourcetext` and `sourcespan` then refer (see [String types and DOCTYPE declarations](#string-types-and-doctype-declarations)).
-
-A full read costs more this way, since each value is normalized as it is read, so the copy stays the default. `XML.sourceview` also takes a `SubString{String}`. It is public API, though not exported.
+`Node` and `FlatNode` copy their source into a `String` anyway, and normalize its line ends once, as they read it.
 
 ### Memory-mapped files
 
@@ -355,8 +347,7 @@ The exception is a document that the declarations of its DOCTYPE change: the ent
 `Cursor` and `LazyNode` keep the string type they are given. When the declarations of its DOCTYPE change a document, they read a copy of it with these changes made, of that same string type. The changes are the entities the document uses, the default attribute values it receives, and the spaces removed from the attributes declared with a type other than CDATA. The copy can be made for:
 
 - a `String`, or a `SubString{String}` such as `view(str, i:j)`;
-- a `StringView` over a byte vector `v` (a `Vector{UInt8}`), as for a memory-mapped file, or over a slice `view(v, i:j)` of it, written without a step;
-- the result of `XML.sourceview`.
+- a `StringView` over a byte vector `v` (a `Vector{UInt8}`), as for a memory-mapped file, or over a slice `view(v, i:j)` of it, written without a step.
 
 On any other string type, such a document raises an `ArgumentError`. Two examples are a `LazyString`, and a `StringView` over a view of `v` written with a step, such as `view(v, i:2:j)` or `view(v, i:1:j)`. Read such a document with `Node` or `FlatNode`, or pass `String(s)` to `Cursor` or `LazyNode`. A document that its DOCTYPE does not change is read from any string type.
 
@@ -415,16 +406,16 @@ One number cannot rank the readers — cost depends on what you do with the docu
 | | build | walk every node | extract all values | DOM size in memory |
 |---|--:|--:|--:|--:|
 | `Cursor` | — (streams) | 22.9 ms (its one scan) | — | — (no DOM) |
-| `LazyNode` | 0.21 ms (one line-end scan) | 131 ms (re-tokenizes) | — | — (source only) |
+| `LazyNode` | 20 ns (reads the prolog) | 134 ms (re-tokenizes) | — | — (source only) |
 | `FlatNode` | 26.0 ms | 2.96 ms | 3.1 ms | 54.9 MiB |
 | `Node` | 67.6 ms | 3.36 ms | 3.6 ms | 71.6 MiB |
 | EzXML (libxml2) | 37.3 ms | — | — | — |
 
-Reading the table: `Cursor`'s walk *is* its parse — one tokenizing scan, nothing retained. `LazyNode` materializes nothing, so its open is one allocation-free scan of the source for line ends. The source is rewritten once when it has CR LF or lone CR line ends, or when its internal subset declares something to apply: general entities, attribute defaults, attributes of a type other than CDATA. After that it costs per node visited. That still makes it the pick for touching a *fraction* of a large document, and, as the walk column shows, the wrong tool for visiting all of it.
+Reading the table: `Cursor`'s walk *is* its parse — one tokenizing scan, nothing retained. `LazyNode` materializes nothing, so its open reads only the prolog, without allocating. The source is rewritten once only when its internal subset declares something to apply: general entities, attribute defaults, attributes of a type other than CDATA. After that it costs per node visited. That still makes it the pick for touching a *fraction* of a large document, and, as the walk column shows, the wrong tool for visiting all of it.
 
 `FlatNode` builds ~2.6× faster than `Node` and holds ~23% less memory. Its `parent` and `depth` are O(1), where `Node` searches from the root. Whole-tree walks are close, because `Node`'s exact-size children vectors keep its locality sharp. Pure value extraction is close too, with the flat store slightly faster: 3.1 against 3.6 ms, since a per-value `SubString` view costs two integer stores. `FlatNode` builds ~1.4× faster than even libxml2, and `Node`'s gap to the C library is materialization, not scanning (see [PERFORMANCE-v0.4.md](PERFORMANCE-v0.4.md)).
 
-_Measured 2026-09-02, Apple M5 (single-threaded), Julia 1.12.7, EzXML 1.2.3; BenchmarkTools medians._
+_Measured 2026-09-02, and the `LazyNode` row 2026-10-27, Apple M5 (single-threaded), Julia 1.12.7, EzXML 1.2.3; BenchmarkTools medians._
 
 <br>
 

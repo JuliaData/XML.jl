@@ -34,4 +34,4 @@ Reading the kind, tag, attributes, value and children of every node allocates:
 | `FlatNode` | 17 + 7 | 0.88 |
 | `LazyNode` | 0 + 12, of which 8 in `children` and 4 in `attributes` | 1.59 |
 
-`LazyNode` allocates less than `Node`, yet it is the slowest of the three to walk a whole document, because it reads the source again at each level. Walking every node of the 14 MB document takes 131 ms with `LazyNode`, against 29 ms with `FlatNode` and 71 ms with `Node`, parse included: see [Performance by access pattern](README.md#performance-by-access-pattern).
+`LazyNode` allocates less than `Node`, yet it is the slowest of the three to walk a whole document, because it reads the source again at each level. Walking every node of the 14 MB document takes 134 ms with `LazyNode`, against 29 ms with `FlatNode` and 71 ms with `Node`, parse included: see [Performance by access pattern](README.md#performance-by-access-pattern).

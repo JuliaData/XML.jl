@@ -42,9 +42,9 @@ with [`next!`](@ref); read the current position with [`nodetype`](@ref),
 BOM normalization as the tree readers: UTF-8 BOM strip, UTF-16 LE/BE transcoding.
 Like [`LazyNode`](@ref), the cursor reads a document that the declarations of its DOCTYPE
 change from a copy with these changes made, of the same string type. The copy can be made for a
-`String`, a `SubString{String}`, a `StringView` over a byte vector `v` or over a slice
-`view(v, i:j)` of it, and the result of [`sourceview`](@ref); on any other string type, such a
-document raises an `ArgumentError` (see [`LazyNode`](@ref)). The cursor takes no `wellformed`
+`String`, a `SubString{String}`, or a `StringView` over a byte vector `v` or over a slice
+`view(v, i:j)` of it; on any other string type, such a document raises an `ArgumentError` (see
+[`LazyNode`](@ref)). The cursor takes no `wellformed`
 keyword: it checks only the rules on entities and accepts mismatched tags, so read a document
 that must be checked with [`Node`](@ref) or [`FlatNode`](@ref).
 
@@ -53,15 +53,14 @@ aliasing-contract note on [`next!`](@ref).
 """
 function Cursor(data::S) where {S <: AbstractString}
     data = _drop_bom(data)   # a leading U+FEFF BOM char is an encoding signature, not content (§4.3.3)
-    # §2.11 — rewritten here for a `String`-backed document, on read for any other source
-    _cursor_at(_apply_declarations(_normalize_input_eol(data)), 1)
+    # §2.11 — each value is normalized as it is read (`_read_eol`), whatever the source type
+    _cursor_at(_apply_declarations(data), 1)
 end
 
-# `d` arrives with whatever §2.11 requires of it already applied: a `String`-backed document
-# is rewritten at the entry, any other source is left for `_read_eol` to normalize value by
-# value. Nothing here scans or restarts. `Cursor{S}` is built directly, on `d`'s own type,
-# rather than through the public constructor: that constructor runs the entry normalization,
-# which on a document already normalized is a scan for a CR the entry has removed.
+# `d` arrives as the reader takes it: the declarations of its DOCTYPE applied, its line ends
+# left for `_read_eol` to normalize value by value. Nothing here scans or restarts.
+# `Cursor{S}` is built directly, on `d`'s own type, rather than through the public
+# constructor, which would probe the document again for a BOM and for declarations to apply.
 @inline function _cursor_at(d::S, pos::Integer) where {S <: AbstractString}
     st = _CURSOR_XT.StatefulTokenizer(_CURSOR_XT.Tokenizer(d, pos))
     Cursor{S}(st, _CURSOR_XT.no_token(d), Document, 0, 0, false, false)
@@ -90,9 +89,9 @@ The first [`next!`](@ref) reaches whatever element begins at `startpos`, at dept
 auto-stops at its subtree boundary (the depth break). LazyNode-agnostic primitive.
 
 This constructor reads `data` as it stands, and it is the only entry that exposes a byte
-offset into the source. Line-end normalization only shortens, so the offset still
-translates (§2.11); entity inclusion inserts, so an offset inside a replaced reference has
-no image (§4.4.2). Each further transformation at the document entry would have to be
+offset into the source. Line ends are normalized value by value, so the offset holds as
+given (§2.11); entity inclusion inserts, so an offset inside a replaced reference has no
+image (§4.4.2). Each further transformation at the document entry would have to be
 examined the same way, and nothing in the package or in any registered dependent calls it —
 which is why it goes.
 """
@@ -107,18 +106,16 @@ const _CURSOR_STARTPOS_MSG = """
 
 function Cursor(data::S, startpos::Integer) where {S <: AbstractString}
     Base.depwarn(_CURSOR_STARTPOS_MSG, :Cursor)
-    d = _normalize_input_eol(data)   # §2.11 — same input-side normalization as Cursor(data)
-    _cursor_at(d, d === data ? Int(startpos) : _translate_eol_pos(data, Int(startpos)))
+    _cursor_at(data, Int(startpos))   # §2.11 — line ends normalized value by value, as Cursor(data)
 end
 
 """
     Cursor(node::LazyNode)
 
 Convenience bridge: a cursor positioned to walk `node` and its subtree — the
-inverse of the `LazyNode(c)` snapshot. Both readers treat a source the same way — a
-`String`-backed document is normalized when the `LazyNode` is built, any other source
-normalizes value by value — so the bridge passes the source straight through, without the
-scan the raw-string constructors run on their argument; it is the only place `Cursor` mentions
+inverse of the `LazyNode(c)` snapshot. Both readers treat a source the same way — each value
+is normalized as it is read — so the bridge passes the source straight through, without the
+probes the raw-string constructors run on their argument; it is the only place `Cursor` mentions
 `LazyNode`, and it is an optional, removable convenience (a consumer that tracks
 subtree start offsets directly can call the primitive `Cursor(data, startpos)`).
 """

@@ -23,8 +23,7 @@ views point into that copy. The copy can be made for:
 - a `String`, or a `SubString{String}` such as `view(str, i:j)`;
 - a `StringView` over a byte vector `v` (a `Vector{UInt8}`), as for a memory-mapped file, or
   over a slice `view(v, i:j)` of it, written without a step; `StringView` comes from Base from
-  Julia 1.14, and from StringViews.jl before;
-- the result of [`sourceview`](@ref).
+  Julia 1.14, and from StringViews.jl before.
 
 On any other string type, such a document raises an `ArgumentError`: for example a `LazyString`,
 or a `StringView` over a view of `v` written with a step, such as `view(v, i:2:j)` or
@@ -58,13 +57,12 @@ struct LazyNode{S <: AbstractString}
     nodetype::NodeType
 end
 
-# Public raw-string entry: §2.11 applies here, exactly as it does at `parse`/`read` — which
-# for a `String`-backed document means the rewrite, and for any other source means leaving it
-# to `_read_eol`. Without this a hand-built `LazyNode(raw, Document)` would be the one entry
-# that skips the rewrite its source type requires, and return CR to the application.
-LazyNode(data::AbstractString, nt::NodeType) = _lazynode_at(_apply_declarations(_normalize_input_eol(data)), nt)
+# Public raw-string entry: the declarations of the DOCTYPE apply here as at `parse`/`read`,
+# and line ends are left, as at every lazy entry, for `_read_eol` to normalize value by value
+# (§2.11), whatever the source type.
+LazyNode(data::AbstractString, nt::NodeType) = _lazynode_at(_apply_declarations(data), nt)
 
-# `d` arrives with §2.11 already applied — see `_cursor_at` for the same split.
+# `d` arrives as the reader takes it — see `_cursor_at`.
 # No scan here. Parametric on `d`'s own type, so a rewritten document (always a `String`)
 # builds `LazyNode{String}`. The empty token sits at the start of `d` in the root's index
 # space, which an empty `SubString` of a view would not keep.
@@ -76,10 +74,9 @@ nodetype(n::LazyNode) = n.nodetype
 _lazy_pos(n::LazyNode) = XMLTokenizer._data_start(n.token, n.data)
 _lazy_tokenizer(n::LazyNode) = tokenize(n.data, _lazy_pos(n))
 # Entity-decode a TEXT/ATTR_VALUE token only when the tokenizer actually saw a `&`. When
-# `has_entities` is false the raw `SubString{String}` view is returned with no allocation
-# and no byte scan — the dominant case for spreadsheet-style data. That holds for a
-# `String`-backed document, where `_read_eol` is the identity; a source normalized on read
-# scans the span and copies it when it carries a line end. `_decode_attr` strips
+# `has_entities` is false the raw view is returned with no allocation — the dominant case for
+# spreadsheet-style data — once `_read_eol` has searched it for a CR, and copied it only when
+# it carries one. `_decode_attr` strips
 # the surrounding quotes first; the flag is read from the token, not the stripped view.
 @inline _decode(tok::Token, data) =
     tok.has_entities ? unescape(_read_eol(raw(tok, data))) : _read_eol(raw(tok, data))
@@ -414,13 +411,11 @@ end
 Return the original source text of the node as a `SubString`, with no parsing, escaping,
 or reformatting.  This is the zero-copy counterpart of [`write`](@ref) for lazy nodes.
 
-Being zero-copy, it reports the bytes of the document the reader actually holds. A `String` or
-`SubString{String}` document whose lines end in CR is normalized when it is read in, so its
-source text is the normalized one; a document held as any other string type — a view over a
-memory-mapped file, say — keeps its own line ends, so its source text carries them. A document
-that the declarations of its DOCTYPE change — an entity it uses, a default attribute value it
-receives, an attribute declared with a type other than CDATA — is rewritten when it is read in
-(see [`LazyNode`](@ref) for the string types this works on). Its source text is then the
+Being zero-copy, it reports the bytes of the document the reader actually holds, with their own
+line ends, CRs included: the reader normalizes each value as it reads it, not the document. A
+document that the declarations of its DOCTYPE change — an entity it uses, a default attribute
+value it receives, an attribute declared with a type other than CDATA — is rewritten when it is
+read in (see [`LazyNode`](@ref) for the string types this works on). Its source text is then the
 rewritten one: replacement texts included (§4.4.2), defaults supplied (§3.3.2), values reduced
 (§3.3.3). Reported *values* are normalized either way.
 """
@@ -458,9 +453,9 @@ The range of *valid character indices* of the node's original source text within
 retained source string, so that `source[sourcespan(n)] == sourcetext(n)` — the positional
 counterpart of [`sourcetext`](@ref), for consumers that need *where* the node lives rather
 than its text (verbatim excision and splicing, error context). The retained string is the one
-the reader holds. For a `String` or `SubString{String}` whose lines end in CR, normalized when
-it was read in, or for a document rewritten then (see [`sourcetext`](@ref)), it is that copy.
-The indices then do not apply to the text the reader was given.
+the reader holds: the text it was given, or, for a document that the declarations of its
+DOCTYPE rewrite when it is read in (see [`sourcetext`](@ref)), that copy. The indices then do
+not apply to the text the reader was given.
 
 The bounds are character indices, not code units: the library performs the `prevind`
 computation, so a node ending on a multi-byte character yields indices that are safe to
@@ -493,8 +488,8 @@ The node's document source with the node's own text replaced by `replacement` �
 entirely by default. This is the packaged, multi-byte-safe form of splicing around
 [`sourcespan`](@ref): `Base.splice!`'s remove-and-insert, applied to the retained source
 and returning a new `String` (nothing is mutated). The retained source is the one
-[`sourcespan`](@ref) describes: for a `String` or `SubString{String}` whose lines end in CR,
-the result has the normalized line ends.
+[`sourcespan`](@ref) describes: a `LazyNode` keeps the line ends of the text it was given, and
+a `FlatNode`, which normalizes its copy of the source when it reads it in, gives LF.
 
 Defined for the two source-retaining readers (`LazyNode`, `FlatNode`).
 """
@@ -725,7 +720,7 @@ Base.length(n::LazyNode) = length(children(n))
 
 #-----------------------------------------------------------------------------# parse / read
 Base.parse(::Type{LazyNode}, xml::AbstractString) = parse(xml, LazyNode)
-Base.parse(xml::AbstractString, ::Type{LazyNode}) = _lazynode_at(_apply_declarations(_normalize_input_eol(_drop_bom(xml))), Document)
+Base.parse(xml::AbstractString, ::Type{LazyNode}) = _lazynode_at(_apply_declarations(_drop_bom(xml)), Document)
 
 Base.read(filename::AbstractString, ::Type{LazyNode}) = parse(String(_normalize_bom(read(filename))), LazyNode)
 Base.read(io::IO, ::Type{LazyNode}) = parse(String(_normalize_bom(read(io))), LazyNode)
