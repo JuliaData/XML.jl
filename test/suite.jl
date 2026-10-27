@@ -166,7 +166,7 @@ end
         @test unescape(s) === s
         # A value with no reference comes back as it is, whatever its type: a view of a
         # document stays that view, also when its `&` starts no reference.
-        v = XML.sourceview("<a>text|AT&T</a>")
+        v = StringView(codeunits("<a>text|AT&T</a>"))
         for w in (SubString(v, 4, 7), SubString(v, 9, 12))
             @test unescape(w) === w
         end
