@@ -626,8 +626,7 @@ one concrete type, and the fallback returns `nothing`, which `_apply_declaration
 
 From Julia 1.14, Base defines `StringView`, and the methods for it follow. Where the type comes
 from StringViews.jl instead, the extension that package triggers supplies the same methods; it is
-loaded whenever such a `StringView` can exist at all. [`sourceview`](@ref) defines the methods
-for the types it returns.
+loaded whenever such a `StringView` can exist at all.
 """
 _rebuild_source(::AbstractString, ::Vector{UInt8}) = nothing
 _rebuild_source(::String, bytes::Vector{UInt8}) = String(bytes)

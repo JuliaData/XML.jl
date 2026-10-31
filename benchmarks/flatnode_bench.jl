@@ -50,8 +50,8 @@ cell("build Node",     @benchmark(parse($xml, Node));     alloc = true)
 # The C tree is freed per sample outside the timing, through the document's node, which is where
 # EzXML attaches its finalizer; Julia alloc is not meaningful for it.
 cell("build EzXML",    @benchmark((d[] = EzXML.parsexml($xml)), setup = (d = Ref{Any}(nothing)), teardown = (d[] === nothing || finalize(d[].node); d[] = nothing), evals = 1))
-# LazyNode materializes nothing, so its "build" is the document entry alone: one line-end
-# scan of the source (§2.11), allocation-free, proportional to document size.
+# LazyNode materializes nothing, so its "build" is the document entry alone: a probe of the
+# prolog for declarations to apply, allocation-free, whatever the document's size.
 cell("open LazyNode",  @benchmark(parse($xml, LazyNode));  alloc = true)
 
 # ── handles for the access benchmarks ──

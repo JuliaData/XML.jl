@@ -4391,14 +4391,12 @@ end
         end
 
         @testset "input normalization: CR-free documents pass through untouched" begin
-            # §2.11 runs ON INPUT (one scan, one rewrite when dirty) — per-value
-            # normalization was measured to heap-box the union-returning accessors'
-            # clean-path return (see _normalize_input_eol's note)
+            # `Node` and `FlatNode` run §2.11 on input (one scan, one rewrite when dirty); the
+            # lazy readers normalize value by value (see _normalize_input_eol's note)
             clean = "no carriage returns here"
             @test XML._normalize_input_eol(clean) === clean          # identity, not a copy
             @test XML._normalize_input_eol("p\r\nq\rr") == "p\nq\nr"
             @test XML._rewrite_content_eol("a\r\n\rb") == "a\n\nb"
-            @test XML._translate_eol_pos("x\r\ny\r\nz", 5) == 4      # two bytes → one CRLF pair before
             measure(v) = @allocated XML._normalize_input_eol(v)      # function barrier
             measure(clean)
             if Base.JLOptions().code_coverage == 0       # coverage counters skew @allocated
@@ -4409,8 +4407,8 @@ end
         @testset "every raw-string entry normalizes; bridges inherit it" begin
             # §2.11 applies at each constructor that can be handed a raw document, not only
             # at `parse`/`read`: `LazyNode(data, nodetype)` and `Cursor(data, startpos)` are
-            # public entries too. The bridges then receive already-normalized data and skip
-            # the scan, so they are asserted here rather than assumed.
+            # public entries too. The bridges pass the source through and normalize values
+            # as the readers do, so they are asserted here rather than assumed.
             crlf = "<r>\r\n  <a>x\r\ny</a>\r\n</r>"
 
             lz = LazyNode(crlf, Document)                       # public two-argument entry
@@ -4426,12 +4424,12 @@ end
             end
             @test all(v -> !occursin('\r', v), cursor_values(Cursor(crlf)))
 
-            # start offsets are translated into the normalized copy, so a subtree cursor
-            # opened on the raw string still reaches the right element
+            # a start offset is a position in the raw string, so a subtree cursor opened
+            # there reaches the right element
             apos = findfirst("<a>", crlf).start
             @test any(==("x\ny"), cursor_values(@test_deprecated Cursor(crlf, apos)))
 
-            # the LazyNode → Cursor bridge walks the normalized copy, not the raw input
+            # the LazyNode → Cursor bridge normalizes the values it reads, as the LazyNode does
             @test any(==("x\ny"), cursor_values(Cursor(only(elements(only(elements(lz)))))))
         end
 
@@ -4448,6 +4446,39 @@ end
                 @test @inferred(LazyNode(sub, Document)) isa LazyNode{SubString{String}}
                 @test @inferred(Cursor(sub)) isa Cursor{SubString{String}}
             end
+        end
+
+        @testset "the lazy readers read a String in place" begin
+            # `Cursor` and `LazyNode` take a `String` as it is and normalize each value as
+            # they read it, so their source text is the caller's, CRs included. `Node` and
+            # `FlatNode` copy their source, and normalize it once at the entry.
+            crlf = "<r a=\"x\r\ny\">t\r\nu<e>v\rw</e><!--c\r\nd--></r>"
+            r = only(elements(parse(crlf, LazyNode)))
+            @test sourcetext(r) == crlf
+            @test crlf[sourcespan(r)] == sourcetext(r)
+            @test r["a"] == "x y"
+            @test [String(value(x)) for x in children(r) if nodetype(x) !== Element] == ["t\nu", "c\nd"]
+            @test value(only(children(only(elements(r))))) == "v\nw"
+            c = Cursor(crlf)
+            vals = String[]
+            while next!(c) !== nothing
+                v = value(c)
+                v === nothing || push!(vals, String(v))
+            end
+            @test vals == ["t\nu", "v\nw", "c\nd"]
+            n = only(elements(parse(crlf, Node)))
+            @test n["a"] == "x y"
+            @test value(n[1]) == "t\nu"
+            @test simple_value(only(elements(parse("<a>x\r\ny</a>", FlatNode)))) == "x\ny"
+
+            # a value that opens on its only CR LF, as the indentation of a file saved with
+            # CR LF does, comes back as the view of its bytes after the CR; any other is rewritten
+            text_values(s) = [String(value(x)) for x in children(only(elements(parse(s, LazyNode))))
+                              if nodetype(x) === XML.Text]
+            @test text_values("<r>\r\n  <a>x</a>\r\n</r>") == ["\n  ", "\n"]
+            @test text_values("<r>\r\n\r\n</r>") == ["\n\n"]
+            @test text_values("<r>\r x</r>") == ["\n x"]
+            @test text_values("<r>\r\nx\ry</r>") == ["\nx\ny"]
         end
     end
 
@@ -5245,8 +5276,8 @@ Base.thisind(w::WrappedSource, i::Int) = thisind(w.s, i)
     end
 
     @testset "line ends normalize on read, whatever the value-producing accessor" begin
-        # A document not backed by a String is not rewritten at its entry, so each value is
-        # normalized as it is reported (XML 1.0 §2.11). This walks the whole matrix rather
+        # The lazy readers rewrite no document at its entry, so each value is normalized as it
+        # is reported (XML 1.0 §2.11). This walks the whole matrix rather
         # than a written-out list — every node kind that carries a value, through both lazy
         # readers, from both a String and a non-String source — so a kind added later, or an
         # accessor left unwired, fails here instead of quietly returning raw CRs.
@@ -5286,8 +5317,8 @@ Base.thisind(w::WrappedSource, i::Int) = thisind(w.s, i)
             @test is_simple_value(cur) == "p\nq"
         end
 
-        # Attribute values reach §3.3.3 with their line ends still literal when the document
-        # was not rewritten at the entry, so that pass is what folds them — and it has to fold
+        # Attribute values reach §3.3.3 with their line ends still literal, since the lazy
+        # readers rewrite nothing at the entry, so that pass is what folds them — and it has to fold
         # a CR LF pair to ONE space, the two rules composing as the specification orders them.
         attrs = "<a crlf=\"p\r\nq\" lone=\"p\rq\" lf=\"p\nq\" tab=\"p\tq\"/>"
         for src in (attrs, SubString(attrs, 1, lastindex(attrs)), WrappedSource(attrs))
@@ -5390,116 +5421,19 @@ Base.thisind(w::WrappedSource, i::Int) = thisind(w.s, i)
             @test measure(large) < 3 * measure(small)
         end
     end
-end
 
-# A `String` that holds a CR is copied at the entry, where its line ends are normalized once.
-# Through `XML.sourceview` it is read where it lies, each value normalized as it is read: the
-# values are those of the `String`, and positions refer to the caller's own bytes.
-@testset "XML.sourceview reads a String where it lies" begin
-    doc = "<?xml version=\"1.0\"?>\r\n<r a=\"x\r\ny\">\r\n<e>t\r\nu</e><!--c\r\n--><f/>\r\n</r>"
-    lazyvals(n) = vcat([(nodetype(n), tag(n), value(n), (a = attributes(n); a === nothing ? a : collect(a)))],
-                       [lazyvals(c) for c in children(n)]...)
-    function cursorvals(src)
-        c, out = Cursor(src), []
-        while next!(c) !== nothing
-            push!(out, (nodetype(c), tag(c), value(c)))
-        end
-        return out
-    end
-
-    @testset "public, not exported" begin
-        if VERSION >= v"1.11"   # `Base.ispublic` and the `public` notion exist from 1.11
-            @test Base.ispublic(XML, :sourceview)
-        end
-        @test !Base.isexported(XML, :sourceview)
-    end
-
-    @testset "$(typeof(given))" for given in (doc, SubString("xx" * doc * "yy", 3, ncodeunits(doc) + 2))
-        src = XML.sourceview(given)
-        @test src isa AbstractString
-        @test given isa String || src isa SubString
-        @test src == given
-
-        # the values of the `String`, normalized (§2.11, §3.3.3) as they are read
-        @test lazyvals(parse(src, LazyNode)) == lazyvals(parse(given, LazyNode))
-        @test cursorvals(src) == cursorvals(given)
-        r = only(elements(parse(src, LazyNode)))
-        @test attributes(r)["a"] == "x y"
-        e = first(elements(r))
-        @test value(only(children(e))) == "t\nu"
-
-        # the readers keep the source's type: views of it where the `String` gives a
-        # `SubString{String}`, a `String` for a value that was normalized
-        viewtype = typeof(XML.sourceview(doc))
-        @test tag(r) isa SubString{viewtype}
-        @test value(only(children(e))) isa String
-        @test attributes(r)["a"] isa SubString{String}
-        @test String(tag(r)) == "r"
-
-        # the source text and its positions are those of the caller's bytes, CRs included
-        @test sourcetext(e) == "<e>t\r\nu</e>"
-        @test given[sourcespan(e)] == sourcetext(e)
-        @test sourcetext(first(elements(only(elements(parse(given, LazyNode)))))) == "<e>t\nu</e>"
-
-        # `Node` and `FlatNode` copy their source into a `String`, as they do any source
-        @test parse(src, Node) == parse(given, Node)
-        @test nodetype(parse(src, FlatNode)) == Document
-    end
-
-    @testset "no copy at the entry" begin
-        big = repeat("<e a=\"1\">t\r\n</e>", 10_000)
-        lazy(s) = @allocated parse(s, LazyNode)           # function barrier
-        cursor(s) = @allocated Cursor(s)
-        src = XML.sourceview("<r>" * big * "</r>")
-        lazy(src); cursor(src)
-        if Base.JLOptions().code_coverage == 0      # coverage counters allocate
-            @test lazy(src) < 1_000
-            @test cursor(src) < 1_000
-            @test lazy("<r>" * big * "</r>") > ncodeunits(big)   # the `String` is copied
-        end
-    end
-
-    # `value` returns a union of concrete types, as through the `String`: an abstract member
-    # would box each value at the call. Its DTD and PI branches strip the leading white
-    # space before normalizing, which gives the same text.
+    # `value` returns a union of concrete types, whatever the source type: an abstract member
+    # would box each value at the call. Its DTD and PI branches strip the leading white space
+    # before normalizing, which gives the same text in the same types.
     @testset "value returns a union of concrete types" begin
-        viewtype = typeof(XML.sourceview(doc))
-        for T in (LazyNode{viewtype}, Cursor{viewtype})
+        for S in (String, WrappedSource), T in (LazyNode{S}, Cursor{S})
             @test all(isconcretetype, Base.uniontypes(only(Base.return_types(value, (T,)))))
         end
         pd = "<?pi \r\n  a\r\nb?><!DOCTYPE r [\r\n<!ELEMENT r ANY>\r\n]>\r\n<r/>"
-        @test lazyvals(parse(XML.sourceview(pd), LazyNode)) == lazyvals(parse(pd, LazyNode))
-        @test cursorvals(XML.sourceview(pd)) == cursorvals(pd)
-        @test [value(n) for n in children(parse(XML.sourceview(pd), LazyNode))][1:2] ==
-              ["a\nb", "r [\n<!ELEMENT r ANY>\n]"]
-    end
-
-    @testset "a view converts to a String in one copy" begin
-        v = tag(only(elements(parse(XML.sourceview(doc), LazyNode))))
-        copies(x) = @allocations String(x)          # function barrier
-        copies(v)
-        @test String(v) == "r"
-        if Base.JLOptions().code_coverage == 0      # coverage counters allocate
-            @test copies(v) == 1
+        for src in (pd, WrappedSource(pd))
+            @test [value(n) for n in children(parse(src, LazyNode))][1:2] ==
+                  ["a\nb", "r [\n<!ELEMENT r ANY>\n]"]
         end
-    end
-
-    @testset "a document that declares something to apply" begin
-        # The rewrite is a copy, returned as the type the reader was given, so the reader's type
-        # parameter is the one a document that declares nothing gets; an encoding signature
-        # makes it a `SubString` of that type.
-        dd = "<!DOCTYPE r [<!ENTITY t \"hi\"><!ATTLIST r d CDATA \"v\">]>\r\n<r a=\"&t;\">&t;</r>"
-        bom = Char(0xfeff)
-        for (given, plain) in ((dd, "<r/>"), (SubString("x" * dd, 2), SubString("x<r/>", 2)),
-                               (bom * dd, bom * "<r/>"))
-            src = XML.sourceview(given)
-            @test typeof(parse(src, LazyNode)) === typeof(parse(XML.sourceview(plain), LazyNode))
-            @test typeof(parse(src, Cursor)) === typeof(parse(XML.sourceview(plain), Cursor))
-            r = only(elements(parse(src, LazyNode)))
-            @test collect(attributes(r)) == ["a" => "hi", "d" => "v"]
-            @test value(only(children(r))) == "hi"
-        end
-        @test typeof(@inferred XML._apply_declarations(XML.sourceview(dd))) === typeof(XML.sourceview(dd))
     end
 end
 
