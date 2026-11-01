@@ -53,11 +53,11 @@ iteration) and preserves document order.
 
 ### `Node` is parametric
 
-`Node` is now `Node{S}`, where `S` is the string storage type (`String`, or `SubString{String}` for
-zero-copy parsing). `::Node` annotations still work. If you dispatched on `::AbstractXMLNode`, note
+`Node` is now `Node{S}`, where `S` is the string storage type (`String`, or `SubString{String}`,
+whose values are views of the source). `::Node` annotations still work. If you dispatched on `::AbstractXMLNode`, note
 that `Node` is no longer a subtype of it.
 
-The zero-copy `Node{SubString{String}}` variant returns text and attribute values **raw** — the predefined entities such as `&amp;`, and character references, are *not* decoded, since decoding would require allocating a new string. The default `Node` (`Node{String}`), `LazyNode`, and `Cursor` all decode them into values. General entities declared in an internal subset are a different matter: their replacement text is included in the document before it is parsed, so the zero-copy variant reports that text like any other reader.
+The `Node{SubString{String}}` variant returns text and attribute values **raw** — the predefined entities such as `&amp;`, and character references, are *not* decoded, since decoding would require allocating a new string. The default `Node` (`Node{String}`), `LazyNode`, and `Cursor` all decode them into values. General entities declared in an internal subset are a different matter: their replacement text is included in the document before it is parsed, so this variant reports that text like any other reader. A document that holds a CR, or that its DOCTYPE declarations change, is read from a copy, and the views then refer to that copy.
 
 ### `LazyNode` is an immutable view
 
@@ -155,7 +155,9 @@ Review these even if your code compiles unchanged:
    bounds (see [WELL-FORMEDNESS.md](WELL-FORMEDNESS.md#what-the-declarations-may-cost)), and
    replacement text that is not balanced (§4.3.2).
 
-7. **Inter-element whitespace is preserved.** `parse`/`read` keep whitespace-only text between
+7. **Line ends are normalized** (from **v0.4.7**). Every reader reads CR LF and a lone CR as LF (XML 1.0 §2.11), in text, attribute values, comments, CDATA sections, processing instructions and the DOCTYPE. With `parse("<r>a\r\nb</r>", Node)`, the text of `r` is `"a\nb"`, where v0.4.6 returned `"a\r\nb"`. A CR written as `&#13;` still reads as CR. `sourcetext` on a `LazyNode` still gives the bytes passed, CRs included; on a `FlatNode`, it refers to a copy whose lines end in LF.
+
+8. **Inter-element whitespace is preserved.** `parse`/`read` keep whitespace-only text between
    elements as `Text` nodes (0.3.x dropped it by default). So `children(root)` may include leading
    `Text` nodes, and `children(root)[1]` is **not** necessarily the first child *element*. Use
    `eachelement` / `elements` (new in **v0.4.1**) when you need elements only:
@@ -172,11 +174,11 @@ Review these even if your code compiles unchanged:
    first(c for c in children(root) if nodetype(c) === Element)
    ```
 
-8. **`LazyNode` and `Cursor` check only the rules on entities.** `Node` and `FlatNode` enforce the
+9. **`LazyNode` and `Cursor` check only the rules on entities.** `Node` and `FlatNode` enforce the
    `wellformed` level; `parse(x, LazyNode)` and `Cursor(x)` take no `wellformed` keyword and accept
    mismatched tags. Parse through `Node` or `FlatNode` if you need well-formedness checking.
 
-9. **No memory-mapping.** `read` no longer memory-maps the input file. The README shows the manual
+10. **No memory-mapping.** `read` no longer memory-maps the input file. The README shows the manual
    recipe, a `StringView` over `Mmap`, for files too large for the heap.
 
 ## Compat
@@ -207,7 +209,7 @@ The old `Raw`/`LazyNode` forward/backward streaming is replaced by two options:
   children at the current position.
 
 **Choosing a reader.** For forward streaming of a large document, prefer `Cursor` (fastest,
-allocation-free). For repeated or random access, prefer `Node` (it builds the tree once, then walks
+and allocation-free unless the document has declarations to apply). For repeated or random access, prefer `Node` (it builds the tree once, then walks
 cheaply). Reach for `LazyNode` only when you need low-memory, *read-once* navigation: it holds no
 tree (≈ an order of magnitude less resident memory than `Node`) but re-tokenizes on every traversal,
 so it is the slowest choice for repeated walks.
