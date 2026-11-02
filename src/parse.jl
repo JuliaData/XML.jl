@@ -22,8 +22,19 @@ function _normalize_bom(data::Vector{UInt8})
     return data
 end
 
-Base.read(filename::AbstractString, ::Type{Node}; wellformed::Symbol=:structural) = parse(String(_normalize_bom(read(filename))), Node; wellformed)
-Base.read(io::IO, ::Type{Node}; wellformed::Symbol=:structural) = parse(String(_normalize_bom(read(io))), Node; wellformed)
+# The readers compare the `wellformed` level only with `:lenient` and `:strict`, so another
+# symbol would get the checks of `:structural` without notice. Every entry point checks it
+# first; `read` does so before it reads the document.
+function _check_wellformed(wellformed::Symbol)
+    wellformed === :lenient || wellformed === :structural || wellformed === :strict ||
+        throw(ArgumentError("wellformed must be :lenient, :structural or :strict, not $(repr(wellformed))"))
+    return nothing
+end
+
+Base.read(filename::AbstractString, ::Type{Node}; wellformed::Symbol=:structural) =
+    (_check_wellformed(wellformed); parse(String(_normalize_bom(read(filename))), Node; wellformed))
+Base.read(io::IO, ::Type{Node}; wellformed::Symbol=:structural) =
+    (_check_wellformed(wellformed); parse(String(_normalize_bom(read(io))), Node; wellformed))
 
 # Cursor shares the tree readers' entry points (#89): same argument order, same byte-level
 # BOM normalization. The Cursor(str) constructor alone only drops an already-decoded U+FEFF,
@@ -46,10 +57,12 @@ _drop_bom(s::AbstractString) = startswith(s, Char(0xFEFF)) ? SubString(s, nextin
 Base.parse(::Type{Node}, xml::AbstractString; wellformed::Symbol=:structural) = parse(xml, Node; wellformed)
 
 function Base.parse(xml::AbstractString, ::Type{Node}; wellformed::Symbol=:structural)
+    _check_wellformed(wellformed)
     _parse(_apply_declarations(_normalize_input_eol(_drop_bom(String(xml)))), String, unescape, Val(wellformed))
 end
 
 function Base.parse(xml::AbstractString, ::Type{Node{SubString{String}}}; wellformed::Symbol=:structural)
+    _check_wellformed(wellformed)
     _parse(_apply_declarations(_normalize_input_eol(_drop_bom(String(xml)))), SubString{String}, identity, Val(wellformed))
 end
 

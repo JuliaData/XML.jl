@@ -26,7 +26,7 @@ XML 1.0 defines two [classes of processors](https://www.w3.org/TR/xml/#proc-type
 
 ## The three levels
 
-`Node` and `FlatNode` take a `wellformed` keyword with three levels: `:lenient`, `:structural`, the default, and `:strict`. The levels grade the well-formedness check by how much it covers and what it costs. XML 1.0 has no such degrees, and only `:strict` aims at all of its constraints. `:lenient` lets some errors through, to read a fragment or a DTD file on its own. `:structural` does not reread every text and every attribute value. A level rejects its own row and every row above it:
+`Node` and `FlatNode` take a `wellformed` keyword with three levels: `:lenient`, `:structural`, the default, and `:strict`. Any other value throws an `ArgumentError`. The levels grade the well-formedness check by how much it covers and what it costs. XML 1.0 has no such degrees, and only `:strict` aims at all of its constraints. `:lenient` lets some errors through, to read a fragment or a DTD file on its own. `:structural` does not reread every text and every attribute value. A level rejects its own row and every row above it:
 
 | level | rejects |
 |---|---|

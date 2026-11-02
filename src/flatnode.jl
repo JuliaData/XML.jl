@@ -283,13 +283,14 @@ end
 
 #-----------------------------------------------------------------------------# parse / read entry points
 Base.parse(xml::AbstractString, ::Type{FlatNode}; wellformed::Symbol=:structural) =
-    _flat_parse(_apply_declarations(_normalize_input_eol(_drop_bom(String(xml)))), Val(wellformed))
+    (_check_wellformed(wellformed);
+     _flat_parse(_apply_declarations(_normalize_input_eol(_drop_bom(String(xml)))), Val(wellformed)))
 Base.parse(::Type{FlatNode}, xml::AbstractString; wellformed::Symbol=:structural) =
     parse(xml, FlatNode; wellformed)
 Base.read(filename::AbstractString, ::Type{FlatNode}; wellformed::Symbol=:structural) =
-    parse(String(_normalize_bom(read(filename))), FlatNode; wellformed)
+    (_check_wellformed(wellformed); parse(String(_normalize_bom(read(filename))), FlatNode; wellformed))
 Base.read(io::IO, ::Type{FlatNode}; wellformed::Symbol=:structural) =
-    parse(String(_normalize_bom(read(io))), FlatNode; wellformed)
+    (_check_wellformed(wellformed); parse(String(_normalize_bom(read(io))), FlatNode; wellformed))
 
 #-----------------------------------------------------------------------------# accessors
 @inline nodetype(n::FlatNode) = _rec(n).kind
