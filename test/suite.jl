@@ -2138,6 +2138,39 @@ end
         @test contains(XML.write(el), "a=\"a&quot;b\"")
     end
 
+    @testset "write a Node{SubString{String}}: references kept, the rest escaped" begin
+        # Its values are raw. An entity reference stays as written, and so does a character
+        # reference that the reader decodes; every other character to escape is escaped, a `&`
+        # that starts no such reference included.
+        src = """<r a="R&amp;D" b='say "hi"' c="x&#10;y">caf&#233; &lt;b&gt; R&D</r>"""
+        n = parse(src, Node{SubString{String}})
+        s = XML.write(n)
+        @test s == """<r a="R&amp;D" b="say &quot;hi&quot;" c="x&#10;y">caf&#233; &lt;b&gt; R&amp;D</r>"""
+        @test parse(s, Node) == parse(src, Node)
+        # An undeclared entity reference stays as written, for a tool that knows the entity; the
+        # reader keeps it as text either way.
+        u = parse("<r>a&nbsp;b</r>", Node{SubString{String}})
+        @test XML.write(u) == "<r>a&nbsp;b</r>"
+        @test parse(XML.write(u), Node) == parse("<r>a&nbsp;b</r>", Node)
+        # A character reference the reader does not decode is escaped: it reads back as text.
+        v = parse("<r>a&#12a;b</r>", Node{SubString{String}})
+        @test XML.write(v) == "<r>a&amp;#12a;b</r>"
+        @test parse(XML.write(v), Node) == parse("<r>a&#12a;b</r>", Node)
+        # A value set by code is plain text: it comes out well-formed.
+        r = n[1]
+        r["d"] = "x & y < z"
+        r["e"] = "https://example.org/p?a=1&b=2&c=d"
+        s2 = XML.write(n)
+        @test contains(s2, "d=\"x &amp; y &lt; z\"")
+        @test contains(s2, "e=\"https://example.org/p?a=1&amp;b=2&amp;c=d\"")
+        r2 = parse(s2, Node)[1]
+        @test r2["d"] == "x & y < z"
+        @test r2["e"] == "https://example.org/p?a=1&b=2&c=d"
+        # The XML declaration goes through the same attribute writer.
+        @test XML.write(parse("""<?xml version="1.0"?><r/>""", Node{SubString{String}})) ==
+              "<?xml version=\"1.0\"?>\n<r/>"
+    end
+
     @testset "indentsize parameter" begin
         el = Element("root", Element("child"))
         s2 = XML.write(el; indentsize=2)

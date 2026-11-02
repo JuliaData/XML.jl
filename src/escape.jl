@@ -21,7 +21,7 @@ const _ATTR_TABLE = _byte_table(_ATTR_ESCAPED)
     b == UInt8('\n') ? "&#10;" : "&#13;"
 end
 
-@inline _write_run(io::IO, s::String, a::Int, b::Int) =
+@inline _write_run(io::IO, s::Union{String, SubString{String}}, a::Int, b::Int) =
     b >= a && GC.@preserve s Base.unsafe_write(io, pointer(s, a), (b - a + 1) % UInt)
 
 # Up to this many bytes, a string is read one byte at a time through the table. Past it, each
@@ -74,6 +74,44 @@ end
 _write_escaped(io::IO, s::String; attribute::Bool = false) =
     attribute ? _write_escaped_with(io, s, _ATTR_TABLE, _ATTR_ESCAPED) :
                 _write_escaped_with(io, s, _TEXT_TABLE, _TEXT_ESCAPED)
+
+# The values of a `Node{SubString{String}}` are raw: as the document wrote them, or plain text
+# that code set. An entity reference (`&name;`) stays as written, and so does a character
+# reference that the reader decodes; every other byte to escape is escaped, a `&` that starts
+# no such reference included. The output thus reads back to the values the reader gives the
+# source, and a plain value such as `x & y` comes out escaped.
+_write_escaped(io::IO, s::SubString{String}; attribute::Bool = false) =
+    attribute ? _write_raw_escaped(io, s, _ATTR_TABLE) : _write_raw_escaped(io, s, _TEXT_TABLE)
+
+function _write_raw_escaped(io::IO, s::SubString{String}, table::NTuple{256, Bool})
+    cu = codeunits(s)
+    n = length(cu)
+    start = 1
+    i = 1
+    @inbounds while i <= n
+        b = cu[i]
+        if b == UInt8('&')
+            len = if i < n && cu[i + 1] == UInt8('#')
+                last(_reference_at(cu, i, n))   # a character reference the reader decodes
+            else
+                j = _name_end(cu, i + 1, n)      # an entity reference, declared or not
+                j > 0 ? j - i + 1 : 0
+            end
+            if len > 0
+                i += len   # the reference stays in the run, as written
+                continue
+            end
+        end
+        if table[b + 1]
+            _write_run(io, s, start, i - 1)
+            print(io, _reference(b))
+            start = i + 1
+        end
+        i += 1
+    end
+    _write_run(io, s, start, n)
+    nothing
+end
 
 # `escape` returns its argument itself when nothing in it needs escaping, and otherwise writes
 # it once, without searching it again.
