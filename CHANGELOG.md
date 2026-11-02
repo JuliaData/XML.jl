@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **An unknown `wellformed` level throws an `ArgumentError`** ([#201](https://github.com/JuliaData/XML.jl/issues/201)). `parse` and `read` gave it the checks of `:structural` without notice, so a misspelled `:strict` such as `:strcit` skipped the strict checks.
 
+- **`XML.write` writes a `Node{SubString{String}}`** ([#199](https://github.com/JuliaData/XML.jl/issues/199)) instead of throwing a `MethodError`. It keeps the entity references of these raw values, and the character references that the default `Node` decodes, as they are, and escapes the other characters as `escape` does.
+
 ## [0.4.7] - 2026-11-02
 
 ### Added
