@@ -2892,6 +2892,34 @@ end
         @test_throws Exception parse("""<?xml version="1.0" version="1.1"?><a/>""", Node)
     end
 
+    @testset "duplicate attribute in a tag of more than 32 attributes" begin
+        # Past 32 attributes, a tag is checked once it closes, by sorting its names. The name
+        # reported is the one whose second occurrence comes first, as for a smaller tag.
+        tag(names, ending) = "<r " * join(("$n=\"v\"" for n in names), " ") * ending
+        decl(names) = "<?xml version=\"1.0\" " * join(("$n=\"v\"" for n in names), " ") * "?><r/>"
+        many = ["a$i" for i in 1:40]
+        for T in (Node, Node{SubString{String}}, FlatNode), ending in ("/>", "></r>")
+            @test nodetype(parse(tag(many, ending), T)) == Document
+            @test_throws ErrorException("Duplicate attribute: a1") parse(tag([many[1:32]; "a1"], ending), T)
+            @test_throws ErrorException("Duplicate attribute: a5") parse(tag([many; "a5"], ending), T)
+            @test_throws ErrorException("Duplicate attribute: a7") parse(tag([many; "a7"; "a3"], ending), T)
+        end
+        for T in (Node, Node{SubString{String}}, FlatNode)
+            @test nodetype(parse(decl(many), T)) == Document
+            @test_throws ErrorException("Duplicate attribute: a5") parse(decl([many; "a5"]), T)
+        end
+        @testset "a tag of 100,000 attributes is checked in well under quadratic time" begin
+            # Comparing each name with every earlier one makes this tag cost seconds; sorting
+            # its names keeps it to milliseconds. The bound leaves room for slow machines and
+            # checked bounds, and a run is tried up to three times.
+            big = tag(["a$i" for i in 1:100_000], "/>")
+            for T in (Node, FlatNode)
+                parse(tag(many, "/>"), T)   # compiles the path of a large tag
+                @test any(_ -> @elapsed(parse(big, T)) < 2.0, 1:3)
+            end
+        end
+    end
+
     @testset "attribute without value" begin
         @test_throws Exception parse("<a disabled/>", Node)
     end
