@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`XML.write` writes a `Node{SubString{String}}`** ([#199](https://github.com/JuliaData/XML.jl/issues/199)) instead of throwing a `MethodError`. It keeps the entity references of these raw values, and the character references that the default `Node` decodes, as they are, and escapes the other characters as `escape` does.
 
+- **A tag with many attributes is checked for duplicates in O(n log n) time** ([#200](https://github.com/JuliaData/XML.jl/issues/200)), not O(n²): a single tag of a few hundred kilobytes could hold `Node` or `FlatNode` for seconds. Past 32 attributes, the tag is checked once it closes, by sorting its names, so another error in the same tag may now be reported first.
+
 ## [0.4.7] - 2026-11-02
 
 ### Added

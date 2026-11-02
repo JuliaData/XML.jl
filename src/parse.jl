@@ -327,6 +327,31 @@ end
     nothing
 end
 
+# Duplicate attributes (XML 1.0 §3.1, WFC: Unique Att Spec). Each new name is compared with
+# the earlier names of its tag while they are fewer than `_SMALL_ATTRIBUTE_COUNT`. A tag of
+# more attributes is checked once they are complete, by sorting its names: n attributes then
+# cost O(n log n), whatever the names. A hash set would not guarantee that bound: Julia hashes
+# strings with a fixed function, so the bound would rest on the names.
+const _SMALL_ATTRIBUTE_COUNT = 32
+
+# Throw on the name whose second occurrence comes first: the one that comparing each new name
+# with the earlier ones would report.
+function _check_unique_names(names::AbstractVector)
+    keyed = [(names[i], i) for i in eachindex(names)]
+    sort!(keyed)
+    repeat_at = 0
+    for k in 2:length(keyed)
+        if keyed[k][1] == keyed[k - 1][1]
+            i = keyed[k][2]
+            (repeat_at == 0 || i < repeat_at) && (repeat_at = i)
+        end
+    end
+    repeat_at == 0 || error("Duplicate attribute: $(names[repeat_at])")
+    return nothing
+end
+_check_unique_names(attrs::Vector{<:Pair}, from::Int) =
+    _check_unique_names([first(attrs[i]) for i in from:length(attrs)])
+
 # Token-stream → Node{S} builder. `convert_text` is `unescape` for parsed content (with entity
 # decoding) and `identity` for zero-copy SubString parsing where the caller keeps raw escapes.
 # `Val{W}` is the well-formedness level (:lenient / :structural / :strict); its checks compile
@@ -349,6 +374,7 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
     decl_attrs = nothing
     pending_pi_tag = SubString(xml, 1, 0)
     pending_pi_value = nothing
+    large_tag = false   # the tag being read has more than `_SMALL_ATTRIBUTE_COUNT` attributes
 
     for token in tokenize(xml)
         k = token.kind
@@ -369,10 +395,15 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
             push!(child_marks, length(scratch_children))
 
         elseif k === TokenKinds.SELF_CLOSE
+            large_tag && (_check_unique_names(scratch_attrs, attr_marks[end] + 1); large_tag = false)
             t = pop!(tags)
             a = _take_slice!(scratch_attrs, pop!(attr_marks))
             pop!(child_marks)   # a self-closing element cannot have accumulated children
             push!(scratch_children, Node{S}(Element, t, a, nothing, nothing))
+
+        elseif k === TokenKinds.TAG_CLOSE
+            # The `>` of a start tag, or of an end tag; only a start tag can leave `large_tag` set.
+            large_tag && (_check_unique_names(scratch_attrs, attr_marks[end] + 1); large_tag = false)
 
         elseif k === TokenKinds.CLOSE_TAG
             close_name = tag_name(token, xml)
@@ -394,11 +425,20 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
             val = _text_value(S, _normalize_attr_ws(rawval), token.has_entities, convert_text)
             name = _to(S, pending_attr_name)
             if decl_attrs !== nothing
-                any(p -> first(p) == name, decl_attrs) && error("Duplicate attribute: $name")
+                if length(decl_attrs) < _SMALL_ATTRIBUTE_COUNT
+                    any(p -> first(p) == name, decl_attrs) && error("Duplicate attribute: $name")
+                else
+                    large_tag = true   # checked at the end of the declaration
+                end
                 push!(decl_attrs, name => val)
             elseif !isempty(attr_marks)
-                for i in (attr_marks[end] + 1):length(scratch_attrs)
-                    first(scratch_attrs[i]) == name && error("Duplicate attribute: $name")
+                from = attr_marks[end] + 1
+                if length(scratch_attrs) - from + 1 < _SMALL_ATTRIBUTE_COUNT
+                    for i in from:length(scratch_attrs)
+                        first(scratch_attrs[i]) == name && error("Duplicate attribute: $name")
+                    end
+                else
+                    large_tag = true   # checked once the tag closes
                 end
                 push!(scratch_attrs, name => val)
             end
@@ -407,6 +447,7 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
             decl_attrs = Pair{S,S}[]
 
         elseif k === TokenKinds.XML_DECL_CLOSE
+            large_tag && (_check_unique_names(decl_attrs, 1); large_tag = false)
             W !== :lenient && !isempty(child_marks) &&
                 error("not well-formed: XML declaration inside element content")
             a = isempty(decl_attrs) ? nothing : decl_attrs

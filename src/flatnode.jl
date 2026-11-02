@@ -130,6 +130,7 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
     pend = Int32(0)                   # record awaiting its content / span end — patched in place
     pan_off = Int32(0); pan_len = Int32(0)   # pending attribute name
     open_off = Int32(0)               # offset of the last COMMENT/CDATA/DOCTYPE opening marker
+    large_tag = false                 # record `cur` has more than `_SMALL_ATTRIBUTE_COUNT` attributes
     tok_end(t) = Int32(t.offset + t.ncodeunits)
 
     for token in tokenize(xml)
@@ -158,9 +159,14 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
             cur = idx
 
         elseif k === K.SELF_CLOSE
+            large_tag && (_check_flat_names(xml, attrs, @inbounds recs[cur]); large_tag = false)
             ci = @inbounds pstack[end]
             @inbounds spans[ci] = (spans[ci][1], tok_end(token))
             pop!(pstack); pop!(lastchild)
+
+        elseif k === K.TAG_CLOSE
+            # The `>` of a start tag, or of an end tag; only a start tag can leave `large_tag` set.
+            large_tag && (_check_flat_names(xml, attrs, @inbounds recs[cur]); large_tag = false)
 
         elseif k === K.CLOSE_TAG
             close_name = tag_name(token, xml)
@@ -185,11 +191,15 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
             W === :strict && token.has_entities && _check_refs_strict(rawval, strict, true)
             name = _fsub_or_empty(xml, pan_off, pan_len)
             r = @inbounds recs[cur]
-            ai = r.attr_first
-            for _ in 1:r.attr_count
-                a = @inbounds attrs[ai]
-                _fsub_or_empty(xml, a.name_offset, a.name_len) == name && error("Duplicate attribute: $name")
-                ai += Int32(1)
+            if r.attr_count < _SMALL_ATTRIBUTE_COUNT
+                ai = r.attr_first
+                for _ in 1:r.attr_count
+                    a = @inbounds attrs[ai]
+                    _fsub_or_empty(xml, a.name_offset, a.name_len) == name && error("Duplicate attribute: $name")
+                    ai += Int32(1)
+                end
+            else
+                large_tag = true   # checked once the tag, or the declaration, closes
             end
             voff, vlen = _frng(rawval)
             token.has_entities && (vlen = -vlen)
@@ -207,6 +217,7 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
             pend = idx
 
         elseif k === K.XML_DECL_CLOSE
+            large_tag && (_check_flat_names(xml, attrs, @inbounds recs[cur]); large_tag = false)
             @inbounds spans[pend] = (spans[pend][1], tok_end(token))
 
         elseif k === K.COMMENT_OPEN || k === K.CDATA_OPEN || k === K.DOCTYPE_OPEN
@@ -266,7 +277,6 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
                 @inbounds recs[pend] = _fset_value(recs[pend], off, len)
             end
         end
-        # TAG_CLOSE: no tree action (element spans close at CLOSE_TAG/SELF_CLOSE)
     end
 
     if length(pstack) > 1
@@ -280,6 +290,11 @@ end
 
 @inline _fsub_or_empty(source::String, off::Int32, len::Int32) =
     len > 0 ? (@inbounds _noshift_substring(source, Int(off), Int(len))) : SubString(source, 1, 0)
+
+# The attribute names of record `r`, for the check of a tag with many attributes (parse.jl).
+_check_flat_names(source::String, attrs::Vector{_FlatAttr}, r::_FlatRec) =
+    _check_unique_names([_fsub_or_empty(source, attrs[ai].name_offset, attrs[ai].name_len)
+                         for ai in r.attr_first:(r.attr_first + r.attr_count - Int32(1))])
 
 #-----------------------------------------------------------------------------# parse / read entry points
 Base.parse(xml::AbstractString, ::Type{FlatNode}; wellformed::Symbol=:structural) =
