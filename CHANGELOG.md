@@ -5,6 +5,12 @@ All notable changes to XML.jl will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **An unknown `wellformed` level throws an `ArgumentError`** ([#201](https://github.com/JuliaData/XML.jl/issues/201)). `parse` and `read` gave it the checks of `:structural` without notice, so a misspelled `:strict` such as `:strcit` skipped the strict checks.
+
 ## [0.4.7] - 2026-11-02
 
 ### Added
@@ -476,6 +482,7 @@ First release since XML.jl moved to [JuliaData](https://github.com/JuliaData/XML
 
 - Initial release.
 
+[Unreleased]: https://github.com/JuliaData/XML.jl/compare/v0.4.7...HEAD
 [0.4.7]: https://github.com/JuliaData/XML.jl/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/JuliaData/XML.jl/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/JuliaData/XML.jl/compare/v0.4.4...v0.4.5

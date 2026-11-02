@@ -301,6 +301,27 @@ end
         @test nodetype(parse("<a/><b/>", Node; wellformed=:lenient)) == Document
         @test nodetype(parse("<></>", Node; wellformed=:lenient)) == Document
     end
+
+    @testset "an unknown wellformed level throws an ArgumentError" begin
+        # The readers compare the level only with :lenient and :strict: without this check, a
+        # misspelled :strict would get the checks of :structural.
+        for wf in (:strcit, :none, :Strict)
+            @test_throws ArgumentError parse("<r/>", Node; wellformed=wf)
+            @test_throws ArgumentError parse(Node, "<r/>"; wellformed=wf)
+            @test_throws ArgumentError parse("<r/>", Node{SubString{String}}; wellformed=wf)
+            @test_throws ArgumentError parse("<r/>", FlatNode; wellformed=wf)
+            @test_throws ArgumentError parse(FlatNode, "<r/>"; wellformed=wf)
+            @test_throws ArgumentError read(IOBuffer("<r/>"), Node; wellformed=wf)
+            @test_throws ArgumentError read(IOBuffer("<r/>"), FlatNode; wellformed=wf)
+        end
+        # `read` checks the level before it opens the file.
+        @test_throws ArgumentError read("no such file.xml", Node; wellformed=:strcit)
+        @test_throws ArgumentError read("no such file.xml", FlatNode; wellformed=:strcit)
+        # The message names the level received and the three levels.
+        err = try parse("<r/>", Node; wellformed=:strcit); nothing catch e; e end
+        @test err isa ArgumentError
+        @test all(s -> occursin(s, err.msg), (":strcit", ":lenient", ":structural", ":strict"))
+    end
 end
 
 #==============================================================================#

@@ -74,8 +74,9 @@ populated.
     read(filename, Node)         # read & parse a file
 
 The `wellformed` keyword of `parse` and `read` sets how much of the well-formedness of XML 1.0
-is checked: `:lenient`, `:structural` (the default) or `:strict`. What each level rejects is
-listed in [WELL-FORMEDNESS.md](https://github.com/JuliaData/XML.jl/blob/main/WELL-FORMEDNESS.md).
+is checked: `:lenient`, `:structural` (the default) or `:strict`; any other value throws an
+`ArgumentError`. What each level rejects is listed in
+[WELL-FORMEDNESS.md](https://github.com/JuliaData/XML.jl/blob/main/WELL-FORMEDNESS.md).
 
 Use the accessor functions ([`nodetype`](@ref), [`tag`](@ref), [`attributes`](@ref),
 [`value`](@ref), [`children`](@ref)) rather than the raw fields when navigating a tree.
