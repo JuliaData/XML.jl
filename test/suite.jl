@@ -364,15 +364,20 @@ end
         @test_throws Exception parse("""<e a="&#0;"/>""", Node; wellformed=:strict)        # in an attribute too
         # legal refs still parse under :strict
         @test simple_value(parse("<root>&#x41;&#x9;</root>", Node; wellformed=:strict)[1]) == "A\t"
-        # The edges of the range, both forms, leading zeros, and the digit run the check reads: the
-        # run is taken on the hexadecimal alphabet in both forms, so a decimal form carrying a letter
-        # is illegal, as a value past the range is; a `&#` that no digit run and `;` complete starts
-        # no reference and is left as written.
-        @test nodetype(parse("<root>&#x10FFFF;&#xE000;&#xFFFD;&#x20;&#X41;&#0000000065;</root>", Node; wellformed=:strict)) == Document
+        # The edges of the range, the form `&#x`, leading zeros, and the digit run the check reads:
+        # the run is taken on the hexadecimal alphabet in both forms, so a decimal form carrying a
+        # letter is illegal, as a value past the range is. `&#X` is refused (§4.1), and so is a `&#`
+        # that no digit run and `;` complete, which starts no reference (§2.4); below :strict both
+        # are left to the decoder, which reads `&#X` and keeps the rest as written.
+        @test nodetype(parse("<root>&#x10FFFF;&#xE000;&#xFFFD;&#x20;&#0000000065;</root>", Node; wellformed=:strict)) == Document
+        @test_throws "\"&#X41;\" with an uppercase X" parse("<root>&#X41;</root>", Node; wellformed=:strict)
         for ref in ("&#x110000;", "&#xFFFE;", "&#xDFFF;", "&#31;", "&#12a;", "&#99999999999;")
             @test_throws "illegal character reference \"$ref\"" parse("<root>$ref</root>", Node; wellformed=:strict)
         end
-        @test nodetype(parse("<root>&#; &#x; &#65 &#x41x; &#xx41;</root>", Node; wellformed=:strict)) == Document
+        for ref in ("&#;", "&#x;", "&#65 ", "&#x41x;", "&#xx41;")
+            @test_throws "\"&\" that starts no reference" parse("<root>$ref</root>", Node; wellformed=:strict)
+        end
+        @test simple_value(parse("<root>&#; &#x; &#65 &#x41x; &#xx41;</root>", Node)[1]) == "&#; &#x; &#65 &#x41x; &#xx41;"
 
         # The RAW (literal) form of an illegal character is rejected too, not only the reference
         # form — in text, attributes, comments, CDATA, and PI content.
@@ -585,23 +590,35 @@ end
     end
 
     @testset "every short span gets the verdict and message of the pattern-based check" begin
-        # The reference is the check as it read with a pattern, kept here as the specification:
-        # one `eachmatch` with three groups, a `tryparse` of the digit run against the character
-        # range, a membership test of the name against the five predefined ones. Its verdict —
-        # accepted, or the message it raises — is what the byte scan reproduces, `names` on and off.
-        # Its name class admits every non-ASCII character, as the tokenizer does in a name.
+        # The reference is the check written with a pattern, kept here as the specification: each
+        # `&`, from left to right, must start a match of one pattern with three groups, or it is
+        # refused (§2.4); a character reference written `&#X` is refused (§4.1), and the digit run
+        # of another must `tryparse` into the character range; a name must be one of the five
+        # predefined ones when `names` holds. It returns its verdict — "accepted", or the message —
+        # rather than raising it, since a raise costs far more than the check; the byte scan must
+        # reproduce that verdict, `names` on and off. Its name class admits every non-ASCII
+        # character, as the tokenizer does in a name.
         name = raw"[A-Za-z_:[:^ascii:]][A-Za-z0-9._:[:^ascii:]-]*"
         reference = Regex(raw"&(?:#([xX]?)([0-9a-fA-F]+)|(" * name * raw"));")
         function pattern_check(s, names)
-            for m in eachmatch(reference, s)
+            p = findfirst('&', s)
+            while p !== nothing
+                m = match(reference, s, p)
+                (m === nothing || m.offset != p) &&
+                    return string("not well-formed: \"&\" that starts no reference: \"", first(SubString(s, p), 12),
+                                  "\" (XML 1.0 §2.4)")
                 if m[3] === nothing
+                    m[1] == "X" &&
+                        return "not well-formed: character reference \"&#X$(m[2]);\" with an uppercase X (XML 1.0 §4.1)"
                     cp = tryparse(UInt32, m[2]; base = isempty(m[1]) ? 10 : 16)
                     (cp === nothing || !XML._is_xml_char(cp)) &&
-                        error("not well-formed: illegal character reference \"&#$(m[1])$(m[2]);\"")
+                        return "not well-formed: illegal character reference \"&#$(m[1])$(m[2]);\""
                 elseif names && !(m[3] in XML._PREDEFINED)
-                    error("not well-formed: reference to undeclared entity \"&$(m[3]);\" (XML 1.0 §4.1)")
+                    return "not well-formed: reference to undeclared entity \"&$(m[3]);\" (XML 1.0 §4.1)"
                 end
+                p = findnext('&', s, p + ncodeunits(m.match))
             end
+            return "accepted"
         end
         verdict(check, s, names) = try; check(s, names); "accepted"; catch e; sprint(showerror, e); end
         # Every string of one to four tokens over an alphabet that can spell each reference form,
@@ -613,7 +630,7 @@ end
         for len in 1:4, idx in Iterators.product(ntuple(_ -> eachindex(tokens), len)...)
             s = join(tokens[i] for i in idx)
             for names in (true, false)
-                want = verdict(pattern_check, s, names)
+                want = pattern_check(s, names)
                 (verdict(XML._check_refs_strict, s, names) == want &&
                  verdict(XML._check_refs_strict, SubString(s), names) == want) || push!(mismatches, s)
             end
@@ -1031,10 +1048,14 @@ end
         @test nodetype(parse("<a>&#65;&#x42;</a>", Node; wellformed=:strict)) == Document
         # The name is read as the tokenizer reads names, case-sensitive, up to its `;`: the ASCII
         # name characters and every non-ASCII character (§2.3). A `&` that starts no such name is
-        # left as written, and a name that is not one of the five is named by the message.
+        # refused (§2.4) and left as written below :strict; a name that is not one of the five is
+        # named by the message.
         @test_throws "reference to undeclared entity \"&AMP;\"" parse("<a>&AMP;</a>", Node; wellformed=:strict)
         @test_throws "reference to undeclared entity \"&_x.y-z:1;\"" parse("<a>&_x.y-z:1;</a>", Node; wellformed=:strict)
-        @test nodetype(parse("<a>&; & &1a; &-a; &amp &&amp;</a>", Node; wellformed=:strict)) == Document
+        for bad in ("&;", "& ", "&1a;", "&-a;", "&amp ", "&&amp;")
+            @test_throws "\"&\" that starts no reference" parse("<a>$bad</a>", Node; wellformed=:strict)
+        end
+        @test nodetype(parse("<a>&; & &1a; &-a; &amp &&amp;</a>", Node)) == Document
         for name in ("é", "café", "été"), R in (Node, FlatNode)
             msg = "reference to undeclared entity \"&$name;\""
             @test_throws msg parse("<a>&$name;</a>", R; wellformed = :strict)
@@ -1090,6 +1111,23 @@ end
         @test nodetype(parse(un * "<a b=\"u\"/>", Node; wellformed=:strict)) == Document
         # below :strict the reference stays as written
         @test simple_value(only(elements(parse(un * "<a>&u;</a>", Node)))) == "&u;"
+    end
+
+    @testset ":strict rejects an \"&\" that starts no reference (§2.4), and \"&#X\" (§4.1)" begin
+        # A literal `&` may only start a reference (§2.4); CharRef takes `&#x`, never `&#X`.
+        bad = ["R&D", "a & b", "a&;b", "a&#;b", "a&#x;b", "a&#xZZ;b", "a&1x;b", "fin&"]
+        for R in (Node, FlatNode), v in bad
+            @test_throws "not well-formed" parse("<r>$v</r>", R; wellformed=:strict)
+            @test_throws "not well-formed" parse("<r a=\"$v\"/>", R; wellformed=:strict)
+        end
+        for R in (Node, FlatNode)
+            @test_throws "uppercase X" parse("<r>a&#X41;b</r>", R; wellformed=:strict)
+            @test_throws "uppercase X" parse("<r a=\"a&#X41;b\"/>", R; wellformed=:strict)
+            @test nodetype(parse("<r a=\"&amp;&#233;&#xE9;\">&lt;&#x41;</r>", R; wellformed=:strict)) == Document
+        end
+        # below :strict both stay accepted, and `&#X41;` decodes
+        @test simple_value(only(elements(parse("<r>R&D</r>", Node)))) == "R&D"
+        @test simple_value(only(elements(parse("<r>a&#X41;b</r>", Node)))) == "aAb"
     end
 end
 

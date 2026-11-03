@@ -258,13 +258,14 @@ end
 # above 0x80 as its own; a span it accepts allocates nothing, and only a rejected reference is
 # copied, into its message. A character reference is rejected when its digit run denotes no code
 # point of the XML Char range; the run is read on the hexadecimal alphabet in both forms, so a
-# decimal form carrying a letter is rejected too. A named reference that is not predefined is
-# checked against what the DTD declares: `_apply_declarations` has already replaced every
-# reference to an internal entity, so a name arriving here is external, unparsed, or has no
-# declaration behind it (XML 1.0 §4.1, the "Entity Declared" well-formedness constraint), which
-# is refused only when `names` holds. A `&` that starts neither form — one followed by no name, or
-# by a name or a digit run without its `;` — goes unchecked, which costs a missed rejection and
-# never a wrong one.
+# decimal form carrying a letter is rejected too, and so is the form `&#X`, which the decoder
+# reads but the rule CharRef does not allow (XML 1.0 §4.1). A named reference that is not
+# predefined is checked against what the DTD declares: `_apply_declarations` has already
+# replaced every reference to an internal entity, so a name arriving here is external, unparsed,
+# or has no declaration behind it (XML 1.0 §4.1, the "Entity Declared" well-formedness
+# constraint), which is refused only when `names` holds. A `&` that starts neither form — one
+# followed by no name, or by a name or a digit run without its `;` — is refused too: a literal
+# `&` may only start a reference (XML 1.0 §2.4).
 _check_refs_strict(s::AbstractString, names::Bool) = _check_refs(s, names, nothing, nothing, false)
 
 # What the check knows of the DTD (`_strict_context`): whether "Entity Declared" binds, and the
@@ -286,27 +287,32 @@ function _check_refs(s::AbstractString, names::Bool, external, unparsed, in_attr
     n = length(cu)
     i = findnext(==(UInt8('&')), cu, 1)
     while i !== nothing
-        next = i + 1
         if i + 1 <= n && @inbounds(cu[i + 1]) == UInt8('#')
             j, cp = _charref_at(cu, i, n)
-            if j > 0
-                _is_xml_char(cp) ||
-                    error("not well-formed: illegal character reference \"", String(cu[i:j]), "\"")
-                next = j + 1
-            end
+            j > 0 || _no_reference(s, i)
+            # `_charref_at` also reads `&#X`, which the levels below `:strict` decode; the rule
+            # CharRef takes `&#x` only.
+            @inbounds(cu[i + 2]) == UInt8('X') &&
+                error("not well-formed: character reference \"", String(cu[i:j]),
+                      "\" with an uppercase X (XML 1.0 §4.1)")
+            _is_xml_char(cp) ||
+                error("not well-formed: illegal character reference \"", String(cu[i:j]), "\"")
         else
             j = _name_end(cu, i + 1, n)
-            if j > 0
-                if names || external !== nothing || unparsed !== nothing
-                    _, len = _predefined_at(cu, i, n)
-                    len == 0 && _check_named(s, cu, i, j, names, external, unparsed, in_attr)
-                end
-                next = j + 1
+            j > 0 || _no_reference(s, i)
+            if names || external !== nothing || unparsed !== nothing
+                _, len = _predefined_at(cu, i, n)
+                len == 0 && _check_named(s, cu, i, j, names, external, unparsed, in_attr)
             end
         end
-        i = findnext(==(UInt8('&')), cu, next)   # next ≤ n + 1, where findnext answers `nothing`
+        i = findnext(==(UInt8('&')), cu, j + 1)   # j + 1 ≤ n + 1, where findnext answers `nothing`
     end
 end
+
+# A literal `&` may only start a reference (XML 1.0 §2.4).
+@noinline _no_reference(s::AbstractString, i::Int) =
+    error("not well-formed: \"&\" that starts no reference: \"", first(SubString(s, i), 12),
+          "\" (XML 1.0 §2.4)")
 
 # A named reference that is not predefined. An unparsed entity is refused anywhere (WFC: Parsed
 # Entity, §4.1), an external one in an attribute value (WFC: No External Entity References,

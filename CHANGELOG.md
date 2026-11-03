@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **A tag with many attributes is checked for duplicates in O(n log n) time** ([#200](https://github.com/JuliaData/XML.jl/issues/200)), not O(n²): a single tag of a few hundred kilobytes could hold `Node` or `FlatNode` for seconds. Past 32 attributes, the tag is checked once it closes, by sorting its names, so another error in the same tag may now be reported first.
 
+- **`:strict` refuses an `&` that starts no reference** ([#202](https://github.com/JuliaData/XML.jl/issues/202)), such as `R&D` or `a & b`, and a character reference written with an uppercase `X`, such as `&#X41;`. The other levels keep accepting both, and still decode `&#X41;`.
+
 ## [0.4.7] - 2026-11-02
 
 ### Added
