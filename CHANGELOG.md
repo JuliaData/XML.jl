@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`:strict` refuses an `&` that starts no reference** ([#202](https://github.com/JuliaData/XML.jl/issues/202)), such as `R&D` or `a & b`, and a character reference written with an uppercase `X`, such as `&#X41;`. The other levels keep accepting both, and still decode `&#X41;`.
 
+- **`:strict` checks the pseudo-attributes of the XML declaration** ([#205](https://github.com/JuliaData/XML.jl/issues/205)) against [XML 1.0 §2.8](https://www.w3.org/TR/xml/#sec-prolog-dtd). It refuses an unknown or misplaced pseudo-attribute, such as `foo="bar"` or `encoding` before `version`, a missing `version`, and a pseudo-attribute with no white space before it. It also refuses a value that its rule does not allow, such as `version="2.0"` or `standalone="maybe"`. The other levels keep accepting them.
+
 ## [0.4.7] - 2026-11-02
 
 ### Added

@@ -712,6 +712,52 @@ end
         @test doc[1]["version"] == "1.0"
     end
 
+    @testset ":strict checks the pseudo-attributes of the XML declaration (§2.8)" begin
+        # `version`, then an optional `encoding`, then an optional `standalone`, each after white
+        # space, with the values their rules allow (XML 1.0 §2.8, §2.9, §4.3.3). The values are
+        # read as written: none of the three rules allows a reference.
+        bad = (
+            """<?xml version="1.0" foo="bar"?>""" => "\"foo\" in the XML declaration",
+            """<?xml Version="1.0"?>""" => "\"Version\" in the XML declaration",
+            """<?xml version="1.0" Standalone="yes"?>""" => "\"Standalone\" in the XML declaration",
+            """<?xml encoding="UTF-8" version="1.0"?>""" => "does not start with \"version\"",
+            """<?xml encoding="UTF-8"?>""" => "does not start with \"version\"",
+            "<?xml ?>" => "does not start with \"version\"",
+            "<?xml?>" => "does not start with \"version\"",
+            """<?xml version="1.0" standalone="no" encoding="UTF-8"?>""" => "\"encoding\" after \"standalone\"",
+            """<?xml version="1.0"encoding="UTF-8"?>""" => "no white space before \"encoding\"",
+            """<?xml version="1.0"standalone="yes"?>""" => "no white space before \"standalone\"",
+            """<?xml version="2.0"?>""" => "version \"2.0\"",
+            """<?xml version="1"?>""" => "version \"1\"",
+            """<?xml version="1.0 "?>""" => "version \"1.0 \"",
+            """<?xml version="1&#46;0"?>""" => "version \"1&#46;0\"",
+            """<?xml version="1.0" encoding="8bit"?>""" => "encoding name \"8bit\"",
+            """<?xml version="1.0" encoding=" UTF-8"?>""" => "encoding name \" UTF-8\"",
+            """<?xml version="1.0" encoding="UTF&#45;8"?>""" => "encoding name \"UTF&#45;8\"",
+            """<?xml version="1.0" standalone="maybe"?>""" => "standalone \"maybe\"",
+            """<?xml version="1.0" standalone="YES"?>""" => "standalone \"YES\"",
+        )
+        for (decl, msg) in bad, T in (Node, Node{SubString{String}}, FlatNode)
+            xml = decl * "<r/>"
+            err = try parse(xml, T; wellformed = :strict); nothing catch e; e end
+            @test err isa ErrorException && occursin(msg, err.msg)
+            for wf in (:lenient, :structural)   # the other levels keep accepting it
+                @test nodetype(parse(xml, T; wellformed = wf)) == Document
+            end
+        end
+        # Declarations the rules allow; a 1.x version other than 1.0 is read as 1.0 (§2.8).
+        good = (
+            """<?xml version="1.0"?>""",
+            """<?xml version='1.0' encoding='utf-8' standalone='no'?>""",
+            "<?xml\tversion = \"1.0\"\nencoding=\"ISO-8859-1\" \tstandalone=\"yes\" ?>",
+            """<?xml version="1.10" encoding="x-Mac.Roman_2"?>""",
+            """<?xml version="1.1"?>""",
+        )
+        for decl in good, T in (Node, Node{SubString{String}}, FlatNode)
+            @test nodetype(parse(decl * "<r/>", T; wellformed = :strict)) == Document
+        end
+    end
+
     @testset "no XML declaration" begin
         doc = parse("<root/>", Node)
         @test length(doc) == 1
