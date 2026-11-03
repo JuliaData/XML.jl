@@ -358,6 +358,61 @@ end
 _check_unique_names(attrs::Vector{<:Pair}, from::Int) =
     _check_unique_names([first(attrs[i]) for i in from:length(attrs)])
 
+# The pseudo-attributes of the XML declaration, under `:strict` (XML 1.0 §2.8): `version`, then
+# an optional `encoding`, then an optional `standalone`, each after white space. `before` is the
+# byte before the name, and `prev` the name read before it, empty for the first. The values are
+# read as written, since none of the three rules allows a reference.
+function _check_decl_attr(before::UInt8, name::AbstractString, value::AbstractString,
+                          prev::AbstractString)
+    rank = _decl_rank(name)
+    rank == 0 && _decl_error("2.8", "\"", name, "\" in the XML declaration; it takes only ",
+                             "\"version\", \"encoding\" and \"standalone\"")
+    isempty(prev) && rank != 1 && _no_version()
+    rank <= _decl_rank(prev) &&
+        _decl_error("2.8", "\"", name, "\" after \"", prev, "\" in the XML declaration")
+    XMLTokenizer.is_whitespace(before) ||
+        _decl_error("2.8", "no white space before \"", name, "\" in the XML declaration")
+    if rank == 1
+        _is_version_num(value) ||
+            _decl_error("2.8", "version \"", value, "\" in the XML declaration; it must be \"1.\" ",
+                        "then digits")
+    elseif rank == 2
+        _is_enc_name(value) ||
+            _decl_error("4.3.3", "encoding name \"", value, "\" in the XML declaration; it must ",
+                        "start with a letter, then letters, digits, \".\", \"_\" or \"-\"")
+    else
+        value == "yes" || value == "no" ||
+            _decl_error("2.9", "standalone \"", value, "\" in the XML declaration; it must be ",
+                        "\"yes\" or \"no\"")
+    end
+    return nothing
+end
+
+_decl_rank(name::AbstractString) =
+    name == "version" ? 1 : name == "encoding" ? 2 : name == "standalone" ? 3 : 0
+
+# An XML declaration with no pseudo-attribute, or whose first one is not `version`.
+@noinline _no_version() = _decl_error("2.8", "XML declaration that does not start with \"version\"")
+
+@noinline _decl_error(section::String, parts...) =
+    error("not well-formed: ", parts..., " (XML 1.0 §", section, ")")
+
+# VersionNum ::= '1.' [0-9]+ (XML 1.0 §2.8)
+function _is_version_num(v::AbstractString)
+    cu = codeunits(v)
+    (length(cu) >= 3 && cu[1] == UInt8('1') && cu[2] == UInt8('.')) || return false
+    return all(b -> UInt8('0') <= b <= UInt8('9'), @view cu[3:end])
+end
+
+# EncName ::= [A-Za-z] ([A-Za-z0-9._] | '-')* (XML 1.0 §4.3.3)
+function _is_enc_name(v::AbstractString)
+    letter(b) = (UInt8('A') <= b <= UInt8('Z')) || (UInt8('a') <= b <= UInt8('z'))
+    cu = codeunits(v)
+    (!isempty(cu) && letter(cu[1])) || return false
+    return all(b -> letter(b) || UInt8('0') <= b <= UInt8('9') || b == UInt8('.') ||
+                    b == UInt8('_') || b == UInt8('-'), @view cu[2:end])
+end
+
 # Token-stream → Node{S} builder. `convert_text` is `unescape` for parsed content (with entity
 # decoding) and `identity` for zero-copy SubString parsing where the caller keeps raw escapes.
 # `Val{W}` is the well-formedness level (:lenient / :structural / :strict); its checks compile
@@ -436,6 +491,8 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
                 else
                     large_tag = true   # checked at the end of the declaration
                 end
+                W === :strict && _check_decl_attr(codeunit(xml, pending_attr_name.offset),
+                    pending_attr_name, rawval, isempty(decl_attrs) ? "" : first(decl_attrs[end]))
                 push!(decl_attrs, name => val)
             elseif !isempty(attr_marks)
                 from = attr_marks[end] + 1
@@ -456,6 +513,7 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
             large_tag && (_check_unique_names(decl_attrs, 1); large_tag = false)
             W !== :lenient && !isempty(child_marks) &&
                 error("not well-formed: XML declaration inside element content")
+            W === :strict && isempty(decl_attrs) && _no_version()
             a = isempty(decl_attrs) ? nothing : decl_attrs
             push!(scratch_children, Node{S}(Declaration, nothing, a, nothing, nothing))
             decl_attrs = nothing

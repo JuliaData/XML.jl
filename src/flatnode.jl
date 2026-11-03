@@ -201,6 +201,11 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
             else
                 large_tag = true   # checked once the tag, or the declaration, closes
             end
+            if W === :strict && r.kind === Declaration
+                prev = r.attr_count == 0 ? SubString(xml, 1, 0) :
+                    _fsub_or_empty(xml, attrs[end].name_offset, attrs[end].name_len)
+                _check_decl_attr(codeunit(xml, Int(pan_off)), name, rawval, prev)
+            end
             voff, vlen = _frng(rawval)
             token.has_entities && (vlen = -vlen)
             push!(attrs, _FlatAttr(pan_off, pan_len, voff, vlen))
@@ -218,6 +223,7 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
 
         elseif k === K.XML_DECL_CLOSE
             large_tag && (_check_flat_names(xml, attrs, @inbounds recs[cur]); large_tag = false)
+            W === :strict && (@inbounds recs[cur]).attr_count == 0 && _no_version()
             @inbounds spans[pend] = (spans[pend][1], tok_end(token))
 
         elseif k === K.COMMENT_OPEN || k === K.CDATA_OPEN || k === K.DOCTYPE_OPEN
