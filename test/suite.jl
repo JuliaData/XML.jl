@@ -1036,6 +1036,29 @@ end
         @test doc[1]["a"] == "1"
     end
 
+    @testset ":strict requires white space between attributes (§3.1)" begin
+        # `'<' Name (S Attribute)* S? '>'`: each attribute comes after white space, in a start tag
+        # as in an empty-element tag.
+        bad = (
+            """<r a="1"b="2"/>""" => "\"b\"",
+            """<r a='1'b='2'></r>""" => "\"b\"",
+            """<r a="1" b="2"c="3"/>""" => "\"c\"",
+            """<r><s a="1"b="2"/></r>""" => "\"b\"",
+        )
+        for (xml, name) in bad, T in (Node, Node{SubString{String}}, FlatNode)
+            err = try parse(xml, T; wellformed = :strict); nothing catch e; e end
+            @test err isa ErrorException && occursin("no white space before attribute $name", err.msg)
+            for wf in (:lenient, :structural)   # the other levels keep accepting it
+                @test nodetype(parse(xml, T; wellformed = wf)) == Document
+            end
+        end
+        # Any white space will do, and none is needed before `/>` or `>`.
+        for xml in ("<r a=\"1\"\tb=\"2\"\nc=\"3\"\r\nd='4'/>", """<r a = "1"  b='2'></r>""", """<r a="1"/>"""),
+            T in (Node, Node{SubString{String}}, FlatNode)
+            @test nodetype(parse(xml, T; wellformed = :strict)) == Document
+        end
+    end
+
     @testset ":strict rejects an external entity in an attribute value (§3.1)" begin
         # WFC: No External Entity References, whether the value names the entity or reaches it
         # through an internal one (W3C ibm41n10, ibm41n11).

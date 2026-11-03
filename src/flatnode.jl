@@ -205,6 +205,8 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
                 prev = r.attr_count == 0 ? SubString(xml, 1, 0) :
                     _fsub_or_empty(xml, attrs[end].name_offset, attrs[end].name_len)
                 _check_decl_attr(codeunit(xml, Int(pan_off)), name, rawval, prev)
+            elseif W === :strict
+                XMLTokenizer.is_whitespace(codeunit(xml, Int(pan_off))) || _no_attr_space(name)
             end
             voff, vlen = _frng(rawval)
             token.has_entities && (vlen = -vlen)
