@@ -358,6 +358,11 @@ end
 _check_unique_names(attrs::Vector{<:Pair}, from::Int) =
     _check_unique_names([first(attrs[i]) for i in from:length(attrs)])
 
+# Under `:strict`, each attribute of a tag comes after white space (XML 1.0 §3.1), which the
+# tokenizer skips without requiring any.
+@noinline _no_attr_space(name::AbstractString) =
+    error("not well-formed: no white space before attribute \"", name, "\" (XML 1.0 §3.1)")
+
 # The pseudo-attributes of the XML declaration, under `:strict` (XML 1.0 §2.8): `version`, then
 # an optional `encoding`, then an optional `standalone`, each after white space. `before` is the
 # byte before the name, and `prev` the name read before it, empty for the first. The values are
@@ -503,6 +508,8 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
                 else
                     large_tag = true   # checked once the tag closes
                 end
+                W === :strict && (XMLTokenizer.is_whitespace(codeunit(xml, pending_attr_name.offset)) ||
+                                  _no_attr_space(pending_attr_name))
                 push!(scratch_attrs, name => val)
             end
 
