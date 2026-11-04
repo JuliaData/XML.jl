@@ -11,7 +11,7 @@
 #   [n]          positional predicate (1-based)
 #   [@attr]      has-attribute predicate
 #   [@attr='v']  attribute-value predicate
-#   text()       text node children
+#   text()       Text and CData children
 #   node()       all node children
 #   @attr        attribute value (as a Text node)
 
@@ -270,7 +270,8 @@ function _xpath_step(nodes::Vector{Node{S}}, token::XPathToken, root::Node{S}) w
     elseif k === XPATH_TEXT_FN
         for n in nodes
             for c in children(n)
-                c.nodetype === Text && push!(result, c)
+                # XPath 1.0 §5.7: a CDATA section is character data
+                (c.nodetype === Text || c.nodetype === CData) && push!(result, c)
             end
         end
 

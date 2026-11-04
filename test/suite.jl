@@ -4082,6 +4082,17 @@ end
         results = xpath(doc, "/root/settings/theme/text()")
         @test length(results) == 1
         @test value(results[1]) == "dark"
+
+        # XPath 1.0 §5.7: a CDATA section is character data, so `text()` selects it, in document
+        # order among the `Text` children, as libxml2 does.
+        cdoc = parse("<item><title><![CDATA[Fusions & acquisitions]]></title><note>a<![CDATA[b]]>c</note></item>", Node)
+        only_cdata = xpath(cdoc, "/item/title/text()")
+        @test nodetype.(only_cdata) == [CData]
+        @test value.(only_cdata) == ["Fusions & acquisitions"]
+        mixed = xpath(cdoc, "/item/note/text()")
+        @test nodetype.(mixed) == [Text, CData, Text]
+        @test value.(mixed) == ["a", "b", "c"]
+        @test value.(xpath(cdoc, "//text()")) == ["Fusions & acquisitions", "a", "b", "c"]
     end
 
     @testset "node()" begin

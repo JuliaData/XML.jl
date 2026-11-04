@@ -237,7 +237,7 @@ xpath(root, "//b/text()")    # Text nodes inside all <b>s
 | `[n]` | Positional predicate (1-based) |
 | `[@attr]` | Has-attribute predicate |
 | `[@attr='v']` | Attribute-value predicate |
-| `text()` | Text node children |
+| `text()` | `Text` and `CData` children |
 | `node()` | All node children |
 | `@attr` | Attribute value (as a `Text` node) |
 
