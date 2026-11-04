@@ -5,6 +5,14 @@ All notable changes to XML.jl will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+With the changes below, the same call can give another result than with v0.4.8.
+
+- **`text()` in `xpath` also selects CDATA sections** ([#153](https://github.com/JuliaData/XML.jl/issues/153)), as [XPath 1.0 §5.7](https://www.w3.org/TR/1999/REC-xpath-19991116/#section-Text-Nodes) asks. It selected `Text` children only, so `//item/title/text()` found nothing in an RSS feed whose titles are CDATA sections. It now returns the `Text` and `CData` children in document order, as libxml2 does.
+
 ## [0.4.8] - 2026-11-04
 
 ### Changed
@@ -496,6 +504,7 @@ First release since XML.jl moved to [JuliaData](https://github.com/JuliaData/XML
 
 - Initial release.
 
+[Unreleased]: https://github.com/JuliaData/XML.jl/compare/v0.4.8...HEAD
 [0.4.8]: https://github.com/JuliaData/XML.jl/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/JuliaData/XML.jl/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/JuliaData/XML.jl/compare/v0.4.5...v0.4.6
