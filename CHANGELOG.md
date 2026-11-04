@@ -5,21 +5,25 @@ All notable changes to XML.jl will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.8] - 2026-11-04
 
-### Fixed
+### Changed
+
+With the changes below, the same call can give another result than with v0.4.7.
 
 - **An unknown `wellformed` level throws an `ArgumentError`** ([#201](https://github.com/JuliaData/XML.jl/issues/201)). `parse` and `read` gave it the checks of `:structural` without notice, so a misspelled `:strict` such as `:strcit` skipped the strict checks.
-
-- **`XML.write` writes a `Node{SubString{String}}`** ([#199](https://github.com/JuliaData/XML.jl/issues/199)) instead of throwing a `MethodError`. It keeps the entity references of these raw values, and the character references that the default `Node` decodes, as they are, and escapes the other characters as `escape` does.
-
-- **A tag with many attributes is checked for duplicates in O(n log n) time** ([#200](https://github.com/JuliaData/XML.jl/issues/200)), not O(n²): a single tag of a few hundred kilobytes could hold `Node` or `FlatNode` for seconds. Past 32 attributes, the tag is checked once it closes, by sorting its names, so another error in the same tag may now be reported first.
 
 - **`:strict` refuses an `&` that starts no reference** ([#202](https://github.com/JuliaData/XML.jl/issues/202)), such as `R&D` or `a & b`, and a character reference written with an uppercase `X`, such as `&#X41;`. The other levels keep accepting both, and still decode `&#X41;`.
 
 - **`:strict` checks the pseudo-attributes of the XML declaration** ([#205](https://github.com/JuliaData/XML.jl/issues/205)) against [XML 1.0 §2.8](https://www.w3.org/TR/xml/#sec-prolog-dtd). It refuses an unknown or misplaced pseudo-attribute, such as `foo="bar"` or `encoding` before `version`, a missing `version`, and a pseudo-attribute with no white space before it. It also refuses a value that its rule does not allow, such as `version="2.0"` or `standalone="maybe"`. The other levels keep accepting them.
 
 - **`:strict` refuses two attributes with no white space between them** ([#208](https://github.com/JuliaData/XML.jl/issues/208)), such as `<r a="1"b="2"/>`, as [XML 1.0 §3.1](https://www.w3.org/TR/xml/#sec-starttags) requires. The other levels keep accepting them.
+
+### Fixed
+
+- **`XML.write` writes a `Node{SubString{String}}`** ([#199](https://github.com/JuliaData/XML.jl/issues/199)) instead of throwing a `MethodError`. It keeps the entity references of these raw values, and the character references that the default `Node` decodes, as they are, and escapes the other characters as `escape` does.
+
+- **A tag with many attributes is checked for duplicates in O(n log n) time** ([#200](https://github.com/JuliaData/XML.jl/issues/200)), not O(n²): a single tag of a few hundred kilobytes could hold `Node` or `FlatNode` for seconds. Past 32 attributes, the tag is checked once it closes, by sorting its names, so another error in the same tag may now be reported first.
 
 ## [0.4.7] - 2026-11-02
 
@@ -492,7 +496,7 @@ First release since XML.jl moved to [JuliaData](https://github.com/JuliaData/XML
 
 - Initial release.
 
-[Unreleased]: https://github.com/JuliaData/XML.jl/compare/v0.4.7...HEAD
+[0.4.8]: https://github.com/JuliaData/XML.jl/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/JuliaData/XML.jl/compare/v0.4.6...v0.4.7
 [0.4.6]: https://github.com/JuliaData/XML.jl/compare/v0.4.5...v0.4.6
 [0.4.5]: https://github.com/JuliaData/XML.jl/compare/v0.4.4...v0.4.5
