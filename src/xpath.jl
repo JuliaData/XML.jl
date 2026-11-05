@@ -65,12 +65,21 @@ end
 
 # A name in an expression follows XML 1.0's Name rule (fifth edition, §2.3), except that it cannot
 # start with ":". These are the non-ASCII code points of NameStartChar, then those NameChar adds.
-const _NAME_START_RANGES = (0xC0:0xD6, 0xD8:0xF6, 0xF8:0x2FF, 0x370:0x37D, 0x37F:0x1FFF,
-    0x200C:0x200D, 0x2070:0x218F, 0x2C00:0x2FEF, 0x3001:0xD7FF, 0xF900:0xFDCF, 0xFDF0:0xFFFD,
-    0x10000:0xEFFFF)
-const _NAME_CHAR_RANGES = (0xB7:0xB7, 0x300:0x36F, 0x203F:0x2040)
+# `:strict` checks the names of a document against the same ranges (`_is_xml10_name`). They are
+# all `UnitRange{UInt32}`: a tuple that mixes `UInt8`, `UInt16` and `UInt32` ranges, as the
+# literals give, makes the search below allocate at each range.
+const _NAME_START_RANGES = UnitRange{UInt32}.((0xC0:0xD6, 0xD8:0xF6, 0xF8:0x2FF, 0x370:0x37D,
+    0x37F:0x1FFF, 0x200C:0x200D, 0x2070:0x218F, 0x2C00:0x2FEF, 0x3001:0xD7FF, 0xF900:0xFDCF,
+    0xFDF0:0xFFFD, 0x10000:0xEFFFF))
+const _NAME_CHAR_RANGES = UnitRange{UInt32}.((0xB7:0xB7, 0x300:0x36F, 0x203F:0x2040))
 
-_in_ranges(c::Char, ranges) = !isascii(c) && isvalid(c) && any(r -> codepoint(c) in r, ranges)
+_in_ranges(c::Char, ranges) = !isascii(c) && isvalid(c) && _in_ranges(codepoint(c), ranges)
+@inline function _in_ranges(cp::UInt32, ranges)
+    for r in ranges
+        cp in r && return true
+    end
+    return false
+end
 _xpath_name_start(c::Char) = ('a' <= c <= 'z') || ('A' <= c <= 'Z') || c == '_' ||
     _in_ranges(c, _NAME_START_RANGES)
 _xpath_name_char(c::Char) = _xpath_name_start(c) || ('0' <= c <= '9') || c == '-' || c == '.' ||

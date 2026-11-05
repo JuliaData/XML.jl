@@ -325,6 +325,50 @@ end
 end
 
 #==============================================================================#
+#         XML 1.0 SPEC SECTION 2.3: Common Syntactic Constructs                #
+#==============================================================================#
+@testset "Spec 2.3: Common Syntactic Constructs" begin
+    @testset ":strict checks names against the Name rule (§2.3)" begin
+        # [5] `Name ::= NameStartChar (NameChar)*`, with the ranges of [4] and [4a], for element
+        # names, attribute names and processing-instruction targets. U+00B7 and U+0301 are
+        # NameChars that cannot start a name; U+00B5, U+00D7, U+00A0 and U+3000 are neither.
+        mid, acute, micro = Char(0xb7), Char(0x301), Char(0xb5)
+        times, nbsp, ideo = Char(0xd7), Char(0xa0), Char(0x3000)
+        bad = (
+            "<doc 12=\"34\"/>" => "attribute name \"12\"",
+            "<doc -x=\"1\"/>" => "attribute name \"-x\"",
+            "<doc .x=\"1\"/>" => "attribute name \".x\"",
+            "<doc a$(times)b=\"1\"/>" => "attribute name \"a$(times)b\"",
+            "<$(mid)x/>" => "element name \"$(mid)x\"",
+            "<$(acute)x/>" => "element name \"$(acute)x\"",
+            "<$(micro)/>" => "element name \"$(micro)\"",
+            "<a$(nbsp)b/>" => "element name \"a$(nbsp)b\"",
+            "<r><a$(ideo)b/></r>" => "element name \"a$(ideo)b\"",
+            "<?$(mid)pi x?><r/>" => "processing-instruction target \"$(mid)pi\"",
+        )
+        for (xml, what) in bad, T in (Node, Node{SubString{String}}, FlatNode)
+            err = try parse(xml, T; wellformed = :strict); nothing catch e; e end
+            @test err isa ErrorException && occursin("invalid $what", err.msg)
+            for wf in (:lenient, :structural)   # the other levels keep accepting it
+                @test nodetype(parse(xml, T; wellformed = wf)) == Document
+            end
+        end
+        # Names in any script pass, with `:`, `_`, digits, `-`, `.` and combining marks after the
+        # first character.
+        ok = "<é xml:lang=\"fr\" a$(mid)b=\"1\" _c=\"2\" :d=\"3\" x-y.z9=\"4\" e$(acute)=\"5\"><漢字/><?é x?></é>"
+        for T in (Node, Node{SubString{String}}, FlatNode)
+            @test nodetype(parse(ok, T; wellformed = :strict)) == Document
+        end
+        # An ASCII byte that no name holds ends the name in the tokenizer, which then rejects the
+        # tag at every level: the check of `:strict` relies on it to test only the first ASCII byte.
+        for xml in ("<doc a#b=\"1\"/>", "<doc a!b=\"1\"/>", "<a#b/>"),
+            T in (Node, Node{SubString{String}}, FlatNode), wf in (:lenient, :structural, :strict)
+            @test_throws ArgumentError parse(xml, T; wellformed = wf)
+        end
+    end
+end
+
+#==============================================================================#
 #         XML 1.0 SPEC SECTION 2.4: Character Data and Markup                  #
 #==============================================================================#
 @testset "Spec 2.4: Character Data and Markup" begin

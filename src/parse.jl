@@ -95,6 +95,37 @@ end
 @inline _is_name_start(c::Char) =
     ('a' <= c <= 'z') || ('A' <= c <= 'Z') || c == '_' || c == ':' || !isascii(c)
 
+# Under `:strict`, a name follows [5] `Name ::= NameStartChar (NameChar)*` of XML 1.0 §2.3, with
+# the ranges of [4] and [4a] that `xpath` uses. The tokenizer ends a name at the first ASCII byte
+# that `NAME_BYTE_TABLE` leaves out (`read_open_tag_start`, `read_in_tag`, `read_pi_start`), so an
+# ASCII byte after the first one is a NameChar already: the first byte is tested, and only a name
+# with a byte beyond ASCII is decoded.
+@inline _is_ascii_name_start(b::UInt8) =
+    (UInt8('a') <= b <= UInt8('z')) || (UInt8('A') <= b <= UInt8('Z')) ||
+    b == UInt8('_') || b == UInt8(':')
+@inline function _is_xml10_name(s::AbstractString)
+    cu = codeunits(s)
+    isempty(cu) && return false
+    b = @inbounds cu[1]
+    b < 0x80 && !_is_ascii_name_start(b) && return false
+    @inbounds for i in eachindex(cu)
+        cu[i] >= 0x80 && return _xml10_name_chars(s)
+    end
+    return true
+end
+# The characters beyond ASCII: a NameStartChar first, NameChars after it.
+@noinline function _xml10_name_chars(s::AbstractString)
+    isfirst = true
+    for c in s
+        isascii(c) || _in_ranges(c, _NAME_START_RANGES) ||
+            (!isfirst && _in_ranges(c, _NAME_CHAR_RANGES)) || return false
+        isfirst = false
+    end
+    true
+end
+@noinline _not_a_name(what::String, name::AbstractString) =
+    error("not well-formed: invalid ", what, " \"", name, "\" (XML 1.0 §2.3)")
+
 # Document-shape well-formedness (`:structural`/`:strict`): exactly one root element (prolog
 # markup with no root is rejected; an empty `""` or a whitespace-only input is still accepted — the
 # former an empty Document, the latter a Document whose only child is whitespace Text), any
@@ -454,8 +485,12 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
 
         elseif k === TokenKinds.OPEN_TAG
             nm = tag_name(token, xml)
-            W !== :lenient && (isempty(nm) || !_is_name_start(first(nm))) &&
-                error("not well-formed: invalid element name \"$nm\"")
+            if W === :strict
+                _is_xml10_name(nm) || _not_a_name("element name", nm)
+            elseif W !== :lenient
+                (isempty(nm) || !_is_name_start(first(nm))) &&
+                    error("not well-formed: invalid element name \"$nm\"")
+            end
             push!(tags, _to(S, nm))
             push!(attr_marks, length(scratch_attrs))
             push!(child_marks, length(scratch_children))
@@ -510,6 +545,8 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
                 end
                 W === :strict && (XMLTokenizer.is_whitespace(codeunit(xml, pending_attr_name.offset)) ||
                                   _no_attr_space(pending_attr_name))
+                W === :strict && (_is_xml10_name(pending_attr_name) ||
+                                  _not_a_name("attribute name", pending_attr_name))
                 push!(scratch_attrs, name => val)
             end
 
@@ -544,8 +581,8 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
 
         elseif k === TokenKinds.PI_OPEN
             pending_pi_tag = pi_target(token, xml)
-            W === :strict && (isempty(pending_pi_tag) || !_is_name_start(first(pending_pi_tag))) &&
-                error("not well-formed: invalid processing-instruction target \"$pending_pi_tag\"")
+            W === :strict && (_is_xml10_name(pending_pi_tag) ||
+                              _not_a_name("processing-instruction target", pending_pi_tag))
             pending_pi_value = nothing
 
         elseif k === TokenKinds.PI_CONTENT
