@@ -148,8 +148,12 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
 
         elseif k === K.OPEN_TAG
             nm = tag_name(token, xml)
-            W !== :lenient && (isempty(nm) || !_is_name_start(first(nm))) &&
-                error("not well-formed: invalid element name \"$nm\"")
+            if W === :strict
+                _is_xml10_name(nm) || _not_a_name("element name", nm)
+            elseif W !== :lenient
+                (isempty(nm) || !_is_name_start(first(nm))) &&
+                    error("not well-formed: invalid element name \"$nm\"")
+            end
             noff, nlen = _frng(nm)
             idx = Int32(length(recs) + 1)
             p = _fattach!(recs, pstack, lastchild, idx)
@@ -207,6 +211,7 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
                 _check_decl_attr(codeunit(xml, Int(pan_off)), name, rawval, prev)
             elseif W === :strict
                 XMLTokenizer.is_whitespace(codeunit(xml, Int(pan_off))) || _no_attr_space(name)
+                _is_xml10_name(name) || _not_a_name("attribute name", name)
             end
             voff, vlen = _frng(rawval)
             token.has_entities && (vlen = -vlen)
@@ -268,8 +273,8 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
 
         elseif k === K.PI_OPEN
             target = pi_target(token, xml)
-            W === :strict && (isempty(target) || !_is_name_start(first(target))) &&
-                error("not well-formed: invalid processing-instruction target \"$target\"")
+            W === :strict && (_is_xml10_name(target) ||
+                              _not_a_name("processing-instruction target", target))
             noff, nlen = _frng(target)
             idx = Int32(length(recs) + 1)
             p = _fattach!(recs, pstack, lastchild, idx)

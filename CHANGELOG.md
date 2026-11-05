@@ -13,6 +13,8 @@ With the changes below, the same call can give another result than with v0.4.8.
 
 - **`text()` in `xpath` also selects CDATA sections** ([#153](https://github.com/JuliaData/XML.jl/issues/153)), as [XPath 1.0 §5.7](https://www.w3.org/TR/1999/REC-xpath-19991116/#section-Text-Nodes) asks. It selected `Text` children only, so `//item/title/text()` found nothing in an RSS feed whose titles are CDATA sections. It now returns the `Text` and `CData` children in document order, as libxml2 does.
 
+- **`:strict` refuses a name that breaks the Name rule** ([#181](https://github.com/JuliaData/XML.jl/issues/181)) of [XML 1.0 §2.3](https://www.w3.org/TR/xml/#sec-common-syn), for an element, an attribute or a processing-instruction target. It refuses `<doc 12="34"/>`: no level checked attribute names. It also refuses an element name such as `·x` or `a×b`, since only the first character of a name was checked, and any character beyond ASCII passed. The other levels keep accepting them.
+
 ## [0.4.8] - 2026-11-04
 
 ### Changed
