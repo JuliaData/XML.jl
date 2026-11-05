@@ -65,9 +65,9 @@ end
 
 # A name in an expression follows XML 1.0's Name rule (fifth edition, §2.3), except that it cannot
 # start with ":". These are the non-ASCII code points of NameStartChar, then those NameChar adds.
-# `:strict` checks the names of a document against the same ranges (`_is_xml10_name`). They are
-# all `UnitRange{UInt32}`: a tuple that mixes `UInt8`, `UInt16` and `UInt32` ranges, as the
-# literals give, makes the search below allocate at each range.
+# `:strict` checks the names of a document against the same ranges, written as tests on the code
+# point (`_is_name_start_cp` in parse.jl). They are all `UnitRange{UInt32}`: a tuple that mixes
+# `UInt8`, `UInt16` and `UInt32` ranges, as the literals give, makes the search below allocate.
 const _NAME_START_RANGES = UnitRange{UInt32}.((0xC0:0xD6, 0xD8:0xF6, 0xF8:0x2FF, 0x370:0x37D,
     0x37F:0x1FFF, 0x200C:0x200D, 0x2070:0x218F, 0x2C00:0x2FEF, 0x3001:0xD7FF, 0xF900:0xFDCF,
     0xFDF0:0xFFFD, 0x10000:0xEFFFF))

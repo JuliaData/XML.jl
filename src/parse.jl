@@ -95,11 +95,11 @@ end
 @inline _is_name_start(c::Char) =
     ('a' <= c <= 'z') || ('A' <= c <= 'Z') || c == '_' || c == ':' || !isascii(c)
 
-# Under `:strict`, a name follows [5] `Name ::= NameStartChar (NameChar)*` of XML 1.0 §2.3, with
-# the ranges of [4] and [4a] that `xpath` uses. The tokenizer ends a name at the first ASCII byte
-# that `NAME_BYTE_TABLE` leaves out (`read_open_tag_start`, `read_in_tag`, `read_pi_start`), so an
-# ASCII byte after the first one is a NameChar already: the first byte is tested, and only a name
-# with a byte beyond ASCII is decoded.
+# Under `:strict`, a name follows [5] `Name ::= NameStartChar (NameChar)*` of XML 1.0 §2.3. The
+# tokenizer ends a name at the first ASCII byte that `NAME_BYTE_TABLE` leaves out
+# (`read_open_tag_start`, `read_in_tag`, `read_pi_start`), so an ASCII byte after the first one is
+# a NameChar already: the first byte is tested, and a name with a byte beyond ASCII is decoded from
+# that byte on.
 @inline _is_ascii_name_start(b::UInt8) =
     (UInt8('a') <= b <= UInt8('z')) || (UInt8('A') <= b <= UInt8('Z')) ||
     b == UInt8('_') || b == UInt8(':')
@@ -109,19 +109,72 @@ end
     b = @inbounds cu[1]
     b < 0x80 && !_is_ascii_name_start(b) && return false
     @inbounds for i in eachindex(cu)
-        cu[i] >= 0x80 && return _xml10_name_chars(s)
+        cu[i] >= 0x80 && return _xml10_name_bytes(s, i, i == 1)
     end
     return true
 end
-# The characters beyond ASCII: a NameStartChar first, NameChars after it.
-@noinline function _xml10_name_chars(s::AbstractString)
-    isfirst = true
-    for c in s
-        isascii(c) || _in_ranges(c, _NAME_START_RANGES) ||
-            (!isfirst && _in_ranges(c, _NAME_CHAR_RANGES)) || return false
+
+# [4] NameStartChar and [4a] NameChar beyond ASCII, the ranges that `_NAME_START_RANGES` and
+# `_NAME_CHAR_RANGES` hold for `xpath`, as tests on the code point: U+00C0 to U+1FFF all start a
+# name but for U+00D7, U+00F7, U+0300-U+036F and U+037E, and U+3001-U+D7FF, the most common range
+# above them, comes first. The testset "Spec 2.3" checks them against the two tuples at each bound.
+@inline function _is_name_start_cp(cp::UInt32)
+    if cp < 0x2000
+        cp < 0x300 && return cp >= 0xC0 && cp != 0xD7 && cp != 0xF7
+        return cp >= 0x370 && cp != 0x37E
+    end
+    (0x3001 <= cp <= 0xD7FF) && return true
+    return (0x200C <= cp <= 0x200D) || (0x2070 <= cp <= 0x218F) || (0x2C00 <= cp <= 0x2FEF) ||
+           (0xF900 <= cp <= 0xFDCF) || (0xFDF0 <= cp <= 0xFFFD) || (0x10000 <= cp <= 0xEFFFF)
+end
+@inline _is_name_char_only_cp(cp::UInt32) =
+    cp == 0xB7 || (0x300 <= cp <= 0x36F) || (0x203F <= cp <= 0x2040)
+@inline _is_utf8_cont(b::UInt8) = (b & 0xC0) == 0x80
+
+# The bytes of a name from index i on, its first character at i if `isfirst`. Each character beyond
+# ASCII is decoded from bytes that must be well-formed UTF-8, then tested on its code point. It
+# takes the name and not its `codeunits`: passing that wrapper to a function left out of line made
+# every call of `_is_xml10_name` build it in memory, under a GC frame, ASCII names included.
+@noinline function _xml10_name_bytes(s::AbstractString, i::Int, isfirst::Bool)
+    cu = codeunits(s)
+    n = length(cu)
+    @inbounds while i <= n
+        b = cu[i]
+        if b < 0x80
+            i += 1
+            isfirst = false
+            continue
+        end
+        if b < 0xC2                         # a continuation byte, or an overlong two-byte lead
+            return false
+        elseif b < 0xE0
+            i + 1 <= n || return false
+            b2 = cu[i+1]
+            _is_utf8_cont(b2) || return false
+            cp = (UInt32(b & 0x1F) << 6) | UInt32(b2 & 0x3F)
+            i += 2
+        elseif b < 0xF0
+            i + 2 <= n || return false
+            b2 = cu[i+1]; b3 = cu[i+2]
+            (_is_utf8_cont(b2) && _is_utf8_cont(b3)) || return false
+            cp = (UInt32(b & 0x0F) << 12) | (UInt32(b2 & 0x3F) << 6) | UInt32(b3 & 0x3F)
+            (cp >= 0x800 && !(0xD800 <= cp <= 0xDFFF)) || return false
+            i += 3
+        elseif b < 0xF5
+            i + 3 <= n || return false
+            b2 = cu[i+1]; b3 = cu[i+2]; b4 = cu[i+3]
+            (_is_utf8_cont(b2) && _is_utf8_cont(b3) && _is_utf8_cont(b4)) || return false
+            cp = (UInt32(b & 0x07) << 18) | (UInt32(b2 & 0x3F) << 12) | (UInt32(b3 & 0x3F) << 6) |
+                 UInt32(b4 & 0x3F)
+            (0x10000 <= cp <= 0x10FFFF) || return false
+            i += 4
+        else
+            return false
+        end
+        (_is_name_start_cp(cp) || (!isfirst && _is_name_char_only_cp(cp))) || return false
         isfirst = false
     end
-    true
+    return true
 end
 @noinline _not_a_name(what::String, name::AbstractString) =
     error("not well-formed: invalid ", what, " \"", name, "\" (XML 1.0 §2.3)")

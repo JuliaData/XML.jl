@@ -365,6 +365,20 @@ end
             T in (Node, Node{SubString{String}}, FlatNode), wf in (:lenient, :structural, :strict)
             @test_throws ArgumentError parse(xml, T; wellformed = wf)
         end
+        # The check reads the code points from the bytes, with the ranges that `xpath` holds as
+        # tuples: each bound and the code point on either side of it, first in a name and after.
+        for r in (XML._NAME_START_RANGES..., XML._NAME_CHAR_RANGES...),
+            cp in (first(r) - 0x1, first(r), last(r), last(r) + 0x1)
+            c = Char(cp)
+            start = XML._in_ranges(c, XML._NAME_START_RANGES)
+            @test XML._is_xml10_name(string(c)) == start
+            @test XML._is_xml10_name("a" * c) == (start || XML._in_ranges(c, XML._NAME_CHAR_RANGES))
+        end
+        # Bytes that are not well-formed UTF-8 make no name: a lead byte with no continuation,
+        # a lone continuation byte, an overlong form, a surrogate, a code point past U+10FFFF.
+        for s in ("a\xc3", "\xc3", "a\x80", "a\xc0\x80", "a\xed\xa0\x80", "a\xf4\x90\x80\x80")
+            @test !XML._is_xml10_name(s)
+        end
     end
 end
 
