@@ -201,7 +201,19 @@ print(XML.write(only(elements(without)))) # pretty-printed — the three spaces 
 # </msg>
 ```
 
-`XML.write` accepts `Node`, `LazyNode` (zero-copy of the original source; `normalize=true` re-parses and pretty-prints) and `FlatNode` (materializes through `Node` first). *Building* and *editing* documents is `Node`-only — the other readers are read-only.
+`pretty = false` adds and drops no white space between the nodes. A parsed document keeps its whitespace text, with its line ends in LF (see [Line ends](#line-ends)), and a tree built in code comes out with nothing between its nodes:
+
+```julia
+print(XML.write(only(elements(without)); pretty = false))  # the three spaces are kept
+# <msg><b>A</b>   <b>B</b></msg>
+
+print(XML.write(Element("p", Element("a"), Element("b")); pretty = false))
+# <p><a/><b/></p>
+```
+
+The tags are written in one form either way: `<br />` and `<br></br>` both come out as `<br/>`.
+
+`XML.write` accepts `Node`, `LazyNode` (zero-copy of the original source; `normalize=true` re-parses and writes the tree as for a `Node`, pretty-printed unless `pretty=false`) and `FlatNode` (materializes through `Node` first). *Building* and *editing* documents is `Node`-only — the other readers are read-only.
 
 <br>
 

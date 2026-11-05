@@ -2455,6 +2455,62 @@ end
         s = XML.write(el)
         @test contains(s, ">  hello  </p>")
     end
+
+    @testset "pretty = false adds and drops no white space between nodes" begin
+        # No line end or indentation is added, and the whitespace text that the reader kept is
+        # written as it was read. The CR goes, since the reader reads CR LF as LF.
+        s = "<?xml version=\"1.0\" encoding=\"UTF-8\" standalone=\"yes\"?>\r\n<a><b/><c x=\"1\"/></a>"
+        lf = replace(s, "\r\n" => "\n")
+        @test XML.write(parse(s, Node); pretty = false) == lf
+        @test XML.write(parse(s, Node); pretty = false, indentsize = 4) == lf
+        @test XML.write(parse(s, Node); pretty = true) == XML.write(parse(s, Node))
+        # The text of an element stays as it was, with or without white space between its
+        # children.
+        for src in ("<p><b>bold</b> <i>italic</i></p>", "<p><b>bold</b><i>italic</i></p>",
+                    "<r>\n  <a/>\n\t<b/>\n</r>", "<msg><b>A</b>   <b>B</b></msg>")
+            @test XML.write(parse(src, Node); pretty = false) == src
+        end
+        # A tree built in code holds no whitespace text: nothing comes between its nodes.
+        @test XML.write(Element("div", Element("a"), Element("b", "x")); pretty = false) ==
+              "<div><a/><b>x</b></div>"
+        @test XML.write(Document(Declaration(; version = "1.0"), Element("r")); pretty = false) ==
+              "<?xml version=\"1.0\"?><r/>"
+        # At the document level, around a DOCTYPE, a comment and a processing instruction.
+        d = "<?xml version=\"1.0\"?>\n<!DOCTYPE r>\n<!-- c --><?pi x?>\n<r/>\n"
+        @test XML.write(parse(d, Node); pretty = false) == d
+        # xml:space="default" below xml:space="preserve" does not bring the layout back.
+        sp = "<a xml:space=\"preserve\"> <b xml:space=\"default\"> <c/> </b> </a>"
+        @test XML.write(parse(sp, Node); pretty = false) == sp
+        # The tags are written in one form either way: one space before each attribute, and
+        # `<x/>` for an element with no children.
+        @test XML.write(parse("<r><br /><a\n  x=\"1\"></a></r>", Node); pretty = false) ==
+              "<r><br/><a x=\"1\"/></r>"
+        # The other readers, and the methods that write to a stream or a file.
+        src = "<r>\n  <a x=\"1\"/>\n  <b>t</b>\n</r>"
+        @test XML.write(parse(src, Node{SubString{String}}); pretty = false) == src
+        @test XML.write(parse(src, FlatNode); pretty = false) == src
+        @test XML.write(parse(src, LazyNode); normalize = true, pretty = false) == src
+        @test XML.write(parse(src, LazyNode); pretty = false) == src
+        io = IOBuffer()
+        XML.write(io, parse(src, Node); pretty = false)
+        @test String(take!(io)) == src
+        XML.write(io, parse(src, LazyNode); normalize = true, pretty = false)
+        @test String(take!(io)) == src
+        f = tempname() * ".xml"
+        XML.write(f, parse(src, Node); pretty = false)
+        @test read(f, String) == src
+        XML.write(f, parse(src, LazyNode); normalize = true, pretty = false)
+        @test read(f, String) == src
+        rm(f)
+        # A file reads back as the same tree, whitespace text included. complex_dtd.xml has no
+        # root element, so it is read with :lenient.
+        for name in ("books.xml", "example.kml", "simple_dtd.xml", "complex_dtd.xml",
+                     "preserve.xml", "xml.xsd", "kml.xsd")
+            wellformed = name == "complex_dtd.xml" ? :lenient : :structural
+            node = read(joinpath(@__DIR__, "data", name), Node; wellformed)
+            @test parse(XML.write(node; pretty = false), Node; wellformed) == node
+        end
+    end
 end
 
 #==============================================================================#

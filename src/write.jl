@@ -53,7 +53,10 @@ end
 
 # Main XML serializer. `depth` controls indentation; `preserve` propagates `xml:space=
 # "preserve"` semantics down the subtree so we don't reformat whitespace-sensitive content.
-function _write_xml(io::IO, node::Node, depth::Int=0, indent::Int=2, preserve::Bool=false)
+# `pretty = false` comes with `preserve` for the whole tree: `xml:space` is not read, so that
+# `xml:space="default"` cannot bring the layout back.
+function _write_xml(io::IO, node::Node, depth::Int=0, indent::Int=2, preserve::Bool=false,
+                    pretty::Bool=true)
     pad = preserve ? "" : _indent_str(indent * depth)
     nt = node.nodetype
     if nt === Text
@@ -61,7 +64,7 @@ function _write_xml(io::IO, node::Node, depth::Int=0, indent::Int=2, preserve::B
     elseif nt === Element
         # Check xml:space on this element
         child_preserve = preserve
-        if !isnothing(node.attributes)
+        if pretty && !isnothing(node.attributes)
             for (k, v) in node.attributes
                 k == "xml:space" && (child_preserve = v == "preserve")
             end
@@ -76,7 +79,7 @@ function _write_xml(io::IO, node::Node, depth::Int=0, indent::Int=2, preserve::B
             Base.write(io, UInt8('>'))
         elseif length(ch) == 1 && only(ch).nodetype === Text
             Base.write(io, UInt8('>'))
-            _write_xml(io, only(ch), 0, 0, child_preserve)
+            _write_xml(io, only(ch), 0, 0, child_preserve, pretty)
             Base.write(io, UInt8('<'))
             Base.write(io, UInt8('/'))
             Base.write(io, node.tag)
@@ -98,7 +101,7 @@ function _write_xml(io::IO, node::Node, depth::Int=0, indent::Int=2, preserve::B
                 if !effective_preserve && _is_ignorable_text(child)
                     continue
                 end
-                _write_xml(io, child, depth + 1, indent, effective_preserve)
+                _write_xml(io, child, depth + 1, indent, effective_preserve, pretty)
                 effective_preserve || Base.write(io, UInt8('\n'))
             end
             effective_preserve || Base.write(io, pad)
@@ -141,12 +144,14 @@ function _write_xml(io::IO, node::Node, depth::Int=0, indent::Int=2, preserve::B
         if !isnothing(ch)
             # Drop whitespace-only Text between top-level nodes when pretty
             # printing (XML grammar disallows text at document level, so any
-            # such Text comes from inter-node whitespace in the source).
+            # such Text comes from inter-node whitespace in the source). Under
+            # `preserve`, from `pretty = false`, the nodes are written as they
+            # stand, with nothing between them.
             visible = preserve ? ch : filter(!_is_ignorable_text, ch)
             n_visible = length(visible)
             for (i, child) in enumerate(visible)
-                _write_xml(io, child, 0, indent, preserve)
-                i < n_visible && Base.write(io, UInt8('\n'))
+                _write_xml(io, child, 0, indent, preserve, pretty)
+                !preserve && i < n_visible && Base.write(io, UInt8('\n'))
             end
         end
     end
@@ -155,6 +160,43 @@ end
 Base.show(io::IO, ::MIME"text/xml", node::Node) = _write_xml(io, node)
 
 #-----------------------------------------------------------------------------# write / read
-write(node::Node; indentsize::Int=2) = (io = IOBuffer(); _write_xml(io, node, 0, indentsize); String(take!(io)))
+"""
+    write(node::Node; indentsize::Int=2, pretty::Bool=true) -> String
+    write(io::IO, node::Node; kw...)
+    write(filename::AbstractString, node::Node; kw...)
+
+Write `node` as XML, with its text and attribute values escaped.
+
+With `pretty = true`, the default, an element whose text children are all white space is laid
+out again: these texts are dropped, and each child goes on its own line, indented by
+`indentsize` spaces per level. The white space between the nodes of a document is dropped too,
+and each node goes on its own line. An element that holds other text or a CDATA section, an
+element whose only child is a text, and the content of `xml:space="preserve"` are written as
+they stand.
+
+With `pretty = false`, no white space is added or dropped between the nodes: a parsed document
+keeps its whitespace text, and a tree built in code comes out with nothing between its nodes.
+`indentsize` then has no effect.
+
+Either way, the tags are written in one form, whatever the source had: one space before each
+attribute, and `<x/>` for an element with no children, so `<br />` and `<br></br>` both come
+out as `<br/>`.
+
+```julia
+julia> doc = parse("<p><b>bold</b> <i>italic</i></p>", Node);
+
+julia> print(XML.write(doc))
+<p>
+  <b>bold</b>
+  <i>italic</i>
+</p>
+
+julia> print(XML.write(doc; pretty = false))
+<p><b>bold</b> <i>italic</i></p>
+```
+"""
+write(node::Node; indentsize::Int=2, pretty::Bool=true) =
+    (io = IOBuffer(); _write_xml(io, node, 0, indentsize, !pretty, pretty); String(take!(io)))
 write(filename::AbstractString, node::Node; kw...) = open(io -> write(io, node; kw...), filename, "w")
-write(io::IO, node::Node; indentsize::Int=2) = _write_xml(io, node, 0, indentsize)
+write(io::IO, node::Node; indentsize::Int=2, pretty::Bool=true) =
+    _write_xml(io, node, 0, indentsize, !pretty, pretty)
