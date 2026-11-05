@@ -128,15 +128,9 @@ Review these even if your code compiles unchanged:
    parse(str, Node; wellformed = :strict)    # see below
    ```
 
-   `:strict` additionally rejects:
+   `:strict` rejects more of what XML 1.0 forbids, such as `--` inside a comment or a character outside the XML 1.0 §2.2 `Char` range. [WELL-FORMEDNESS.md](WELL-FORMEDNESS.md) lists what each level rejects.
 
-   - `--` (or a trailing `-`) inside a comment;
-   - an empty or invalid processing-instruction target;
-   - a reference to an undeclared entity, in a document whose declarations are all within reach — no external subset, no parameter-entity reference between the internal subset's declarations — or declared `standalone="yes"` (XML 1.0 §4.1, *Entity Declared*);
-   - any character — whether a numeric **reference** (`&#0;`) or a **raw** literal character — outside the XML 1.0 §2.2 `Char` range (e.g. NUL and other control characters);
-   - from **v0.4.7**, a parameter-entity reference (`%name;`) inside a declaration of the internal subset (§2.8), `<` in a declared default value, a reference to an unparsed entity, and a reference to an external entity from an attribute value.
-
-   Because the character check adds a range scan over textual content, `:strict` is meaningfully slower than `:structural` on text-heavy documents — a cost paid only when you opt in (`:lenient` and `:structural` are unaffected).
+   Because the character check adds a range scan over textual content, `:strict` is meaningfully slower than `:structural` on text-heavy documents — a cost that applies only when you opt in (`:lenient` and `:structural` are unaffected).
 
    A consequence of requiring a root element: input that is **not a complete document** — a
    standalone DTD file, or a prolog-only fragment — is now rejected at `:structural`. Read it with
