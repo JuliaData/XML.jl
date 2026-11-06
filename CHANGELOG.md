@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`write` takes `pretty = false`** ([#158](https://github.com/JuliaData/XML.jl/issues/158)), which adds and drops no white space between the nodes of a `Node`. A parsed document keeps its whitespace text, its line ends in LF as the reader gives them, and a tree built in code comes out with nothing between its nodes. The tags are written as before, so `<br />` still comes out as `<br/>`. `write` on a `FlatNode` takes it too, and so does `write` on a `LazyNode` with `normalize = true`.
 
+- **`eachattribute!(c)` reads the attributes of a `Cursor`'s element where the cursor stands** ([#162](https://github.com/JuliaData/XML.jl/issues/162)), and the next `next!` goes on after them, so each attribute is read once. It gives the pairs of `eachattribute(LazyNode(c))`, which reads the tag a second time. A later call reads the tag again from its `<`, as `attributes(c)` does.
+
 ### Changed
 
 With the changes below, the same call can give another result than with v0.4.8.

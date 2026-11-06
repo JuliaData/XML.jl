@@ -65,6 +65,91 @@ using XML: Cursor, next!, for_each_child, @for_each_child, skip_element!, eof, n
         @test collect(keys(c)) == ["a", "c"]
     end
 
+    @testset "eachattribute! reads the attributes where the cursor stands" begin
+        # The pairs that eachattribute(LazyNode(c)) gives, read once: the nodes and depths that
+        # next! yields afterwards are those of a walk that reads no attribute.
+        xml = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" *
+              "<r a=\"1\"><c r=\"A1\" s=\"1\" t=\"s\"><v>0</v></c><c r=\"B1\"/>" *
+              "<d a=\"x &amp; y\" b=' p\tq\r\n r ' c=\"&#65;\"/><e/><f></f>t" *
+              "<g h=\"1\"><g h=\"2\"/></g><x a='1' b=\"2\"   /></r>"
+        function walk(xml, read)
+            c = Cursor(xml)
+            out = Any[]
+            while next!(c) !== nothing
+                push!(out, (nodetype(c), tag(c), depth(c)))
+                read && nodetype(c) in (Element, Declaration) || continue
+                pairs = collect(eachattribute!(c))
+                @test pairs == collect(eachattribute(LazyNode(c)))
+                @test collect(eachattribute!(c)) == pairs          # a second read, from the `<`
+            end
+            out
+        end
+        @test walk(xml, true) == walk(xml, false)
+        c = Cursor(xml); next!(c); next!(c); next!(c)                # the declaration, "\n", <r>
+        @test tag(c) == "r"
+        @test eltype(eachattribute!(c)) == Pair{SubString{String}, SubString{String}}
+        @test collect(eachattribute!(c)) == ["a" => "1"]
+
+        # Under for_each_child, with skip_element!, and on a node that an inner sweep holds.
+        c = Cursor("<r><a x=\"1\"><b y=\"2\"/></a><s z=\"3\"><t/></s><n w=\"4\"/></r>")
+        next!(c)
+        seen = Pair{String, Vector{Pair{SubString{String}, SubString{String}}}}[]
+        for_each_child(c) do ch
+            t = String(tag(ch))     # `ch` is the cursor: the inner sweep moves it on
+            push!(seen, t => collect(eachattribute!(ch)))
+            t == "a" && for_each_child(g -> push!(seen, tag(g) => collect(eachattribute!(g))), ch)
+            t == "s" && skip_element!(ch)
+        end
+        @test seen == ["a" => ["x" => "1"], "b" => ["y" => "2"], "s" => ["z" => "3"], "n" => ["w" => "4"]]
+
+        # Each loop gives all the pairs, from the first: after `first` or `isempty`, on a second
+        # read, once the cursor has moved on, and when next! moves it in the middle of a loop.
+        # next! skips whatever the cursor has not read.
+        all3 = ["a" => "1", "b" => "2", "d" => "3"]
+        on_c() = (c = Cursor("<r><c a=\"1\" b=\"2\" d=\"3\"><v>x</v></c><e/></r>"); next!(c); next!(c); c)
+        c = on_c()
+        it = eachattribute!(c)
+        @test first(it) == ("a" => "1")
+        @test collect(it) == all3
+        @test collect(eachattribute!(c)) == all3
+        next!(c)
+        @test (nodetype(c), tag(c), depth(c)) == (Element, "v", 3)
+        @test collect(it) == all3
+        c = on_c(); collect(eachattribute!(c))
+        it = eachattribute!(c)
+        @test first(it) == ("a" => "1")
+        @test collect(it) == all3
+        c = on_c(); it = eachattribute!(c)
+        @test !isempty(it)
+        @test collect(it) == all3
+        c = on_c(); seen = Pair{SubString{String}, SubString{String}}[]
+        for p in eachattribute!(c)
+            push!(seen, p)
+            length(seen) == 1 && next!(c)
+        end
+        @test seen == all3
+        @test tag(c) == "v"
+        c = on_c(); it = eachattribute!(c)
+        skip_element!(c)
+        @test collect(it) == all3
+        next!(c)
+        @test tag(c) == "e"
+
+        # The values stay valid once the cursor has moved on.
+        c = Cursor("<r><c r=\"A1\" t=\"s\"><v>0</v></c><c r=\"B1\"/></r>"); next!(c); next!(c)
+        pairs = collect(eachattribute!(c))
+        while next!(c) !== nothing end
+        @test pairs == ["r" => "A1", "t" => "s"]
+
+        # Nothing on a node without attributes, and the same pairs over another string type.
+        c = Cursor("<r>t<!--x--></r>"); next!(c); next!(c)
+        @test isempty(collect(eachattribute!(c)))
+        next!(c)
+        @test isempty(collect(eachattribute!(c)))
+        c = Cursor(SubString("..<r a=\"1\" b=\"&lt;\"/>", 3)); next!(c)
+        @test collect(eachattribute!(c)) == ["a" => "1", "b" => "<"]
+    end
+
     @testset "value of CData / Comment / PI / DTD / Text-with-entities" begin
         c = parse(Cursor, "<r><![CDATA[c<d>ata]]><!--cmt--><?pi body?><t>a&amp;b</t></r>")
         vals = Dict{Any,Any}()

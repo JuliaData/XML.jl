@@ -37,9 +37,10 @@ end
 A forward, in-place [`StAX`-style] pull cursor over the XML `data`. Advance it
 with [`next!`](@ref); read the current position with [`nodetype`](@ref),
 [`tag`](@ref), [`value`](@ref), [`attributes`](@ref), [`depth`](@ref),
-[`is_simple`](@ref), [`simple_value`](@ref).
-(`parse(Cursor, data)` also works.) The `read` forms apply the same byte-level
-BOM normalization as the tree readers: UTF-8 BOM strip, UTF-16 LE/BE transcoding.
+[`is_simple`](@ref), [`simple_value`](@ref); [`eachattribute!`](@ref) reads the attributes of an
+element once, where the cursor stands. (`parse(Cursor, data)` also works.) The `read` forms
+apply the same byte-level BOM normalization as the tree readers: UTF-8 BOM strip, UTF-16 LE/BE
+transcoding.
 Like [`LazyNode`](@ref), the cursor reads a document that the declarations of its DOCTYPE
 change from a copy with these changes made, of the same string type. The copy can be made for a
 `String`, a `SubString{String}`, or a `StringView` over a byte vector `v` or over a slice
@@ -289,6 +290,92 @@ function Base.keys(c::Cursor)
         iterate(it)                             # skip value
     end
     result
+end
+
+#-----------------------------------------------------------------------------# eachattribute!
+# Reads the attributes of the current element without making `next!` read them a second time.
+# A loop's state is a `TokenizerState`, and a state means the same position in the cursor's own
+# token stream and in a fresh tokenizer over the same data. When the cursor's stream stands
+# exactly where the loop is, as it does for the first loop over an element whose attributes
+# the cursor has not read, the step reads from that stream, and the next `next!` goes on after
+# the attributes. Otherwise the step reads from a tokenizer of its own and leaves the cursor
+# alone, so every loop gives all the pairs, from the first, whatever the cursor has done in
+# the meantime. The token that ends the tag, `>` or `/>`, is never taken from the stream: the
+# step restores the state (isbits), so `next!` reads it and keeps its depth bookkeeping.
+struct CursorAttrIterator{S <: AbstractString}
+    c::Cursor{S}
+    start::TokenizerState   # just past the opening token; M_DEFAULT: nothing to read
+end
+
+Base.IteratorSize(::Type{<:CursorAttrIterator}) = Base.SizeUnknown()
+Base.eltype(::Type{<:CursorAttrIterator}) = Pair{SubString{String}, SubString{String}}
+
+"""
+    eachattribute!(c::Cursor)
+
+Iterator of the decoded `name => value` pairs of the attributes of the cursor's current node,
+an `Element` or a `Declaration`: the pairs that [`eachattribute`](@ref) gives for `LazyNode(c)`.
+On an element whose attributes the cursor has not read yet, it reads them where the cursor
+stands, and the next [`next!`](@ref) goes on after them instead of reading them again. Any
+later call reads the tag again from its `<`, as [`attributes`](@ref) does.
+
+Each loop over the iterator gives all the pairs, from the first, even once the cursor has moved
+on: a loop after `isempty(it)` or `first(it)` loses none. In this it differs from
+[`eachattribute`](@ref) on a `LazyNode`, whose loops go on where the last one stopped. The
+pairs stay valid after the cursor moves.
+
+Over a `String` or `SubString{String}` document, reading a pair allocates nothing, unless its
+value holds a reference, which is decoded into a string of its own. Over any other string type,
+each pair copies its own bytes, since the pairs are `SubString{String}`.
+
+```julia
+c = Cursor("<row r=\\"1\\"><c r=\\"A1\\" t=\\"s\\"><v>0</v></c></row>")
+next!(c); next!(c)                # on <c>
+for (k, v) in eachattribute!(c)   # "r" => "A1", then "t" => "s"
+    # ...
+end
+next!(c)                          # on <v>, the attributes of <c> read once
+```
+"""
+function eachattribute!(c::Cursor{S}) where {S}
+    data = _data(c)
+    s = c.st.state
+    if c.nodetype === Element && s.mode === _CURSOR_XT.M_TAG &&
+       s.pos == _CURSOR_XT._data_stop(c.token, data) + 1
+        return CursorAttrIterator{S}(c, s)      # the cursor's stream stands at the first one
+    elseif c.nodetype === Element || c.nodetype === Declaration
+        t = Tokenizer(data, _CURSOR_XT._data_start(c.token, data))   # from the `<`
+        return CursorAttrIterator{S}(c, iterate(t, _init_state(t))[2])   # past the opening token
+    end
+    CursorAttrIterator{S}(c, _init_state(Tokenizer(data, 1)))   # nothing to read
+end
+
+@inline _cursor_attr_pair(name::Token, value::Token, data) =
+    _as_substring(raw(name, data)) => _as_substring(_cursor_decode_attr(value, data))
+
+@inline function Base.iterate(it::CursorAttrIterator, st::TokenizerState = it.start)
+    (st.mode === _CURSOR_XT.M_TAG || st.mode === _CURSOR_XT.M_XML_DECL) || return nothing
+    c = it.c
+    data = _data(c)
+    K = _CURSOR_XT.TokenKinds
+    if c.st.state === st                    # the cursor's stream stands where this loop is
+        r = iterate(c.st)
+        r === nothing && return nothing
+        tok = r[1]
+        # Not a name: the `>` or `/>` that ends the tag, given back for next!
+        tok.kind === K.ATTR_NAME || (c.st.state = st; return nothing)
+        r = iterate(c.st)
+        r === nothing && return nothing
+        return (_cursor_attr_pair(tok, r[1], data), c.st.state)
+    end
+    t = Tokenizer(data, 1)                  # a tokenizer of its own, at the loop's position
+    r = iterate(t, st)
+    r === nothing && return nothing
+    tok, st = r
+    tok.kind === K.ATTR_NAME || return nothing
+    r = iterate(t, st)
+    r === nothing && return nothing
+    return (_cursor_attr_pair(tok, r[1], data), r[2])
 end
 
 #-----------------------------------------------------------------------------# simple elements

@@ -43,6 +43,15 @@ function measure_eachattr(x)
         s
     end
 end
+function measure_eachattr_cursor(c)
+    @allocated begin
+        s = 0
+        for (k, v) in eachattribute!(c)
+            s += ncodeunits(k) + ncodeunits(v)
+        end
+        s
+    end
+end
 
 @testset "Decoded read surface: allocation-free" begin
     attr_xml   = """<c r="A1" s="3" t="str"/>"""
@@ -52,6 +61,10 @@ end
     fl = only(eachelement(parse(attr_xml, FlatNode)))
     nd = only(eachelement(parse(attr_xml, Node)))
     cu = parse(Cursor, attr_xml); next!(cu)                 # positioned on <c>
+    # eachattribute! reads from the cursor's stream once, then again from the `<`: one cursor
+    # compiles both readings, the other is measured.
+    cw = parse(Cursor, attr_xml); next!(cw)
+    cm = parse(Cursor, attr_xml); next!(cm)
 
     slz = only(eachelement(parse(simple_xml, LazyNode)))
     sfl = only(eachelement(parse(simple_xml, FlatNode)))
@@ -122,6 +135,9 @@ end
             @test tag(x) == "c"
         end
         @test collect(eachattribute(lz)) == ["r" => "A1", "s" => "3", "t" => "str"]
+        cr = parse(Cursor, attr_xml); next!(cr)
+        @test collect(eachattribute!(cr)) == ["r" => "A1", "s" => "3", "t" => "str"]
+        @test collect(eachattribute!(cr)) == ["r" => "A1", "s" => "3", "t" => "str"]
         for x in (tlz, tfl, tcu, tnd)
             @test value(x) == "hello"
         end
@@ -155,6 +171,7 @@ end
         measure_get(x); measure_index(x); measure_haskey(x); measure_tag(x)
     end
     measure_eachattr(lz)
+    measure_eachattr_cursor(cw); measure_eachattr_cursor(cw)
     foreach(measure_value, (tlz, tfl, tcu, tnd))
     foreach(measure_simple, (slz, sfl, scu, snd))
     foreach(measure_is_simple, (slz, sfl, scu, snd))
@@ -210,6 +227,8 @@ end
 
         @testset "eachattribute streams without allocating" begin
             @test measure_eachattr(lz) == 0
+            @test measure_eachattr_cursor(cm) == 0   # from the cursor's stream
+            @test measure_eachattr_cursor(cm) == 0   # again, from the `<`
         end
 
         @testset "sourcetext and sourcespan" begin
