@@ -755,8 +755,6 @@ struct _LazyTexts{S <: AbstractString}
 end
 _LazyTexts(n::LazyNode) =
     _LazyTexts(Tokenizer(n.data, _lazy_pos(n)), n.nodetype === Element)
-Base.IteratorSize(::Type{<:_LazyTexts}) = Base.SizeUnknown()
-Base.eltype(::Type{<:_LazyTexts}) = Token
 
 @inline function Base.iterate(it::_LazyTexts, state = (_init_state(it.t), 0))
     st, depth = state

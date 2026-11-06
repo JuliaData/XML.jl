@@ -262,13 +262,11 @@ function string_value(o::Node{S}) where {S}
     return _sv_as(S, _sv_check(out, _sv_join!(out, o, nt === Element, 1)))
 end
 
-# The empty text, and the joined texts, in the type of a tree's values.
-const _EMPTY_SUBSTRING = SubString("", 1, 0)
+# The empty text, and the joined texts, in the type of a tree's values. `String` has its own
+# methods: up to Julia 1.13, the compiler leaves `convert(String, s)` as a call.
 _sv_empty(::Type{String}) = ""
-_sv_empty(::Type{SubString{String}}) = _EMPTY_SUBSTRING
 _sv_empty(::Type{S}) where {S} = convert(S, "")
 _sv_as(::Type{String}, out::String) = out
-_sv_as(::Type{SubString{String}}, out::String) = SubString(out)
 _sv_as(::Type{S}, out::String) where {S} = convert(S, out)
 
 # The texts of `o`'s subtree, those of its own children only if `texts`: their number,

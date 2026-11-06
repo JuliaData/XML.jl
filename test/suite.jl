@@ -2160,6 +2160,18 @@ end
             next!(c)
             @test nodetype(c) === Text && value(c) == "x "
         end
+
+        # The joined string is allocated at the size counted first. Each copy checks that it
+        # fits, so a text that grew in between raises an error, and nothing is written.
+        @testset "a copy past the end of the joined string" begin
+            msg = "the texts changed while they were read"
+            out = "x"^2
+            @test_throws msg XML._sv_put!(out, 1, "abc")
+            @test_throws msg XML._sv_put!(out, 2, SubString("ab"))
+            @test_throws msg XML._sv_put!(out, 1, StringView(codeunits("abc")))
+            @test_throws msg XML._sv_put!(out, 1, UInt8[0x61, 0x62, 0x63], 3)
+            @test out == "xx"
+        end
     end
 end
 
