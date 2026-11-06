@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`string_value(node)` returns the text of an element, whatever it holds** ([#154](https://github.com/JuliaData/XML.jl/issues/154)): the text of all its `Text` and `CData` descendants, in document order, as the string-value of [XPath 1.0 §5](https://www.w3.org/TR/1999/REC-xpath-19991116/#data-model) defines it. It gives `"x y z"` for `<p>x <b>y</b> z</p>`, and `"https://example.org/a"` for `<guid isPermaLink="true">https://example.org/a</guid>`, which `simple_value` refuses for its attribute. It works on `Node`, `LazyNode` and `FlatNode`. A single text is returned as `value` returns it, so without a copy when it holds no reference and no line end to fold. A document gives the text of its elements: the line breaks between its children are not counted.
+
 ### Changed
 
 With the changes below, the same call can give another result than with v0.4.8.

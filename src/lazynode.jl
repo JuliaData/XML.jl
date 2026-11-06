@@ -711,6 +711,87 @@ end
     nothing
 end
 
+#-----------------------------------------------------------------------------# string_value
+# The empty text: a view at the start of the document, of the type of the views of `value`.
+@inline _lazy_empty(n::LazyNode) = SubString(n.data, 1, 0)
+
+function string_value(n::LazyNode)
+    nt = n.nodetype
+    if nt === Text || nt === CData || nt === Comment || nt === ProcessingInstruction
+        v = value(n)
+        return v === nothing ? _lazy_empty(n) : v
+    end
+    (nt === Element || nt === Document) || _sv_undefined(nt)
+    k = 0
+    m = 0
+    first = XMLTokenizer.no_token(n.data)
+    for tok in _LazyTexts(n)
+        k == 0 && (first = tok)
+        k += 1
+        m += _lazy_text_size(tok, n.data)
+    end
+    k == 0 && return _lazy_empty(n)
+    k == 1 && return _lazy_text(first, n.data)
+    out = Base._string_n(m)
+    i = 1
+    for tok in _LazyTexts(n)
+        s = _read_eol(raw(tok, n.data))
+        if tok.kind === TokenKinds.TEXT && tok.has_entities
+            buf, len, _ = _decode_to_scratch!(codeunits(s), ncodeunits(s))
+            i = _sv_put!(out, i, buf, len)
+        else
+            i = _sv_put!(out, i, s)
+        end
+    end
+    return _lazy_joined(n.data, _sv_check(out, i))
+end
+
+# The `TEXT` and `CDATA_CONTENT` tokens of an element, or of a whole document, that lie
+# inside an element, in document order. The state is the tokenizer's and the element depth,
+# both isbits.
+struct _LazyTexts{S <: AbstractString}
+    t::Tokenizer{S}
+    element::Bool   # stop at the end of the element; a document is read to its end
+end
+_LazyTexts(n::LazyNode) =
+    _LazyTexts(Tokenizer(n.data, _lazy_pos(n)), n.nodetype === Element)
+Base.IteratorSize(::Type{<:_LazyTexts}) = Base.SizeUnknown()
+Base.eltype(::Type{<:_LazyTexts}) = Token
+
+@inline function Base.iterate(it::_LazyTexts, state = (_init_state(it.t), 0))
+    st, depth = state
+    K = TokenKinds
+    while true
+        r = iterate(it.t, st)
+        r === nothing && return nothing
+        tok, st = r
+        k = tok.kind
+        if k === K.OPEN_TAG
+            depth += 1
+        elseif k === K.SELF_CLOSE || k === K.CLOSE_TAG
+            depth -= 1
+            it.element && depth == 0 && return nothing
+        elseif depth > 0 && (k === K.TEXT || k === K.CDATA_CONTENT)
+            return (tok, (st, depth))
+        end
+    end
+end
+
+# A text as `value` gives it, and its size once decoded: a reference is decoded into the
+# scratch buffer of `unescape`, which allocates nothing.
+@inline _lazy_text(tok::Token, data) =
+    tok.kind === TokenKinds.TEXT ? _decode(tok, data) : _read_eol(raw(tok, data))
+@inline function _lazy_text_size(tok::Token, data)
+    s = _read_eol(raw(tok, data))
+    tok.kind === TokenKinds.TEXT && tok.has_entities || return ncodeunits(s)
+    return _decode_to_scratch!(codeunits(s), ncodeunits(s))[2]
+end
+
+# The joined texts in the type `unescape` gives a decoded value: a `SubString{String}` over
+# a `String` document, the `String` itself over any other.
+@inline _lazy_joined(::Union{String, SubString{String}}, out::String) = SubString(out)
+@inline _lazy_joined(::AbstractString, out::String) = out
+
 #-----------------------------------------------------------------------------# indexing
 Base.getindex(n::LazyNode, i::Integer) = children(n)[i]
 Base.getindex(n::LazyNode, ::Colon) = children(n)

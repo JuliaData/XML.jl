@@ -2067,6 +2067,100 @@ end
             end
         end
     end
+
+    # The string-value of XPath 1.0 §5: the text of every `Text` and `CData` descendant, in
+    # document order. Comments and processing instructions add nothing, and a document reads
+    # as its elements: XPath has no text outside the root element.
+    @testset "string_value" begin
+        readers = (Node, Node{SubString{String}}, LazyNode, FlatNode)
+        cases = [("<guid isPermaLink=\"true\">https://example.org/a</guid>", "https://example.org/a"),
+                 ("<note>a<![CDATA[b]]>c</note>", "abc"),
+                 ("<p>x <b>y</b> z</p>", "x y z"),
+                 ("<a>x<!--c-->y<?p d?>z</a>", "xyz"),
+                 ("<a><b><c>deep</c></b></a>", "deep"),
+                 ("<a><b>1</b><c/><d>2<e>3</e></d>4</a>", "1234"),
+                 ("<a> </a>", " "),
+                 ("<a></a>", ""), ("<a/>", ""), ("<a><b/><!--c--><?p d?></a>", ""),
+                 ("<a><![CDATA[]]></a>", ""),
+                 ("<a>\r\nx<b>\ry</b></a>", "\nx\ny"),
+                 ("<!DOCTYPE a [<!ENTITY e \"y<b>z</b>\">]><a>x&e;</a>", "xyz")]
+        @testset "$(repr(xml)) with $R" for (xml, expected) in cases, R in readers
+            doc = parse(xml, R)
+            @test string_value(only(elements(doc))) == expected
+            @test string_value(doc) == expected
+        end
+
+        # The texts are those that `value` gives: decoded, except by a
+        # `Node{SubString{String}}`, whose values keep their references as written.
+        @testset "references with $R" for R in readers
+            root = only(elements(parse("<a>x &amp; y<b>&lt;</b>&#65;</a>", R)))
+            @test string_value(root) == (R === Node{SubString{String}} ? "x &amp; y&lt;&#65;" : "x & y<A")
+        end
+
+        # A single text comes back as `value` gives it, without a copy; several are joined
+        # into one new string of the same type.
+        @testset "the type of the reader's values with $R" for R in readers
+            a, b, c, d = elements(only(elements(parse("<r><a>x</a><b>x <i>y</i></b><c>&amp;</c><d/></r>", R))))
+            T = typeof(value(only(children(a))))
+            @test @inferred(string_value(a)) isa T
+            @test pointer(string_value(a)) == pointer(value(only(children(a))))
+            @test @inferred(string_value(b)) isa T
+            @test string_value(b) == "x y"
+            @test @inferred(string_value(c)) isa T
+            @test @inferred(string_value(d)) isa T
+        end
+
+        # Over a document that is not a `String`, a single text is a view of its type, and
+        # the joined texts are a `String`, as `unescape` gives a decoded value.
+        @testset "a LazyNode over a StringView" begin
+            xml = "<r><a>x</a><b>x <i>y</i></b><c>&amp;<i>&lt;</i></c></r>"
+            a, b, c = elements(only(elements(parse(StringView(codeunits(xml)), LazyNode))))
+            @test string_value(a) == "x"
+            @test string_value(a) isa SubString{<:StringView}
+            @test string_value(b) == "x y"
+            @test string_value(b) isa String
+            @test string_value(c) == "&<"
+        end
+
+        @testset "the other node types with $R" for R in readers
+            doc = parse("<?xml version=\"1.0\"?>\n<!DOCTYPE r>\n<!--c0-->\n<r><!-- c --><?p  d e ?><?q?><![CDATA[k]]>t</r>\n", R)
+            cmt, pi1, pi2, cd, tx = children(only(elements(doc)))
+            @test string_value(cmt) == " c "
+            @test string_value(pi1) == "d e "
+            @test string_value(pi2) == ""
+            @test string_value(pi2) isa typeof(string_value(pi1))
+            @test string_value(cd) == "k"
+            @test string_value(tx) == "t"
+            # the line breaks around the root are the document's, not text for XPath
+            @test string_value(doc) == "kt"
+            @test_throws ArgumentError string_value(only(filter(n -> nodetype(n) === Declaration, children(doc))))
+            @test_throws ArgumentError string_value(only(filter(n -> nodetype(n) === DTD, children(doc))))
+        end
+
+        # Beyond white space, only `:lenient` and `LazyNode` accept text outside the root
+        # element; it is not counted either.
+        @testset "text outside the root with $R" for R in (Node, LazyNode, FlatNode)
+            read_lenient(s) = R === LazyNode ? parse(s, R) : parse(s, R; wellformed = :lenient)
+            @test string_value(read_lenient("abc<r>x</r>def")) == "x"
+            @test string_value(read_lenient("<b>x</b> <i>y</i>")) == "xy"
+        end
+
+        @testset "a tree built in code" begin
+            @test string_value(h.p("x ", h.b("y"), " z")) == "x y z"
+            @test string_value(Element("x", CData("data"), Comment("c"), Text("!"))) == "data!"
+            @test string_value(Document(Text("\n"), Element("r", "abc"), Text("\n"))) == "abc"
+        end
+
+        # A `Cursor` is read through `LazyNode(c)`, which leaves the cursor where it stands.
+        @testset "a Cursor, through LazyNode(c)" begin
+            c = parse("<r><p>x <b>y</b> z</p><q/></r>", Cursor)
+            while next!(c) !== nothing && tag(c) != "p" end
+            @test string_value(LazyNode(c)) == "x y z"
+            @test tag(c) == "p"
+            next!(c)
+            @test nodetype(c) === Text && value(c) == "x "
+        end
+    end
 end
 
 #==============================================================================#
