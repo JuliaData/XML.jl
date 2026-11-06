@@ -219,6 +219,123 @@ tokenization that `is_simple(n) ? simple_value(n) : ...` does on `LazyNode`.
 """
 is_simple_value(o::Node) = is_simple(o) ? o.children[1].value : nothing
 
+"""
+    string_value(node) -> Union{String, SubString}
+
+Return the string-value of `node` as
+[XPath 1.0 §5](https://www.w3.org/TR/1999/REC-xpath-19991116/#data-model) defines it. For
+an `Element`, it is the text of all its `Text` and `CData` descendants, in document order:
+comments and processing instructions add nothing. For a `Document`, it is the text of its
+elements. A text placed directly under the document, such as the line break after
+`<?xml …?>`, is not counted, since XPath has no text outside the root element.
+
+    string_value(parse("<p>x <b>y</b> z</p>", Node)[1])           # "x y z"
+    string_value(parse("<note>a<![CDATA[b]]>c</note>", Node)[1])  # "abc"
+
+Unlike [`simple_value`](@ref), it takes any element, with attributes or nested markup. For
+the other node types, it returns:
+
+- for a `Text`, a `CData` or a `Comment`, its [`value`](@ref);
+- for a `ProcessingInstruction`, its `value`, the text after the target, or `""` if none.
+
+A `DTD` or a `Declaration` raises an `ArgumentError`, since XPath has no such nodes.
+
+It works on `Node`, `LazyNode` and `FlatNode`. For a [`Cursor`](@ref) `c`, call
+`string_value(LazyNode(c))`, which leaves the cursor where it stands.
+
+The texts are those that `value` gives, and the result has their type: a `String` on
+`Node`, a `SubString{String}` on `LazyNode` and `FlatNode` over a `String` document. A
+single text is returned as `value` returns it, so without a copy when it holds no reference
+and no line end to fold. Several are joined into one new string, allocated once.
+"""
+function string_value(o::Node{S}) where {S}
+    nt = o.nodetype
+    if nt === Text || nt === CData || nt === Comment || nt === ProcessingInstruction
+        v = o.value
+        return v === nothing ? _sv_empty(S) : v
+    end
+    (nt === Element || nt === Document) || _sv_undefined(nt)
+    # Under a `Document`, only the elements count: its own texts are not text for XPath.
+    k, n, first = _sv_scan(o, nt === Element, 0, 0, _sv_empty(S))
+    k <= 1 && return first
+    out = Base._string_n(n)
+    return _sv_as(S, _sv_check(out, _sv_join!(out, o, nt === Element, 1)))
+end
+
+# The empty text, and the joined texts, in the type of a tree's values. `String` has its own
+# methods: up to Julia 1.13, the compiler leaves `convert(String, s)` as a call.
+_sv_empty(::Type{String}) = ""
+_sv_empty(::Type{S}) where {S} = convert(S, "")
+_sv_as(::Type{String}, out::String) = out
+_sv_as(::Type{S}, out::String) where {S} = convert(S, out)
+
+# The texts of `o`'s subtree, those of its own children only if `texts`: their number,
+# their size, and the first one.
+function _sv_scan(o::Node{S}, texts::Bool, k::Int, n::Int, first::S) where {S}
+    ch = o.children
+    ch === nothing && return (k, n, first)
+    for c in ch
+        nt = c.nodetype
+        if nt === Element
+            k, n, first = _sv_scan(c, true, k, n, first)
+        elseif texts && (nt === Text || nt === CData)
+            v = c.value::S
+            k == 0 && (first = v)
+            k += 1
+            n += ncodeunits(v)
+        end
+    end
+    return (k, n, first)
+end
+
+# The same walk, which copies each text into `out` from byte `i` and returns the next byte.
+function _sv_join!(out::String, o::Node{S}, texts::Bool, i::Int) where {S}
+    ch = o.children
+    ch === nothing && return i
+    for c in ch
+        nt = c.nodetype
+        if nt === Element
+            i = _sv_join!(out, c, true, i)
+        elseif texts && (nt === Text || nt === CData)
+            i = _sv_put!(out, i, c.value::S)
+        end
+    end
+    return i
+end
+
+@noinline _sv_undefined(nt::NodeType) = throw(ArgumentError(
+    "`string_value` is defined for Document, Element, Text, CData, Comment and " *
+    "ProcessingInstruction nodes, not for $nt nodes."))
+
+# Each reader counts its texts, allocates the result at that size with `Base._string_n`,
+# then copies the texts into it, as Base's own `string(a, b...)` does: one allocation. The
+# string is written before anyone else sees it. Each copy is checked against its size, so
+# the two passes can never disagree without an error.
+@noinline _sv_mismatch() = error("`string_value`: the texts changed while they were read.")
+@inline _sv_check(out::String, i::Int) = (i == ncodeunits(out) + 1 || _sv_mismatch(); out)
+
+@inline function _sv_put!(out::String, i::Int, s::Union{String, SubString{String}})
+    n = ncodeunits(s)
+    i + n - 1 <= ncodeunits(out) || _sv_mismatch()
+    GC.@preserve out s unsafe_copyto!(pointer(out, i), pointer(s), n)
+    return i + n
+end
+function _sv_put!(out::String, i::Int, s::AbstractString)
+    cu = codeunits(s)
+    i + length(cu) - 1 <= ncodeunits(out) || _sv_mismatch()
+    GC.@preserve out for b in cu
+        unsafe_store!(pointer(out, i), b)
+        i += 1
+    end
+    return i
+end
+# The first `m` bytes of a scratch buffer, where `_decode_to_scratch!` decoded a text.
+@inline function _sv_put!(out::String, i::Int, buf::Vector{UInt8}, m::Int)
+    i + m - 1 <= ncodeunits(out) || _sv_mismatch()
+    GC.@preserve out buf unsafe_copyto!(pointer(out, i), pointer(buf), m)
+    return i + m
+end
+
 #-----------------------------------------------------------------------------# tree navigation
 
 const _AMBIGUOUS_NODE_MSG = "ambiguous: the node matches multiple indistinguishable occurrences in the tree; use FlatNode for positional navigation."

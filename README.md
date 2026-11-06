@@ -77,6 +77,7 @@ value(node)         -> String or Nothing
 children(node)      -> Vector{Node}
 is_simple(node)     -> Bool (e.g. <tag>text</tag>)
 simple_value(node)  -> e.g. "text" from <tag>text</tag>
+string_value(node)  -> e.g. "x y z" from <p>x <b>y</b> z</p>
 ```
 
 Indexing follows one rule across the tree readers (`Node`, `LazyNode`, `FlatNode`): the
@@ -275,7 +276,7 @@ doc = parse(xml_string, LazyNode)
 doc = read("file.xml", LazyNode)
 ```
 
-`LazyNode` supports the same read-only interface as `Node`: `nodetype`, `tag`, `attributes`, `value`, `children`, `is_simple`, `simple_value`, plus integer and string indexing.
+`LazyNode` supports the same read-only interface as `Node`: `nodetype`, `tag`, `attributes`, `value`, `children`, `is_simple`, `simple_value`, `string_value`, plus integer and string indexing.
 
 `LazyNode` is for *partial* reads only:
 

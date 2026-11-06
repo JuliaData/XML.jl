@@ -545,6 +545,70 @@ end
     c.value_len < 0 ? unescape(raw) : raw
 end
 
+#-----------------------------------------------------------------------------# string_value
+function string_value(n::FlatNode)
+    store = n.store
+    r = _rec(n)
+    nt = r.kind
+    if nt === Text || nt === CData || nt === Comment || nt === ProcessingInstruction
+        return r.value_offset < 0 ? SubString(store.source, 1, 0) : _flat_text(store, r)
+    end
+    (nt === Element || nt === Document) || _sv_undefined(nt)
+    recs = store.recs
+    stop = _flat_subtree_end(recs, n.i)
+    k = 0
+    m = 0
+    first = Int32(0)
+    for j in (n.i + Int32(1)):(stop - Int32(1))
+        c = @inbounds recs[j]
+        _flat_counts(c) || continue
+        k == 0 && (first = j)
+        k += 1
+        m += c.value_len >= 0 ? Int(c.value_len) : _flat_decode(store, c)[2]
+    end
+    k == 0 && return SubString(store.source, 1, 0)
+    k == 1 && return _flat_text(store, @inbounds recs[first])
+    out = Base._string_n(m)
+    i = 1
+    for j in first:(stop - Int32(1))
+        c = @inbounds recs[j]
+        _flat_counts(c) || continue
+        if c.value_len >= 0
+            i = _sv_put!(out, i, _fsub(store, c.value_offset, c.value_len))
+        else
+            buf, len, _ = _flat_decode(store, c)
+            i = _sv_put!(out, i, buf, len)
+        end
+    end
+    return SubString(_sv_check(out, i))
+end
+
+# The records are stored in document order, so the subtree of record `i` is the run of
+# records after it, up to the next sibling of the nearest ancestor-or-self that has one.
+@inline function _flat_subtree_end(recs::Vector{_FlatRec}, i::Int32)
+    j = i
+    while j != 0
+        r = @inbounds recs[j]
+        r.next_sibling != 0 && return r.next_sibling
+        j = r.parent
+    end
+    return Int32(length(recs) + 1)
+end
+
+# A text of the subtree that counts: a `Text` or a `CData` inside an element. Record 1 is
+# the document, whose own texts are not text for XPath.
+@inline _flat_counts(c::_FlatRec) = (c.kind === Text || c.kind === CData) && c.parent != 1
+
+# A record's text as `value` gives it, and its decoding into the scratch of `unescape`.
+@inline function _flat_text(store::FlatStore, c::_FlatRec)
+    raw = _fsub(store, c.value_offset, abs(c.value_len))
+    return c.value_len < 0 ? unescape(raw) : raw
+end
+@inline function _flat_decode(store::FlatStore, c::_FlatRec)
+    raw = _fsub(store, c.value_offset, -c.value_len)
+    return _decode_to_scratch!(codeunits(raw), ncodeunits(raw))
+end
+
 #-----------------------------------------------------------------------------# conversion / write / show
 """
     Node(n::FlatNode) -> Node{String}

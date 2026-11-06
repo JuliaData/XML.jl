@@ -33,6 +33,7 @@ measure_is_simple(x) = @allocated _use(is_simple_value(x))
 measure_simple_test(x) = @allocated is_simple(x)
 measure_sourcetext(x) = @allocated _use(sourcetext(x))
 measure_sourcespan(x) = @allocated length(sourcespan(x))
+measure_string_value(x) = @allocations _use(string_value(x))
 function measure_eachattr(x)
     @allocated begin
         s = 0
@@ -61,6 +62,17 @@ end
     tfl = only(children(sfl))
     tnd = only(children(snd))
     tcu = parse(Cursor, simple_xml); next!(tcu); next!(tcu) # positioned on the Text node
+
+    # `string_value`: one text behind attributes, one with a reference, several texts,
+    # several with references
+    one_xml    = """<guid isPermaLink="true">https://example.org/a</guid>"""
+    oneref_xml = "<title>Tom &amp; Jerry</title>"
+    mixed_xml  = "<p>x <b>y</b> z</p>"
+    refs_xml   = "<p>x &amp; y<b>&lt;</b></p>"
+    sv_one    = [only(eachelement(parse(one_xml, R))) for R in (LazyNode, FlatNode, Node)]
+    sv_oneref = [only(eachelement(parse(oneref_xml, R))) for R in (LazyNode, FlatNode, Node)]
+    sv_mixed  = [only(eachelement(parse(mixed_xml, R))) for R in (LazyNode, FlatNode, Node)]
+    sv_refs   = [only(eachelement(parse(refs_xml, R))) for R in (LazyNode, FlatNode, Node)]
 
     @testset "the shared decode root is type-stable" begin
         @test only(Base.return_types(unescape, (SubString{String},))) === SubString{String}
@@ -124,6 +136,18 @@ end
             @test sourcetext(x) == xml
             @test xml[sourcespan(x)] == xml
         end
+        for x in sv_one
+            @test string_value(x) == "https://example.org/a"
+        end
+        for x in sv_oneref
+            @test string_value(x) == "Tom & Jerry"
+        end
+        for x in sv_mixed
+            @test string_value(x) == "x y z"
+        end
+        for x in sv_refs
+            @test string_value(x) == "x & y<"
+        end
     end
 
     # compile every barrier specialization before measuring
@@ -137,6 +161,7 @@ end
     foreach(measure_simple_test, (slz, sfl, scu, snd))
     foreach(measure_sourcetext, (lz, fl, slz, sfl))
     foreach(measure_sourcespan, (lz, fl, slz, sfl))
+    foreach(measure_string_value, (sv_one..., sv_oneref..., sv_mixed..., sv_refs...))
 
     if _NO_COVERAGE
         @testset "by-key attribute reads" begin
@@ -196,6 +221,26 @@ end
             @test measure_sourcespan(fl) == 0
             @test measure_sourcespan(slz) == 0
             @test measure_sourcespan(sfl) == 0
+        end
+
+        # A single text is returned as `value` returns it: without a copy, unless the lazy
+        # readers decode a reference into a new string. Several are joined into one new
+        # string, the only allocation, also when a text holds a reference.
+        @testset "string_value" begin
+            @testset "one text, $(typeof(x))" for x in sv_one
+                @test measure_string_value(x) == 0
+            end
+            # `Node` decoded its texts when it was built; `LazyNode` and `FlatNode`
+            # decode them on access
+            @testset "one text with a reference, $(typeof(x))" for x in sv_oneref
+                @test measure_string_value(x) == (x isa Node ? 0 : 1)
+            end
+            @testset "several texts, $(typeof(x))" for x in sv_mixed
+                @test measure_string_value(x) == 1
+            end
+            @testset "several texts with references, $(typeof(x))" for x in sv_refs
+                @test measure_string_value(x) == 1
+            end
         end
     end
 end
