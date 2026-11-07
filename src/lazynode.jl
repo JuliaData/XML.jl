@@ -498,9 +498,9 @@ splicetext(n::LazyNode, replacement::AbstractString = "") =
 
 #-----------------------------------------------------------------------------# write
 """
-    write(n::LazyNode; normalize::Bool=false, indentsize::Int=2) -> String
-    write(io::IO, n::LazyNode; normalize::Bool=false, indentsize::Int=2)
-    write(filename::AbstractString, n::LazyNode; normalize::Bool=false, indentsize::Int=2)
+    write(n::LazyNode; normalize::Bool=false, indentsize::Int=2, pretty::Bool=true) -> String
+    write(io::IO, n::LazyNode; kw...)
+    write(filename::AbstractString, n::LazyNode; kw...)
 
 Serialize a `LazyNode`. With `normalize=false` (the default) the result is the node's
 original source bytes (zero-copy via [`sourcetext`](@ref)) — fast, but any source-side
@@ -508,22 +508,24 @@ whitespace between tags is preserved verbatim.
 
 With `normalize=true` the node is parsed into a `Node` tree and re-serialized, which
 collapses incidental source whitespace and pretty-prints with `indentsize`-space
-indentation.
+indentation. With `pretty=false` as well, no white space is added or dropped between the
+nodes, as for a `Node`. `indentsize` and `pretty` have no effect with `normalize=false`.
 """
-function write(n::LazyNode; normalize::Bool=false, indentsize::Int=2)
-    normalize ? write(parse(String(sourcetext(n)), Node); indentsize) : String(sourcetext(n))
+function write(n::LazyNode; normalize::Bool=false, indentsize::Int=2, pretty::Bool=true)
+    normalize ? write(parse(String(sourcetext(n)), Node); indentsize, pretty) : String(sourcetext(n))
 end
 
-function write(io::IO, n::LazyNode; normalize::Bool=false, indentsize::Int=2)
+function write(io::IO, n::LazyNode; normalize::Bool=false, indentsize::Int=2, pretty::Bool=true)
     if normalize
-        write(io, parse(String(sourcetext(n)), Node); indentsize)
+        write(io, parse(String(sourcetext(n)), Node); indentsize, pretty)
     else
         Base.write(io, sourcetext(n))
     end
 end
 
-function write(filename::AbstractString, n::LazyNode; normalize::Bool=false, indentsize::Int=2)
-    open(io -> write(io, n; normalize, indentsize), filename, "w")
+function write(filename::AbstractString, n::LazyNode; normalize::Bool=false, indentsize::Int=2,
+               pretty::Bool=true)
+    open(io -> write(io, n; normalize, indentsize, pretty), filename, "w")
 end
 
 #-----------------------------------------------------------------------------# eachchildnode
