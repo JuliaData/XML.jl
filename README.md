@@ -271,6 +271,8 @@ while next!(cur) !== nothing
 end
 ```
 
+`eachattribute!(cur)` gives the pairs that `eachattribute(LazyNode(cur))` gives, but reads them where the cursor stands, so the next `next!` goes on after them instead of reading them again. A later call reads the tag again from its `<`, as `attributes(cur)` does. Each loop over the iterator gives all the pairs, from the first, even once the cursor has moved on.
+
 From a file or stream: `read(filename, Cursor)` / `read(io, Cursor)`, with the same byte-level BOM normalization as the tree readers (UTF-8 BOM strip, UTF-16 transcoding). The `Cursor(str)` constructor also accepts any `AbstractString` directly, including a `StringView` over `Mmap` for files too large for the heap (same recipe as under `LazyNode` below).
 
 Two structured helpers carry the depth bookkeeping for you: `for_each_child(f, cur)` applies `f` to each *immediate* child of the current node (nestable — composing calls gives a full depth-first walk), and `skip_element!(cur)` jumps past the current element's entire subtree in one byte-level scan — the cheap way to classify nodes without tokenizing their contents. `@for_each_child` is the inlined-body macro form for hot extraction loops. To walk just a subtree, take the snapshot described below and cross back with `Cursor(snapshot)`, which accepts the `LazyNode` it gives you; `Cursor(data, startpos)`, the one entry that takes a byte offset from the caller, is deprecated and removed in v0.5.
