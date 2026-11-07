@@ -199,7 +199,7 @@ The old `Raw`/`LazyNode` forward/backward streaming is replaced by two options:
   end
   ```
 
-  (`Cursor` is forward-only; there is no `prev!`.) `for_each_child` / `@for_each_child` iterate the
+  (`Cursor` is forward-only; there is no `prev!`.) `for_each_child!` / `@for_each_child!` iterate the
   children at the current position.
 
 **Choosing a reader.** For forward streaming of a large document, prefer `Cursor` (fastest,

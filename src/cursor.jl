@@ -25,7 +25,7 @@ mutable struct Cursor{S <: AbstractString}
     depth::Int                           # current node's depth (root children = 1)
     enclosing::Int                       # open-element count (depth bookkeeping)
     done::Bool
-    held::Bool                           # peek flag: current node not yet consumed (see for_each_child)
+    held::Bool                           # peek flag: current node not yet consumed (see for_each_child!)
 end
 
 """
@@ -86,7 +86,7 @@ Base.parse(::Type{Cursor}, xml::AbstractString) = Cursor(xml)
 A cursor whose token stream starts at byte position `startpos` in `data` instead
 of the document start — for walking a subtree whose start offset is already known.
 The first [`next!`](@ref) reaches whatever element begins at `startpos`, at depth
-1, so [`for_each_child`](@ref) then iterates that element's immediate children and
+1, so [`for_each_child!`](@ref) then iterates that element's immediate children and
 auto-stops at its subtree boundary (the depth break). LazyNode-agnostic primitive.
 
 This constructor reads `data` as it stands, and it is the only entry that exposes a byte
@@ -382,7 +382,7 @@ end
 # Cursor mirror of `is_simple_value(::LazyNode)`: combined predicate+accessor that
 # returns the lone Text/CData value of the current element (or `nothing` if it has
 # attributes / isn't a single-text element). Non-destructive — reads via `_rescan`,
-# so the cursor position is unchanged (caller still advances with `for_each_child` /
+# so the cursor position is unchanged (caller still advances with `for_each_child!` /
 # `skip_element!`). Lets hot paths read e.g. an XLSX `<v>` value with no LazyNode snapshot.
 @inline function is_simple_value(c::Cursor)
     c.nodetype === Element || return nothing
@@ -441,20 +441,20 @@ LazyNode(c::Cursor) = LazyNode(_data(c), c.token, c.nodetype)
 
 #-----------------------------------------------------------------------------# traversal
 """
-    for_each_child(f, c::Cursor)
+    for_each_child!(f, c::Cursor)
 
 Apply `f(c)` to each immediate child of the cursor's current node, advancing
 `c` in place (a depth-tracked forward sweep). Deeper descendants are visited
 but not passed to `f`. Read `c` synchronously inside `f` (aliasing contract).
 
-Nestable: calling `for_each_child` again inside `f` descends into that child's
+Nestable: calling `for_each_child!` again inside `f` descends into that child's
 own subtree and composes for full DFS. On reaching the end of its subtree a
 sweep *holds* the boundary node (the next sibling/ancestor) instead of consuming
 it, so the enclosing sweep still sees it — correct regardless of whether the
 source has inter-element whitespace (a minified document has no buffering text
 nodes, which an earlier consume-on-break version skipped over).
 """
-function for_each_child(f, c::Cursor)
+function for_each_child!(f, c::Cursor)
     initial = c.depth
     target  = initial + 1
     while next!(c) !== nothing
@@ -468,17 +468,21 @@ function for_each_child(f, c::Cursor)
 end
 
 """
-    @for_each_child c child body
+    @for_each_child! c child body
 
-Macro form of [`for_each_child`](@ref): run `body` for each immediate child of the
+Macro form of [`for_each_child!`](@ref): run `body` for each immediate child of the
 cursor `c`'s current node, binding `child` to `c` (the cursor itself) on each. The
 body is **inlined** (not a closure), so it can assign enclosing locals without the
 capture-boxing a `do` block incurs — which matters in hot extraction loops where
 the body accumulates fields. Same depth/peek semantics as the function form (holds
-the boundary node on exit, so it composes when nested). Mirrors the shape of a
-node-based `@for_each_immediate_child`.
+the boundary node on exit, so it composes when nested).
 """
-macro for_each_child(c, child, body)
+macro for_each_child!(c, child, body)
+    _for_each_child_loop(c, child, body)
+end
+
+# The loop that both macro names write.
+function _for_each_child_loop(c, child, body)
     quote
         local _cur = $(esc(c))
         local _initial = _cur.depth
@@ -497,6 +501,40 @@ macro for_each_child(c, child, body)
     end
 end
 
+# The old names, to be removed in v0.5. Both warn when they run. The macro does not warn at
+# expansion: a package that calls it is usually precompiled without warnings, and its tests
+# then load that cache, so such a warning would rarely show.
+Base.@deprecate for_each_child(f, c::Cursor) for_each_child!(f, c) false
+
+@doc """
+    for_each_child(f, c::Cursor)
+
+Deprecated name of [`for_each_child!`](@ref), to be removed in v0.5.
+""" for_each_child(::Any, ::Cursor)
+
+"""
+    @for_each_child c child body
+
+Deprecated name of [`@for_each_child!`](@ref), to be removed in v0.5.
+"""
+macro for_each_child(c, child, body)
+    # `__source__` gives the call to the warning the line of the macro call, not this one.
+    warn = :(_FOR_EACH_CHILD_MACRO_WARNED[] || _deprecated_for_each_child_macro())
+    Expr(:block, __source__, warn, _for_each_child_loop(c, child, body))
+end
+
+# Once per session: the loop of an old macro call can run once per row or per cell of a
+# sheet, and each `Base.depwarn` takes a backtrace, 0.2 to 0.5 ms under `--depwarn=yes`.
+# `__init__` lowers the flag at each load.
+const _FOR_EACH_CHILD_MACRO_WARNED = Ref(false)
+
+# A function of its own, so that the warning names its caller, the line of the macro call.
+@noinline function _deprecated_for_each_child_macro()
+    _FOR_EACH_CHILD_MACRO_WARNED[] = true
+    Base.depwarn("`@for_each_child` is deprecated, use `@for_each_child!` instead.",
+                 :_deprecated_for_each_child_macro)
+end
+
 """
     skip_element!(c::Cursor)
 
@@ -504,7 +542,7 @@ With `c` positioned on an `Element`, advance past that element's entire subtree 
 byte-level scan (no internal tokens emitted), so the next [`next!`](@ref) yields the
 element's following sibling (or the parent boundary). For structural walks (e.g. layer
 discovery) that classify a node but don't need its contents — far cheaper than letting
-`for_each_child`/`next!` tokenize the skipped subtree. No-op on non-`Element` nodes.
+`for_each_child!`/`next!` tokenize the skipped subtree. No-op on non-`Element` nodes.
 """
 function skip_element!(c::Cursor)
     c.nodetype === Element || return c
