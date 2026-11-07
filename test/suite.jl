@@ -1473,6 +1473,10 @@ end
                     "<!DOCTYPE d [<!ENTITY e \"X\">]><d>&other;</d>")     # only undeclared names
             @test same(exp(src), src)
         end
+        # a document that holds a CR, and whose declarations change nothing, is returned as
+        # it stands: the rewrite normalizes line ends only in the copy it writes
+        crlf = "<!DOCTYPE d [<!ENTITY e \"X\">]>\r\n<d>no use</d>\r\n"
+        @test same(exp(crlf), crlf)
         # a source that is not a String takes the same exits
         sub = SubString("<a>plain</a>", 1)
         @test same(XML._apply_declarations(sub), sub)
@@ -4902,6 +4906,142 @@ end
             @test text_values("<r>\r\n\r\n</r>") == ["\n\n"]
             @test text_values("<r>\r x</r>") == ["\n x"]
             @test text_values("<r>\r\nx\ry</r>") == ["\nx\ny"]
+        end
+
+        @testset "an entity's text: line ends first, then the declarations" begin
+            # §2.11 normalizes the line ends of the whole document before it is parsed, the
+            # internal subset included, while §4.5 resolves the character references of an
+            # entity's text when it is declared. A line end written in a declaration thus
+            # reads as one LF, and a reference to #xD gives a CR that stays, in every
+            # reader.
+            function first_of(n, k)                       # in document order, within `n`
+                for c in children(n)
+                    nodetype(c) === k && return String(value(c))
+                    if nodetype(c) === Element
+                        v = first_of(c, k)
+                        v === nothing || return v
+                    end
+                end
+                return nothing
+            end
+            function read_tree(xml, R, k)
+                r = only(elements(parse(xml, R)))
+                k === :attr && return String(r["x"])
+                k === Text && return String(string_value(r))
+                return first_of(r, k)
+            end
+            function read_cursor(xml, k)
+                c = Cursor(xml)
+                texts = String[]
+                while next!(c) !== nothing
+                    nt = nodetype(c)
+                    if k === :attr
+                        nt === Element && return String(c["x"])
+                    elseif k === Text
+                        nt === Text && push!(texts, String(value(c)))
+                    elseif nt === k
+                        return String(value(c))
+                    end
+                end
+                return join(texts)
+            end
+            readings(xml, k) = (Node = read_tree(xml, Node, k),
+                                NodeSubString = read_tree(xml, Node{SubString{String}}, k),
+                                LazyNode = read_tree(xml, LazyNode, k),
+                                FlatNode = read_tree(xml, FlatNode, k),
+                                Cursor = read_cursor(xml, k))
+            decl(text) = "<!DOCTYPE r [<!ENTITY e \"$text\">]>"
+            cases = [
+                "CR LF in the text, read in a value"    => (decl("a\r\nb") * "<r x=\"&e;\"/>", :attr, "a b"),
+                "&#13; in the text"                     => (decl("a&#13;b") * "<r>&e;</r>", Text, "a\rb"),
+                "&#13;&#10; in the text"                => (decl("a&#13;&#10;b") * "<r>&e;</r>", Text, "a\r\nb"),
+                "the text ends on a CR, a LF follows"   => (decl("a\r") * "<r>&e;\nb</r>", Text, "a\n\nb"),
+                "a CR precedes a text that opens on LF" => (decl("\nb") * "<r>a\r&e;</r>", Text, "a\n\nb"),
+                "&#13; in an element of the text"       => (decl("<x>a&#13;b</x>") * "<r>&e;</r>", Text, "a\rb"),
+                "&#13; in a comment of the text"        => (decl("<!--a&#13;b-->") * "<r>&e;</r>", Comment, "a\rb"),
+                "&#13; in a CDATA section of the text"  => (decl("<![CDATA[a&#13;b]]>") * "<r>&e;</r>", CData, "a\rb"),
+                "&#13; in a PI of the text"             => (decl("<?p a&#13;b?>") * "<r>&e;</r>", ProcessingInstruction, "a\rb"),
+            ]
+            @testset "$name" for (name, (xml, k, want)) in cases
+                got = readings(xml, k)
+                @test got == map(_ -> want, got)
+            end
+        end
+
+        @testset "the copy that the declarations rewrite is read as it stands" begin
+            # A document that its declarations rewrite is read in that copy, whose line ends
+            # the rewrite normalized: a CR left in it comes from a reference. A document
+            # whose declarations change nothing is read where it lies.
+            used = "<!DOCTYPE r [<!ENTITY e \"a&#13;b\">]>\r\n<r>&e;\r\n</r>"
+            copy = "<!DOCTYPE r [<!ENTITY e \"a&#13;b\">]>\n<r>a\rb\n</r>"
+            for doc in (parse(used, LazyNode), LazyNode(used, Document))
+                @test sourcetext(doc) == copy
+                @test string_value(only(elements(doc))) == "a\rb\n"
+            end
+            c = Cursor(used)
+            while next!(c) !== nothing && nodetype(c) !== Element end
+            next!(c)                                      # the text of <r>
+            @test value(c) == "a\rb\n"
+            # the bridges between the two readers keep it
+            @test value(LazyNode(c)) == "a\rb\n"
+            c = Cursor(only(elements(parse(used, LazyNode))))
+            while next!(c) !== nothing && nodetype(c) !== Text end
+            @test value(c) == "a\rb\n"
+            unused = "<!DOCTYPE r [<!ENTITY e \"z\">]>\r\n<r>x\r\n</r>"
+            lz = parse(unused, LazyNode)
+            @test sourcetext(lz) == unused
+            @test string_value(only(elements(lz))) == "x\n"
+        end
+
+        @testset "each part of a rewritten document has its line ends normalized" begin
+            # The rewrite copies the document in parts, and normalizes the line ends of
+            # each: the text before the first change, between two changes and after the
+            # last one, a start tag that receives a default or a reduced value, an attribute
+            # value that holds a reference, a comment, a PI and a CDATA section. Every
+            # reader reads each node of the document as `Node` reads it.
+            function row(n)
+                a = attributes(n)
+                pairs_of = a === nothing ? nothing :
+                    sort!([String(k) => String(v) for (k, v) in a])
+                return (nodetype(n), tag(n), value(n), pairs_of)
+            end
+            function rows(n, out = Any[])
+                for c in children(n)
+                    push!(out, row(c))
+                    nodetype(c) === Element && rows(c, out)
+                end
+                return out
+            end
+            function cursor_rows(src)
+                c = Cursor(src)
+                out = Any[]
+                while next!(c) !== nothing
+                    push!(out, row(c))
+                end
+                return out
+            end
+            attlist = "<!DOCTYPE r [<!ATTLIST e a CDATA \"d\" n NMTOKENS #IMPLIED>]>\r\n" *
+                      "<r>\r\n<e n=\" x  y \"/>\r\n<e>t\r\nu</e>\r\n</r>\r\n"
+            entity = "<!DOCTYPE r [<!ENTITY e \"v\">" *
+                     "<!ATTLIST x a CDATA \"d\" n NMTOKENS #IMPLIED>]>\r\n" *
+                     "<r>\r\nline\r\n&e;\r\nline<x/>\r\n<x b=\"p\r\nq&e;\"/>\r\n" *
+                     "<x n=\" p  q \"/>\r\n<x c=\"1\"\r\n/>\r\n" *
+                     "<!--c\r\nd--><?p a\r\nb?><![CDATA[c\r\nd]]>\r\n</r>\r\n"
+            for xml in (attlist, entity)
+                want = rows(parse(xml, Node))
+                @test rows(parse(xml, FlatNode)) == want
+                # the two readers that keep the type of their source, over each type that
+                # the rewrite rebuilds
+                bytes = Vector{UInt8}(xml)
+                for src in (xml, SubString("<p/>" * xml, 5), StringView(copy(bytes)),
+                            StringView(view(copy(bytes), 1:length(bytes))))
+                    lz = parse(src, LazyNode)
+                    @test rows(lz) == want
+                    # no reference writes a CR here: the copy holds none, even in values
+                    @test !occursin('\r', sourcetext(lz))
+                    @test cursor_rows(src) == want
+                end
+            end
         end
     end
 

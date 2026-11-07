@@ -27,6 +27,10 @@ With the changes below, the same call can give another result than with v0.4.8.
 
 - **`for_each_child` and `@for_each_child`**, to be removed in v0.5 ([#220](https://github.com/JuliaData/XML.jl/issues/220)). Call `for_each_child!` and `@for_each_child!`, whose `!` says that they move the cursor, as `next!` does. The old names still work until then, and warn when they run under `--depwarn=yes`, as in `Pkg.test`.
 
+### Fixed
+
+- **`LazyNode` and `Cursor` read the line ends of a declared entity's text as `Node` and `FlatNode` do** ([#223](https://github.com/JuliaData/XML.jl/issues/223)). A CR from a character reference such as `&#13;` stays a CR, and a CR LF written in the declaration reads as one line feed, as [XML 1.0 §2.11](https://www.w3.org/TR/xml/#sec-line-ends) and [§4.5](https://www.w3.org/TR/xml/#intern-replacement) require. In v0.4.8, these two readers gave a line feed for the first, two spaces in an attribute value for the second, and failed the W3C cases `valid-sa-068` and `valid-sa-108`. A document that the declarations of its DOCTYPE change is read from a copy with LF line ends, which `sourcetext` and `sourcespan` show.
+
 ## [0.4.8] - 2026-11-04
 
 ### Changed

@@ -17,8 +17,8 @@ always `SubString{String}`, so a non-`String` document has each attribute's own 
 
 A document that the declarations of its DOCTYPE change — an entity it uses, a default attribute
 value it receives, the spaces of an attribute declared with a type other than CDATA — is read
-from a copy with these changes made, of the same string type (see [`sourcetext`](@ref)), and the
-views point into that copy. The copy can be made for:
+from a copy with these changes made and its line ends in LF, of the same string type (see
+[`sourcetext`](@ref)), and the views point into that copy. The copy can be made for:
 
 - a `String`, or a `SubString{String}` such as `view(str, i:j)`;
 - a `StringView` over a byte vector `v` (a `Vector{UInt8}`), as for a memory-mapped file, or
@@ -55,19 +55,29 @@ struct LazyNode{S <: AbstractString}
     data::S
     token::Token
     nodetype::NodeType
+    normalized::Bool    # `data` is the copy that its declarations rewrote (see `_read_eol`)
 end
+
+# Without the flag, a node reads its source where it lies, normalizing values as it reads.
+LazyNode(data::S, token::Token, nodetype::NodeType) where {S <: AbstractString} =
+    LazyNode{S}(data, token, nodetype, false)
+LazyNode{S}(data::S, token::Token, nodetype::NodeType) where {S <: AbstractString} =
+    LazyNode{S}(data, token, nodetype, false)
 
 # Public raw-string entry: the declarations of the DOCTYPE apply here as at `parse`/`read`,
 # and line ends are left, as at every lazy entry, for `_read_eol` to normalize value by value
-# (§2.11), whatever the source type.
-LazyNode(data::AbstractString, nt::NodeType) = _lazynode_at(_apply_declarations(data), nt)
+# (§2.11), whatever the source type, unless the declarations rewrite the document.
+function LazyNode(data::AbstractString, nt::NodeType)
+    d, normalized = _declared_source(data)
+    _lazynode_at(d, nt, normalized)
+end
 
 # `d` arrives as the reader takes it — see `_cursor_at`.
 # No scan here. Parametric on `d`'s own type, so a rewritten document (always a `String`)
 # builds `LazyNode{String}`. The empty token sits at the start of `d` in the root's index
 # space, which an empty `SubString` of a view would not keep.
-@inline _lazynode_at(d::S, nt::NodeType) where {S <: AbstractString} =
-    LazyNode{S}(d, XMLTokenizer.no_token(d), nt)
+@inline _lazynode_at(d::S, nt::NodeType, normalized::Bool) where {S <: AbstractString} =
+    LazyNode{S}(d, XMLTokenizer.no_token(d), nt, normalized)
 
 nodetype(n::LazyNode) = n.nodetype
 
@@ -78,8 +88,9 @@ _lazy_tokenizer(n::LazyNode) = tokenize(n.data, _lazy_pos(n))
 # spreadsheet-style data — once `_read_eol` has searched it for a CR, and copied it only when
 # it carries one. `_decode_attr` strips
 # the surrounding quotes first; the flag is read from the token, not the stripped view.
-@inline _decode(tok::Token, data) =
-    tok.has_entities ? unescape(_read_eol(raw(tok, data))) : _read_eol(raw(tok, data))
+@inline _decode(tok::Token, data, normalized::Bool) =
+    tok.has_entities ? unescape(_read_eol(raw(tok, data), normalized)) :
+                       _read_eol(raw(tok, data), normalized)
 @inline function _decode_attr(tok::Token, data)
     v = _normalize_attr_ws(attr_value(tok, data))
     tok.has_entities ? unescape(v) : v
@@ -103,27 +114,27 @@ end
 @inline function value(n::LazyNode)
     nt = n.nodetype
     if nt === Text
-        return _decode(n.token, n.data)
+        return _decode(n.token, n.data, n.normalized)
     elseif nt === Comment
         iter = _lazy_tokenizer(n)
         iterate(iter)  # COMMENT_OPEN
-        return _read_eol(raw(iterate(iter)[1], n.data))
+        return _read_eol(raw(iterate(iter)[1], n.data), n.normalized)
     elseif nt === CData
         iter = _lazy_tokenizer(n)
         iterate(iter)  # CDATA_OPEN
-        return _read_eol(raw(iterate(iter)[1], n.data))
+        return _read_eol(raw(iterate(iter)[1], n.data), n.normalized)
     elseif nt === DTD
         iter = _lazy_tokenizer(n)
         iterate(iter)  # DOCTYPE_OPEN
         # strip, then normalize: the same text, in the types the branches above return
-        return _read_eol(lstrip(raw(iterate(iter)[1], n.data)))
+        return _read_eol(lstrip(raw(iterate(iter)[1], n.data)), n.normalized)
     elseif nt === ProcessingInstruction
         iter = _lazy_tokenizer(n)
         iterate(iter)  # PI_OPEN
         result = iterate(iter)
         result === nothing && return nothing
         result[1].kind === TokenKinds.PI_CONTENT || return nothing
-        content = _read_eol(lstrip(raw(result[1], n.data)))
+        content = _read_eol(lstrip(raw(result[1], n.data)), n.normalized)
         return isempty(content) ? nothing : content
     end
     nothing
@@ -293,7 +304,7 @@ function children!(buf::Vector{LazyNode{S}}, n::LazyNode{S}) where {S}
     empty!(buf)
     nt = n.nodetype
     if nt === Document
-        return _lazy_collect_children!(buf, n.data, _lazy_tokenizer(n))
+        return _lazy_collect_children!(buf, n.data, _lazy_tokenizer(n), n.normalized)
     elseif nt !== Element
         return buf
     end
@@ -302,31 +313,32 @@ function children!(buf::Vector{LazyNode{S}}, n::LazyNode{S}) where {S}
         tok.kind === TokenKinds.SELF_CLOSE && return buf
         tok.kind === TokenKinds.TAG_CLOSE && break
     end
-    _lazy_collect_children!(buf, n.data, iter)
+    _lazy_collect_children!(buf, n.data, iter, n.normalized)
 end
 
-function _lazy_collect_children!(result::Vector{LazyNode{S}}, data::S, iter) where {S <: AbstractString}
+function _lazy_collect_children!(result::Vector{LazyNode{S}}, data::S, iter,
+                                 normalized::Bool) where {S <: AbstractString}
     for tok in iter
         k = tok.kind
         if k === TokenKinds.TEXT
-            push!(result, LazyNode(data, tok, Text))
+            push!(result, LazyNode(data, tok, Text, normalized))
         elseif k === TokenKinds.OPEN_TAG
-            push!(result, LazyNode(data, tok, Element))
+            push!(result, LazyNode(data, tok, Element, normalized))
             _lazy_skip_element!(iter)
         elseif k === TokenKinds.COMMENT_OPEN
-            push!(result, LazyNode(data, tok, Comment))
+            push!(result, LazyNode(data, tok, Comment, normalized))
             _lazy_skip_until!(iter, TokenKinds.COMMENT_CLOSE)
         elseif k === TokenKinds.CDATA_OPEN
-            push!(result, LazyNode(data, tok, CData))
+            push!(result, LazyNode(data, tok, CData, normalized))
             _lazy_skip_until!(iter, TokenKinds.CDATA_CLOSE)
         elseif k === TokenKinds.PI_OPEN
-            push!(result, LazyNode(data, tok, ProcessingInstruction))
+            push!(result, LazyNode(data, tok, ProcessingInstruction, normalized))
             _lazy_skip_until!(iter, TokenKinds.PI_CLOSE)
         elseif k === TokenKinds.XML_DECL_OPEN
-            push!(result, LazyNode(data, tok, Declaration))
+            push!(result, LazyNode(data, tok, Declaration, normalized))
             _lazy_skip_until!(iter, TokenKinds.XML_DECL_CLOSE)
         elseif k === TokenKinds.DOCTYPE_OPEN
-            push!(result, LazyNode(data, tok, DTD))
+            push!(result, LazyNode(data, tok, DTD, normalized))
             _lazy_skip_until!(iter, TokenKinds.DOCTYPE_CLOSE)
         elseif k === TokenKinds.CLOSE_TAG
             break
@@ -416,8 +428,9 @@ line ends, CRs included: the reader normalizes each value as it reads it, not th
 document that the declarations of its DOCTYPE change — an entity it uses, a default attribute
 value it receives, an attribute declared with a type other than CDATA — is rewritten when it is
 read in (see [`LazyNode`](@ref) for the string types this works on). Its source text is then the
-rewritten one: replacement texts included (§4.4.2), defaults supplied (§3.3.2), values reduced
-(§3.3.3). Reported *values* are normalized either way.
+rewritten one: line ends in LF, since §2.11 normalizes them before the declarations apply,
+replacement texts included (§4.4.2), defaults supplied (§3.3.2), values reduced (§3.3.3).
+Reported *values* are normalized either way.
 """
 function sourcetext(n::LazyNode)
     nt = n.nodetype
@@ -488,8 +501,9 @@ The node's document source with the node's own text replaced by `replacement` �
 entirely by default. This is the packaged, multi-byte-safe form of splicing around
 [`sourcespan`](@ref): `Base.splice!`'s remove-and-insert, applied to the retained source
 and returning a new `String` (nothing is mutated). The retained source is the one
-[`sourcespan`](@ref) describes: a `LazyNode` keeps the line ends of the text it was given, and
-a `FlatNode`, which normalizes its copy of the source when it reads it in, gives LF.
+[`sourcespan`](@ref) describes: a `LazyNode` keeps the line ends of the text it was given,
+unless the declarations of its DOCTYPE change it (see [`sourcetext`](@ref)), and a
+`FlatNode`, which normalizes its copy of the source when it reads it in, gives LF.
 
 Defined for the two source-retaining readers (`LazyNode`, `FlatNode`).
 """
@@ -546,6 +560,7 @@ mutable struct LazyChildIterator{S <: AbstractString}
     const t::Tokenizer{S}
     state::TokenizerState
     phase::UInt8  # _CI_READY / _CI_PENDING / _CI_DONE
+    const normalized::Bool        # the flag of the parent, given to each child
 end
 
 Base.IteratorSize(::Type{<:LazyChildIterator}) = Base.SizeUnknown()
@@ -570,20 +585,20 @@ See also [`children`](@ref), which returns a `Vector{LazyNode}`.
     t = Tokenizer(n.data, _lazy_pos(n))
     st = _init_state(t)
     if nt === Document
-        return LazyChildIterator{S}(n.data, t, st, _CI_READY)
+        return LazyChildIterator{S}(n.data, t, st, _CI_READY, n.normalized)
     elseif nt === Element
         while true
             r = iterate(t, st)
             isnothing(r) && break
             tok, st = r
             if tok.kind === TokenKinds.SELF_CLOSE
-                return LazyChildIterator{S}(n.data, t, st, _CI_DONE)
+                return LazyChildIterator{S}(n.data, t, st, _CI_DONE, n.normalized)
             elseif tok.kind === TokenKinds.TAG_CLOSE
-                return LazyChildIterator{S}(n.data, t, st, _CI_READY)
+                return LazyChildIterator{S}(n.data, t, st, _CI_READY, n.normalized)
             end
         end
     end
-    LazyChildIterator{S}(n.data, t, st, _CI_DONE)
+    LazyChildIterator{S}(n.data, t, st, _CI_DONE, n.normalized)
 end
 
 # eachelement's generic definition filters children(node); for LazyNode, build on the
@@ -660,7 +675,7 @@ end
         end
         ci.state = st
         ci.phase = newphase
-        return (LazyNode(ci.data, tok, nt), nothing)
+        return (LazyNode(ci.data, tok, nt, ci.normalized), nothing)
     end
 end
 
@@ -699,11 +714,11 @@ end
     if k === TokenKinds.TEXT
         nxt = iterate(iter)
         (isnothing(nxt) || nxt[1].kind !== TokenKinds.CLOSE_TAG) && return nothing
-        return _decode(tok, n.data)
+        return _decode(tok, n.data, n.normalized)
     elseif k === TokenKinds.CDATA_OPEN
         r = iterate(iter)
         (isnothing(r) || r[1].kind !== TokenKinds.CDATA_CONTENT) && return nothing
-        content = _read_eol(raw(r[1], n.data))
+        content = _read_eol(raw(r[1], n.data), n.normalized)
         r = iterate(iter)
         (isnothing(r) || r[1].kind !== TokenKinds.CDATA_CLOSE) && return nothing
         r = iterate(iter)
@@ -730,14 +745,14 @@ function string_value(n::LazyNode)
     for tok in _LazyTexts(n)
         k == 0 && (first = tok)
         k += 1
-        m += _lazy_text_size(tok, n.data)
+        m += _lazy_text_size(tok, n.data, n.normalized)
     end
     k == 0 && return _lazy_empty(n)
-    k == 1 && return _lazy_text(first, n.data)
+    k == 1 && return _lazy_text(first, n.data, n.normalized)
     out = Base._string_n(m)
     i = 1
     for tok in _LazyTexts(n)
-        s = _read_eol(raw(tok, n.data))
+        s = _read_eol(raw(tok, n.data), n.normalized)
         if tok.kind === TokenKinds.TEXT && tok.has_entities
             buf, len, _ = _decode_to_scratch!(codeunits(s), ncodeunits(s))
             i = _sv_put!(out, i, buf, len)
@@ -779,10 +794,11 @@ end
 
 # A text as `value` gives it, and its size once decoded: a reference is decoded into the
 # scratch buffer of `unescape`, which allocates nothing.
-@inline _lazy_text(tok::Token, data) =
-    tok.kind === TokenKinds.TEXT ? _decode(tok, data) : _read_eol(raw(tok, data))
-@inline function _lazy_text_size(tok::Token, data)
-    s = _read_eol(raw(tok, data))
+@inline _lazy_text(tok::Token, data, normalized::Bool) =
+    tok.kind === TokenKinds.TEXT ? _decode(tok, data, normalized) :
+                                   _read_eol(raw(tok, data), normalized)
+@inline function _lazy_text_size(tok::Token, data, normalized::Bool)
+    s = _read_eol(raw(tok, data), normalized)
     tok.kind === TokenKinds.TEXT && tok.has_entities || return ncodeunits(s)
     return _decode_to_scratch!(codeunits(s), ncodeunits(s))[2]
 end
@@ -801,7 +817,7 @@ Base.length(n::LazyNode) = length(children(n))
 
 #-----------------------------------------------------------------------------# parse / read
 Base.parse(::Type{LazyNode}, xml::AbstractString) = parse(xml, LazyNode)
-Base.parse(xml::AbstractString, ::Type{LazyNode}) = _lazynode_at(_apply_declarations(_drop_bom(xml)), Document)
+Base.parse(xml::AbstractString, ::Type{LazyNode}) = LazyNode(_drop_bom(xml), Document)
 
 Base.read(filename::AbstractString, ::Type{LazyNode}) = parse(String(_normalize_bom(read(filename))), LazyNode)
 Base.read(io::IO, ::Type{LazyNode}) = parse(String(_normalize_bom(read(io))), LazyNode)

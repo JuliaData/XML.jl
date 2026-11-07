@@ -137,9 +137,13 @@ end
 function _subset_declarations(body::AbstractString, standalone::Bool = false,
                               strict::Union{Nothing, _StrictRecord} = nothing,
                               budget::_Budget = _Budget(ncodeunits(body)))
-    lb = findfirst('[', body)
-    lb === nothing && return nothing
-    s = String(body)
+    findfirst('[', body) === nothing && return nothing
+    # §2.11 normalizes the internal subset with the rest of the document, before parsing:
+    # the literal texts of its declarations have their line ends normalized, and only a
+    # character reference gives a CR.
+    s = XMLTokenizer._findbyte(body, UInt8('\r'), 1) === nothing ? String(body) :
+        _rewrite_content_eol(body)
+    lb = findfirst('[', s)
     r = _SubsetReader(Dict{String, String}(), Dict{String, String}(),
                       Dict{String, Vector{_DeclaredAttr}}(), standalone, String[], budget, false,
                       strict)
@@ -417,14 +421,50 @@ _check_written(::Nothing, ::Int) = nothing
     end
 end
 
+# The document's own text, copied into the rewrite with its line ends normalized (§2.11):
+# each CR LF pair and each lone CR is written as one LF. No span ends on the CR of a pair:
+# a walk cuts before a quote, a `>`, a `/` or an `&`, or where a text starts, just after
+# a `>`.
+function _write_doc!(io::IOBuffer, s::AbstractString)
+    n = ncodeunits(s)
+    i = 1
+    while i <= n
+        j = XMLTokenizer._findbyte(s, UInt8('\r'), i)
+        if j === nothing
+            Base.write(io, SubString(s, i))
+            return nothing
+        end
+        j > i && Base.write(io, SubString(s, i, prevind(s, j)))
+        Base.write(io, UInt8('\n'))
+        i = j + 1
+        i <= n && codeunit(s, i) == UInt8('\n') && (i += 1)
+    end
+    return nothing
+end
+
+# A span that a walk copies as it stands. The document's own text is written with its line
+# ends normalized; an entity's text, whose literal line ends were normalized when the
+# internal subset was read, keeps the CRs that its character references give.
+@inline _copy_span!(io::IOBuffer, s::AbstractString, entity::Bool) =
+    entity ? (Base.write(io, s); nothing) : _write_doc!(io, s)
+
 # §3.3.3 reads each white space character of an attribute value as one space. The readers do
-# that for the value as written, with the CR LF pair already one line end (§2.11); a character
-# that comes from an entity's text is written here as the space it reads as, so that a CR LF
-# pair there gives two spaces (W3C valid-sa-110). `entity` says the span is an entity's text.
+# that for the value as written, with the CR LF pair already one line end (§2.11), so the
+# document's own text is written with its line ends normalized; a character that comes from
+# an entity's text is written here as the space it reads as, so that a CR LF pair there
+# gives two spaces (W3C valid-sa-110). `entity` says the span is an entity's text.
 function _write_span!(io::IOBuffer, s::AbstractString, literal::Bool, entity::Bool = false)
-    literal || return Base.write(io, s)
+    literal || return _copy_span!(io, s, entity)
+    cr = false                                       # the last character was a CR
     for c in s
-        _write_literal(io, entity && (c == '\t' || c == '\n' || c == '\r') ? ' ' : c, true)
+        if entity
+            _write_literal(io, (c == '\t' || c == '\n' || c == '\r') ? ' ' : c, true)
+        elseif c == '\n' && cr                       # the LF of a pair, written with its CR
+            cr = false
+        else
+            cr = c == '\r'
+            _write_literal(io, cr ? '\n' : c, true)
+        end
     end
 end
 
@@ -595,21 +635,39 @@ text node holding `<`: the parser reads the rewritten document and builds the no
 
 Only content, start tags and attribute values are rewritten. A reference inside a comment, a
 CDATA section, a processing instruction or the internal subset is not a reference (§4.4.2
-recognises them in content and in attribute values), so those spans are copied byte for byte.
+recognises them in content and in attribute values), so those spans are copied as they
+stand, with only their line ends normalized (see below).
 
 A document that declares nothing costs one probe of its prolog and is returned as it stands, and
-so is one whose walk changes nothing: no copy is made. A rewritten document comes back as the
-type the reader was given (`_rebuild_source`); a source of a type that cannot be rebuilt
-is refused with an `ArgumentError`, only when its document needs the rewrite.
+so is one whose walk changes nothing. A rewritten document comes back as the type the reader
+was given (`_rebuild_source`); a source of a type that cannot be rebuilt is refused with an
+`ArgumentError`, only when its document needs the rewrite.
+
+The rewrite has its line ends normalized. §2.11 normalizes them "on input, before parsing",
+the internal subset included, and §4.5 resolves the character references of an entity's
+text when it is declared. The internal subset is read with its line ends normalized, and
+each span of the document that the walk copies is written with them normalized
+(`_write_doc!`), while the text of an entity keeps the CRs that its references give. The
+rewrite thus holds a CR only where a reference wrote one, and the document is copied once.
 """
-function _apply_declarations(s::AbstractString)
+_apply_declarations(s::AbstractString) = first(_declared_source(s))
+
+"""
+    _declared_source(src) -> (source, rewritten::Bool)
+
+What `_apply_declarations` returns, and whether it is the rewritten copy. A reader that
+normalizes line ends value by value, as `LazyNode` and `Cursor` do, must not normalize the
+values of that copy: its line ends are already normalized, and a CR left in it comes from a
+character reference, which stays.
+"""
+function _declared_source(s::AbstractString)
     d = _declarations(s)
-    d === nothing && return s
+    d === nothing && return (s, false)
     bytes = _rewritten_bytes(s, d)
-    bytes === nothing && return s
+    bytes === nothing && return (s, false)
     rebuilt = _rebuild_source(s, bytes)
     rebuilt === nothing && _unrebuildable(s)
-    rebuilt
+    return (rebuilt, true)
 end
 
 @noinline _unrebuildable(s::AbstractString) = throw(ArgumentError(
@@ -727,7 +785,7 @@ function _rewrite_tags(s::AbstractString, attrs::Dict{String, Vector{_DeclaredAt
                         att = current[a]
                         (written[a] || att.supplied === nothing) && continue
                         out === nothing && (out = _rewrite_buffer(n))
-                        Base.write(out, SubString(s, pos, prevind(s, k)))
+                        _write_doc!(out, SubString(s, pos, prevind(s, k)))
                         Base.write(out, ' ', att.name, "=\"", att.supplied, '"')
                         _check_written(budget, out.size)
                         pos = k
@@ -768,14 +826,14 @@ function _rewrite_tags(s::AbstractString, attrs::Dict{String, Vector{_DeclaredAt
             inner = SubString(s, v0 + 1, prevind(s, v1))
             _changes_when_reduced(inner, nothing) || continue
             out === nothing && (out = _rewrite_buffer(n))
-            Base.write(out, SubString(s, pos, v0))
+            _write_doc!(out, SubString(s, pos, v0))
             _write_reduced!(out, inner, nothing, q, 1)
             pos = v1
         end
         i = _findbyte_cu(s, cu, UInt8('<'), k)
     end
     out === nothing && return (true, nothing)
-    pos <= n && Base.write(out, SubString(s, pos))
+    pos <= n && _write_doc!(out, SubString(s, pos))
     (true, take!(out))
 end
 
@@ -866,7 +924,7 @@ function _rewrite_walk!(out::Union{Nothing, IOBuffer}, s::AbstractString, d::_De
             _changes_when_reduced(inner, ents) || continue
             start = tok.offset - base + 1
             out === nothing && (out = _rewrite_buffer(ncodeunits(s)))
-            Base.write(out, SubString(s, pos, prevind(s, start)))
+            _copy_span!(out, SubString(s, pos, prevind(s, start)), fragment)
             q = codeunit(span, 1)
             Base.write(out, q)
             _write_reduced!(out, inner, ents, q, depth)
@@ -880,7 +938,7 @@ function _rewrite_walk!(out::Union{Nothing, IOBuffer}, s::AbstractString, d::_De
                 a = current[i]
                 (written[i] || a.supplied === nothing) && continue
                 out === nothing && (out = _rewrite_buffer(ncodeunits(s)))
-                Base.write(out, SubString(s, pos, prevind(s, start)))
+                _copy_span!(out, SubString(s, pos, prevind(s, start)), fragment)
                 Base.write(out, ' ', a.name, "=\"", a.supplied, '"')
                 _check_written(d.budget, out.size)
                 pos = start
@@ -899,7 +957,7 @@ function _rewrite_walk!(out::Union{Nothing, IOBuffer}, s::AbstractString, d::_De
         end
         start = tok.offset - base + 1
         out === nothing && (out = _rewrite_buffer(ncodeunits(s)))
-        Base.write(out, SubString(s, pos, prevind(s, start)))
+        _copy_span!(out, SubString(s, pos, prevind(s, start)), fragment)
         if tok.kind === XMLTokenizer.TokenKinds.ATTR_VALUE
             # the span carries its delimiters; only what they enclose is expanded, in literal
             q = span[firstindex(span)]
@@ -913,7 +971,7 @@ function _rewrite_walk!(out::Union{Nothing, IOBuffer}, s::AbstractString, d::_De
         pos = start + tok.ncodeunits
     end
     out === nothing && return nothing
-    pos <= ncodeunits(s) && Base.write(out, SubString(s, pos))
+    pos <= ncodeunits(s) && _copy_span!(out, SubString(s, pos), fragment)
     out
 end
 

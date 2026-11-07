@@ -410,7 +410,9 @@ end
 #     a view of the rewritten `String`;
 #   - `Cursor` and `LazyNode` read their source where it lies, whatever its type, and
 #     normalize each value on the way out (`_read_eol` below): a document is never copied for
-#     its line ends, and its source text keeps them.
+#     its line ends, and its source text keeps them. A document that the declarations of its
+#     DOCTYPE rewrite is the exception: the rewrite reads it with its line ends normalized
+#     (`_declared_source`), and the reader reports the values of that copy as they stand.
 #
 # Searching each value for a CR adds a live branch to accessors whose return is a union. Some
 # shapes of that branch make the caller box the clean-path return, 32 B per value. The shape
@@ -428,14 +430,20 @@ _normalize_input_eol(s::SubString{String}) =
 # reported. Applied to the RAW span, before entity resolution, so that a `&#13;` still yields
 # a real CR — the spec normalizes line breaks first, and references resolve after. A
 # `SubString{String}` comes back as one either way, so the accessors keep a single type.
-@inline _read_eol(s::SubString{String}) =
-    XMLTokenizer._findbyte(s, UInt8('\r'), 1) === nothing ? s : _read_eol_cr(s)
-_read_eol(s::AbstractString) = occursin('\r', s) ? _rewrite_content_eol(s) : s
+#
+# `normalized` says that the source is the copy that its declarations rewrote, whose line
+# ends are already normalized: a CR found there comes from a reference, and stays. The flag
+# is read only once a CR is found: a value without one costs the search alone.
+@inline _read_eol(s::SubString{String}, normalized::Bool) =
+    XMLTokenizer._findbyte(s, UInt8('\r'), 1) === nothing ? s : _read_eol_cr(s, normalized)
+_read_eol(s::AbstractString, normalized::Bool) =
+    occursin('\r', s) && !normalized ? _rewrite_content_eol(s) : s
 
 # A value that opens on its only line break, as the indentation between two tags of a file
 # saved with CR LF does, normalizes to the view of its bytes after the CR, with no copy. Any
-# other value that holds a CR is rewritten.
-@noinline function _read_eol_cr(s::SubString{String})
+# other value that holds a CR is rewritten, unless its source is already normalized.
+@noinline function _read_eol_cr(s::SubString{String}, normalized::Bool)
+    normalized && return s
     if ncodeunits(s) >= 2 && codeunit(s, 1) == 0x0D && codeunit(s, 2) == 0x0A &&
        XMLTokenizer._findbyte(s, UInt8('\r'), 3) === nothing
         return SubString(s, 2)

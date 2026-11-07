@@ -26,6 +26,7 @@ mutable struct Cursor{S <: AbstractString}
     enclosing::Int                       # open-element count (depth bookkeeping)
     done::Bool
     held::Bool                           # peek flag: current node not yet consumed (see for_each_child!)
+    const normalized::Bool               # rewritten by its declarations (`_read_eol`)
 end
 
 """
@@ -42,10 +43,10 @@ element once, where the cursor stands. (`parse(Cursor, data)` also works.) The `
 apply the same byte-level BOM normalization as the tree readers: UTF-8 BOM strip, UTF-16 LE/BE
 transcoding.
 Like [`LazyNode`](@ref), the cursor reads a document that the declarations of its DOCTYPE
-change from a copy with these changes made, of the same string type. The copy can be made for a
-`String`, a `SubString{String}`, or a `StringView` over a byte vector `v` or over a slice
-`view(v, i:j)` of it; on any other string type, such a document raises an `ArgumentError` (see
-[`LazyNode`](@ref)). The cursor takes no `wellformed`
+change from a copy with these changes made and its line ends in LF, of the same string type.
+The copy can be made for a `String`, a `SubString{String}`, or a `StringView` over a byte
+vector `v` or over a slice `view(v, i:j)` of it; on any other string type, such a document
+raises an `ArgumentError` (see [`LazyNode`](@ref)). The cursor takes no `wellformed`
 keyword: it checks only the rules on entities and accepts mismatched tags, so read a document
 that must be checked with [`Node`](@ref) or [`FlatNode`](@ref).
 
@@ -54,17 +55,21 @@ aliasing-contract note on [`next!`](@ref).
 """
 function Cursor(data::S) where {S <: AbstractString}
     data = _drop_bom(data)   # a leading U+FEFF BOM char is an encoding signature, not content (§4.3.3)
-    # §2.11 — each value is normalized as it is read (`_read_eol`), whatever the source type
-    _cursor_at(_apply_declarations(data), 1)
+    # §2.11 — each value is normalized as it is read (`_read_eol`), whatever the source
+    # type, unless the declarations of the DOCTYPE rewrite the document (`_declared_source`)
+    d, normalized = _declared_source(data)
+    _cursor_at(d, 1, normalized)
 end
 
 # `d` arrives as the reader takes it: the declarations of its DOCTYPE applied, its line ends
-# left for `_read_eol` to normalize value by value. Nothing here scans or restarts.
+# left for `_read_eol` to normalize value by value, or already normalized when the
+# declarations rewrote it (`normalized`). Nothing here scans or restarts.
 # `Cursor{S}` is built directly, on `d`'s own type, rather than through the public
 # constructor, which would probe the document again for a BOM and for declarations to apply.
-@inline function _cursor_at(d::S, pos::Integer) where {S <: AbstractString}
+@inline function _cursor_at(d::S, pos::Integer,
+                            normalized::Bool) where {S <: AbstractString}
     st = _CURSOR_XT.StatefulTokenizer(_CURSOR_XT.Tokenizer(d, pos))
-    Cursor{S}(st, _CURSOR_XT.no_token(d), Document, 0, 0, false, false)
+    Cursor{S}(st, _CURSOR_XT.no_token(d), Document, 0, 0, false, false, normalized)
 end
 Base.parse(::Type{Cursor}, xml::AbstractString) = Cursor(xml)
 
@@ -107,7 +112,8 @@ const _CURSOR_STARTPOS_MSG = """
 
 function Cursor(data::S, startpos::Integer) where {S <: AbstractString}
     Base.depwarn(_CURSOR_STARTPOS_MSG, :Cursor)
-    _cursor_at(data, Int(startpos))   # §2.11 — line ends normalized value by value, as Cursor(data)
+    # §2.11 — line ends normalized value by value, as Cursor(data)
+    _cursor_at(data, Int(startpos), false)
 end
 
 """
@@ -120,7 +126,8 @@ probes the raw-string constructors run on their argument; it is the only place `
 `LazyNode`, and it is an optional, removable convenience (a consumer that tracks
 subtree start offsets directly can call the primitive `Cursor(data, startpos)`).
 """
-Cursor(node::LazyNode) = _cursor_at(node.data, _CURSOR_XT._data_start(node.token, node.data))
+Cursor(node::LazyNode) =
+    _cursor_at(node.data, _CURSOR_XT._data_start(node.token, node.data), node.normalized)
 
 @inline _data(c::Cursor) = c.st.t.data
 # A fresh token stream positioned at the current node — mirrors LazyNode's
@@ -207,30 +214,31 @@ end
 # `SubString` method returns concretely). For a `String`-backed document `_read_eol` is the
 # identity, so both branches stay `SubString{String}`; for any other source it widens them,
 # which is what that source costs instead of an entry-time rewrite.
-@inline _cursor_decode(tok, data) =
-    tok.has_entities ? unescape(_read_eol(raw(tok, data))) : _read_eol(raw(tok, data))
+@inline _cursor_decode(tok, data, normalized::Bool) =
+    tok.has_entities ? unescape(_read_eol(raw(tok, data), normalized)) :
+                       _read_eol(raw(tok, data), normalized)
 
 # @inline: keeps the union return caller-splittable — see the note on `value(::LazyNode)`.
 @inline function value(c::Cursor)
     nt = c.nodetype
     if nt === Text
-        return _cursor_decode(c.token, _data(c))
+        return _cursor_decode(c.token, _data(c), c.normalized)
     elseif nt === Comment
         it = _rescan(c); iterate(it)            # COMMENT_OPEN
-        return _read_eol(raw(iterate(it)[1], _data(c)))
+        return _read_eol(raw(iterate(it)[1], _data(c)), c.normalized)
     elseif nt === CData
         it = _rescan(c); iterate(it)            # CDATA_OPEN
-        return _read_eol(raw(iterate(it)[1], _data(c)))
+        return _read_eol(raw(iterate(it)[1], _data(c)), c.normalized)
     elseif nt === DTD
         it = _rescan(c); iterate(it)            # DOCTYPE_OPEN
         # strip, then normalize: the same text, in the types the branches above return
-        return _read_eol(lstrip(raw(iterate(it)[1], _data(c))))
+        return _read_eol(lstrip(raw(iterate(it)[1], _data(c))), c.normalized)
     elseif nt === ProcessingInstruction
         it = _rescan(c); iterate(it)            # PI_OPEN
         r = iterate(it)
         r === nothing && return nothing
         r[1].kind === _CURSOR_XT.TokenKinds.PI_CONTENT || return nothing
-        content = _read_eol(lstrip(raw(r[1], _data(c))))
+        content = _read_eol(lstrip(raw(r[1], _data(c))), c.normalized)
         return isempty(content) ? nothing : content
     end
     nothing
@@ -400,11 +408,11 @@ end
     if tok.kind === _CURSOR_XT.TokenKinds.TEXT
         nxt = iterate(it)
         (nxt === nothing || nxt[1].kind !== _CURSOR_XT.TokenKinds.CLOSE_TAG) && return nothing
-        return _cursor_decode(tok, _data(c))
+        return _cursor_decode(tok, _data(c), c.normalized)
     elseif tok.kind === _CURSOR_XT.TokenKinds.CDATA_OPEN
         r = iterate(it)
         (r === nothing || r[1].kind !== _CURSOR_XT.TokenKinds.CDATA_CONTENT) && return nothing
-        content = _read_eol(raw(r[1], _data(c)))
+        content = _read_eol(raw(r[1], _data(c)), c.normalized)
         r = iterate(it)
         (r === nothing || r[1].kind !== _CURSOR_XT.TokenKinds.CDATA_CLOSE) && return nothing
         r = iterate(it)
@@ -437,7 +445,7 @@ end
 #-----------------------------------------------------------------------------# snapshot (bridge to DOM)
 # The ONE place that references `LazyNode` — a one-way, optional bridge for
 # storing the current position. The cursor's own operation never depends on it.
-LazyNode(c::Cursor) = LazyNode(_data(c), c.token, c.nodetype)
+LazyNode(c::Cursor) = LazyNode(_data(c), c.token, c.nodetype, c.normalized)
 
 #-----------------------------------------------------------------------------# traversal
 """
