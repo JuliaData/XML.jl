@@ -742,6 +742,7 @@ const _SKIP_ELEMENT_RAW_MSG = """
 
 # Once per session: `Base.depwarn` takes a backtrace on every call, even after its message is
 # shown, which costs hundreds of microseconds under `--depwarn=yes` (as `Pkg.test` runs).
+# `XML.__init__` lowers the flag at each load.
 const _SKIP_ELEMENT_RAW_WARNED = Ref(false)
 
 # The lenient form, kept for callers outside the package that stepped over an element with it:

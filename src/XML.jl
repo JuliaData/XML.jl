@@ -9,7 +9,8 @@ export
     is_simple, simple_value, is_simple_value, string_value,
     sourcetext, sourcespan, splicetext,
     depth, siblings, issamenode,
-    Cursor, next!, for_each_child, @for_each_child, skip_element!, eachattribute!, eof,
+    Cursor, next!, for_each_child!, @for_each_child!, skip_element!, eachattribute!, eof,
+    for_each_child, @for_each_child,    # deprecated, to be removed in v0.5
     xpath,
     h
 
@@ -129,6 +130,17 @@ function parse_dtd(args...)
         the readers apply the declarations of its internal subset themselves."""
     Base.depwarn(msg, :parse_dtd)
     error(msg)
+end
+
+#-----------------------------------------------------------------------------# __init__
+# A flag that makes a deprecation warn once per session starts each session lowered. Raised
+# while the package is precompiled, by a precompile workload for instance, it would be saved
+# raised in the package image, and the warning would never show. Each such flag is lowered
+# here.
+function __init__()
+    _FOR_EACH_CHILD_MACRO_WARNED[] = false
+    XMLTokenizer._SKIP_ELEMENT_RAW_WARNED[] = false
+    return nothing
 end
 
 end # module XML

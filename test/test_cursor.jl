@@ -1,5 +1,5 @@
 using Test, XML
-using XML: Cursor, next!, for_each_child, @for_each_child, skip_element!, eof, nodetype,
+using XML: Cursor, next!, for_each_child!, @for_each_child!, skip_element!, eof, nodetype,
            tag, value, attributes, depth, children, Element, Text, CData, Comment,
            ProcessingInstruction, Declaration, DTD, LazyNode, is_simple_value, is_simple,
            simple_value
@@ -29,16 +29,49 @@ using XML: Cursor, next!, for_each_child, @for_each_child, skip_element!, eof, n
         @test next!(c) === nothing          # idempotent at eof
     end
 
-    @testset "for_each_child yields immediate children only" begin
+    @testset "for_each_child! yields immediate children only" begin
         doc = """<r><a><deep/></a><c/><e/></r>"""
         c = parse(Cursor, doc)
         next!(c)                            # position at <r>
         @test String(tag(c)) == "r"
         kids = String[]
-        for_each_child(c) do ch
+        for_each_child!(c) do ch
             push!(kids, String(tag(ch)))
         end
         @test kids == ["a", "c", "e"]       # <deep> is a grandchild, excluded
+    end
+
+    # The old names walk the same way, and warn when they run, until they go in v0.5.
+    @testset "for_each_child and @for_each_child: deprecated names of the same walk" begin
+        # <z/> follows the subtree of <r>: the walk stops on it, and holds it for the next
+        # next!, as the new names do.
+        doc = "<d><r><a><deep/></a><c/><e/></r><z/></d>"
+        at_r() = (c = parse(Cursor, doc); next!(c); next!(c); c)
+        holds_z(c) = tag(c) == "z" && next!(c) !== nothing && tag(c) == "z"
+        kids = String[]
+        cur = at_r()
+        @test_deprecated XML.for_each_child(ch -> push!(kids, String(tag(ch))), cur)
+        @test kids == ["a", "c", "e"]
+        @test holds_z(cur)
+
+        # The macro warns when its loop runs, not when a call to it is expanded, and once
+        # per session: `XML.__init__` lowers its flag at each load.
+        kids = String[]
+        cur = at_r()
+        call = :(XML.@for_each_child $cur ch push!($kids, String(tag(ch))))
+        loop = @test_logs macroexpand(@__MODULE__, call)
+        XML._FOR_EACH_CHILD_MACRO_WARNED[] = false
+        @test_deprecated eval(loop)
+        @test kids == ["a", "c", "e"]
+        @test holds_z(cur)
+        again = macroexpand(@__MODULE__, :(XML.@for_each_child $(at_r()) ch nothing))
+        @test_logs eval(again)
+        XML.__init__()
+        @test !XML._FOR_EACH_CHILD_MACRO_WARNED[]
+
+        @test_logs XML.for_each_child!(ch -> nothing, at_r())
+        newloop = macroexpand(@__MODULE__, :(XML.@for_each_child! $(at_r()) ch nothing))
+        @test_logs eval(newloop)
     end
 
     @testset "attributes + get" begin
@@ -90,14 +123,14 @@ using XML: Cursor, next!, for_each_child, @for_each_child, skip_element!, eof, n
         @test eltype(eachattribute!(c)) == Pair{SubString{String}, SubString{String}}
         @test collect(eachattribute!(c)) == ["a" => "1"]
 
-        # Under for_each_child, with skip_element!, and on a node that an inner sweep holds.
+        # Under for_each_child!, with skip_element!, and on a node an inner sweep holds.
         c = Cursor("<r><a x=\"1\"><b y=\"2\"/></a><s z=\"3\"><t/></s><n w=\"4\"/></r>")
         next!(c)
         seen = Pair{String, Vector{Pair{SubString{String}, SubString{String}}}}[]
-        for_each_child(c) do ch
+        for_each_child!(c) do ch
             t = String(tag(ch))     # `ch` is the cursor: the inner sweep moves it on
             push!(seen, t => collect(eachattribute!(ch)))
-            t == "a" && for_each_child(g -> push!(seen, tag(g) => collect(eachattribute!(g))), ch)
+            t == "a" && for_each_child!(g -> push!(seen, tag(g) => collect(eachattribute!(g))), ch)
             t == "s" && skip_element!(ch)
         end
         @test seen == ["a" => ["x" => "1"], "b" => ["y" => "2"], "s" => ["z" => "3"], "n" => ["w" => "4"]]
@@ -214,19 +247,19 @@ using XML: Cursor, next!, for_each_child, @for_each_child, skip_element!, eof, n
         @test next!(c) === nothing
     end
 
-    @testset "nested for_each_child composes (DFS), incl. minified" begin
-        # Regression: a consume-on-break for_each_child skipped the *second* subtree of
+    @testset "nested for_each_child! composes (DFS), incl. minified" begin
+        # Regression: a consume-on-break for_each_child! skipped the *second* subtree of
         # a parent when there was no inter-element whitespace to buffer the boundary node
         # (the boundary node was consumed by the enclosing sweep's next!). The peekable
         # `held` flag holds the boundary node so composition is correct for any input.
         function folders(doc)
             c = parse(Cursor, doc); next!(c)        # position at <Document>
             out = Tuple{String,Vector{String}}[]
-            for_each_child(c) do _
+            for_each_child!(c) do _
                 nodetype(c) === Element || return
                 ftag = String(tag(c))               # capture before descending (aliasing contract)
                 kids = String[]
-                for_each_child(c) do _
+                for_each_child!(c) do _
                     nodetype(c) === Element && push!(kids, String(tag(c)))
                 end
                 push!(out, (ftag, kids))
@@ -244,12 +277,12 @@ using XML: Cursor, next!, for_each_child, @for_each_child, skip_element!, eof, n
         # 3-level DFS, minified
         c = parse(Cursor, "<D><F><P><a/><b/></P><P><c/></P></F></D>"); next!(c)
         deep = Tuple{String,Vector{String}}[]
-        for_each_child(c) do _               # F
+        for_each_child!(c) do _              # F
             nodetype(c) === Element || return
-            for_each_child(c) do _           # P
+            for_each_child!(c) do _          # P
                 nodetype(c) === Element || return
                 ptag = String(tag(c)); ks = String[]
-                for_each_child(c) do _
+                for_each_child!(c) do _
                     nodetype(c) === Element && push!(ks, String(tag(c)))
                 end
                 push!(deep, (ptag, ks))
@@ -267,7 +300,7 @@ using XML: Cursor, next!, for_each_child, @for_each_child, skip_element!, eof, n
         @test String(tag(c)) == "a"
         @test depth(c) == 1
         kids = String[]
-        @for_each_child c ch begin
+        @for_each_child! c ch begin
             nodetype(ch) === Element && push!(kids, String(tag(ch)))
         end
         @test kids == ["x", "y"]          # b is a's sibling, outside the subtree → excluded
@@ -279,24 +312,24 @@ using XML: Cursor, next!, for_each_child, @for_each_child, skip_element!, eof, n
         next!(c2)
         @test String(tag(c2)) == "a"
         kids2 = String[]
-        @for_each_child c2 ch begin
+        @for_each_child! c2 ch begin
             nodetype(ch) === Element && push!(kids2, String(tag(ch)))
         end
         @test kids2 == ["x", "y"]
     end
 
-    @testset "@for_each_child inlines (accumulates locals without a closure)" begin
+    @testset "@for_each_child! inlines (accumulates locals without a closure)" begin
         # The macro body assigns enclosing locals directly — the case a do-block
         # would box. Verify correctness of such accumulation, nested + minified.
         doc = "<D><F><P><name>A</name><Point/></P><P><name>B</name></P></F></D>"
         c = parse(Cursor, doc); next!(c)              # at <D>
         placemarks = Tuple{Int,Bool}[]                # (child_element_count, saw_name)
-        @for_each_child c f begin                     # F
+        @for_each_child! c f begin                    # F
             nodetype(f) === Element || continue
-            @for_each_child c p begin                 # P
+            @for_each_child! c p begin                # P
                 nodetype(p) === Element || continue
                 n = 0; saw_name = false               # locals mutated inside the inner macro body
-                @for_each_child c g begin
+                @for_each_child! c g begin
                     if nodetype(g) === Element
                         n += 1
                         tag(g) == "name" && (saw_name = true)
@@ -309,19 +342,19 @@ using XML: Cursor, next!, for_each_child, @for_each_child, skip_element!, eof, n
     end
 
     @testset "skip_element! skips a subtree (robust: CDATA/comment/quoted/nested)" begin
-        # skip_element! must leave the cursor exactly where for_each_child's full walk
+        # skip_element! must leave the cursor exactly where for_each_child!'s full walk
         # would on the next sibling — but without tokenizing the skipped subtree, even
         # when it contains a literal </tag> inside CDATA/comments or a > inside an attr.
         kids_plain(doc) = begin
             c = parse(Cursor, doc); next!(c); t = String[]
-            for_each_child(c) do _
+            for_each_child!(c) do _
                 nodetype(c) === Element && push!(t, String(tag(c)))
             end
             t
         end
         kids_skip(doc) = begin
             c = parse(Cursor, doc); next!(c); t = String[]
-            for_each_child(c) do _
+            for_each_child!(c) do _
                 if nodetype(c) === Element
                     push!(t, String(tag(c)))
                     skip_element!(c)
