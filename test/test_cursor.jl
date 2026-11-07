@@ -43,20 +43,27 @@ using XML: Cursor, next!, for_each_child!, @for_each_child!, skip_element!, eof,
 
     # The old names walk the same way, and warn when they run, until they go in v0.5.
     @testset "for_each_child and @for_each_child: deprecated names of the same walk" begin
-        doc = "<r><a><deep/></a><c/><e/></r>"
-        at_r() = (c = parse(Cursor, doc); next!(c); c)
+        # <z/> follows the subtree of <r>: the walk stops on it, and holds it for the next
+        # next!, as the new names do.
+        doc = "<d><r><a><deep/></a><c/><e/></r><z/></d>"
+        at_r() = (c = parse(Cursor, doc); next!(c); next!(c); c)
+        holds_z(c) = tag(c) == "z" && next!(c) !== nothing && tag(c) == "z"
         kids = String[]
-        @test_deprecated XML.for_each_child(ch -> push!(kids, String(tag(ch))), at_r())
+        cur = at_r()
+        @test_deprecated XML.for_each_child(ch -> push!(kids, String(tag(ch))), cur)
         @test kids == ["a", "c", "e"]
+        @test holds_z(cur)
 
         # The macro warns when its loop runs, not when a call to it is expanded, and once
         # per session: `XML.__init__` lowers its flag at each load.
         kids = String[]
-        call = :(XML.@for_each_child $(at_r()) ch push!($kids, String(tag(ch))))
+        cur = at_r()
+        call = :(XML.@for_each_child $cur ch push!($kids, String(tag(ch))))
         loop = @test_logs macroexpand(@__MODULE__, call)
         XML._FOR_EACH_CHILD_MACRO_WARNED[] = false
         @test_deprecated eval(loop)
         @test kids == ["a", "c", "e"]
+        @test holds_z(cur)
         again = macroexpand(@__MODULE__, :(XML.@for_each_child $(at_r()) ch nothing))
         @test_logs eval(again)
         XML.__init__()
