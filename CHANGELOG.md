@@ -23,6 +23,8 @@ With the changes below, the same call can give another result than with v0.4.8.
 
 - **`:strict` refuses a name that breaks the Name rule** ([#181](https://github.com/JuliaData/XML.jl/issues/181)) of [XML 1.0 §2.3](https://www.w3.org/TR/xml/#sec-common-syn), for an element, an attribute or a processing-instruction target. It refuses `<doc 12="34"/>`: no level checked attribute names. It also refuses an element name such as `·x` or `a×b`, since only the first character of a name was checked, and any character beyond ASCII passed. The other levels keep accepting them.
 
+- **`sourcetext`, `sourcespan` and `splicetext` on a `FlatNode` keep the line ends of the document** ([#195](https://github.com/JuliaData/XML.jl/issues/195)), as on a `LazyNode`. On a file saved with CR LF, they refer to the string passed to `parse`, CRs included. In v0.4.8, they referred to a copy with LF line ends, so `splicetext` changed every line of such a file. Building a `FlatNode` no longer copies a document that holds a CR: its values are normalized as they are read, and come out as before. A value with a line end within it, such as a text on two lines, is copied each time it is read, as on a `LazyNode`. An indentation is not. A document that the declarations of its DOCTYPE change is still read from a copy with LF line ends.
+
 ### Deprecated
 
 - **`for_each_child` and `@for_each_child`**, to be removed in v0.5 ([#220](https://github.com/JuliaData/XML.jl/issues/220)). Call `for_each_child!` and `@for_each_child!`, whose `!` says that they move the cursor, as `next!` does. The old names still work until then, and warn when they run under `--depwarn=yes`, as in `Pkg.test`.

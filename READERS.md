@@ -16,7 +16,7 @@ Each node, string and vector of the tree is a Julia object of its own. The garba
 
 A record holds no pointer, only positions in the source and indices into `recs` and `attrs`. The garbage collector sees `recs`, `attrs`, `spans` and the source string, not one object per node. Parsing the 14 MB document of the README, 882 026 nodes, takes 40 allocations.
 
-Here the source is the string passed to `parse`, with no copy. `parse` copies it only to normalize CR line ends, to apply what the internal subset declares, or to turn another string type into a `String`.
+Here the source is the string passed to `parse`, with no copy, CRs included: each value is normalized as it is read. `parse` copies it only to apply what the internal subset declares, to drop a byte-order mark, or to turn another string type into a `String`.
 
 ## `LazyNode`: nothing stored, handles made on access
 

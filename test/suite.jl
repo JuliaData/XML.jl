@@ -4748,9 +4748,9 @@ end
     @testset "line-end normalization (XML 1.0 §2.11)" begin
         # Literal CR and the CRLF pair in content read as LF — in character data, CDATA
         # sections, PI data, comments, and the DOCTYPE value — while CR written as a
-        # character reference (&#13;) is preserved. Normalization happens ON INPUT at every
-        # document entry point, before parsing (hence before entity resolution), uniformly
-        # across the four readers (#129).
+        # character reference (&#13;) is preserved. All four readers do so: `Node`
+        # normalizes its copy of the document at the entry, and the others each value as
+        # they read it, both before entity resolution.
         function content_by_reader(xml)
             n = value(only(children(only(elements(parse(xml, Node))))))
             l = value(only(children(only(elements(parse(xml, LazyNode))))))
@@ -4778,6 +4778,9 @@ end
 
         @testset "CDATA sections normalize, without entity decoding" begin
             @test all(==("p\nq&amp;"), content_by_reader("<a><![CDATA[p\r\nq&amp;]]></a>"))
+            for R in (Node, LazyNode, FlatNode)                   # joined with a text, too
+                @test string_value(only(elements(parse("<a>x<![CDATA[p\r\nq&amp;]]></a>", R)))) == "xp\nq&amp;"
+            end
         end
 
         @testset "PI data and comments normalize" begin
@@ -4818,8 +4821,8 @@ end
         end
 
         @testset "input normalization: CR-free documents pass through untouched" begin
-            # `Node` and `FlatNode` run §2.11 on input (one scan, one rewrite when dirty); the
-            # lazy readers normalize value by value (see _normalize_input_eol's note)
+            # `Node` runs §2.11 on input (one scan, one rewrite when dirty); the other
+            # readers normalize value by value (see _normalize_input_eol's note)
             clean = "no carriage returns here"
             @test XML._normalize_input_eol(clean) === clean          # identity, not a copy
             @test XML._normalize_input_eol("p\r\nq\rr") == "p\nq\nr"
@@ -4884,17 +4887,20 @@ end
             end
         end
 
-        @testset "the lazy readers read a String in place" begin
-            # `Cursor` and `LazyNode` take a `String` as it is and normalize each value as
-            # they read it, so their source text is the caller's, CRs included. `Node` and
-            # `FlatNode` copy their source, and normalize it once at the entry.
+        @testset "Cursor, LazyNode and FlatNode read a String in place" begin
+            # `Cursor`, `LazyNode` and `FlatNode` take a `String` as it is and normalize
+            # each value as they read it, so their source text is the caller's, CRs
+            # included. `Node` copies its source, and normalizes it once at the entry.
             crlf = "<r a=\"x\r\ny\">t\r\nu<e>v\rw</e><!--c\r\nd--></r>"
-            r = only(elements(parse(crlf, LazyNode)))
-            @test sourcetext(r) == crlf
-            @test crlf[sourcespan(r)] == sourcetext(r)
-            @test r["a"] == "x y"
-            @test [String(value(x)) for x in children(r) if nodetype(x) !== Element] == ["t\nu", "c\nd"]
-            @test value(only(children(only(elements(r))))) == "v\nw"
+            for R in (LazyNode, FlatNode)
+                r = only(elements(parse(crlf, R)))
+                @test sourcetext(r) == crlf
+                @test crlf[sourcespan(r)] == sourcetext(r)
+                @test r["a"] == "x y"
+                vals = [String(value(x)) for x in children(r) if nodetype(x) !== Element]
+                @test vals == ["t\nu", "c\nd"]
+                @test value(only(children(only(elements(r))))) == "v\nw"
+            end
             c = Cursor(crlf)
             vals = String[]
             while next!(c) !== nothing
@@ -4915,6 +4921,31 @@ end
             @test text_values("<r>\r\n\r\n</r>") == ["\n\n"]
             @test text_values("<r>\r x</r>") == ["\n x"]
             @test text_values("<r>\r\nx\ry</r>") == ["\nx\ny"]
+
+            # `FlatNode` searches for a CR only in the values that start before the last CR
+            # of the document, which it finds once, when it is built. On each side of that
+            # CR, its values are those of `Node`, which normalizes the whole document at the
+            # entry.
+            function values_of(n, out = String[])
+                v = value(n)
+                v === nothing || push!(out, String(v))
+                for c in children(n)
+                    values_of(c, out)
+                end
+                out
+            end
+            for doc in ("<r>a\r\nb</r>",                          # a single CR, in a value
+                        "<?xml version=\"1.0\"?>\r\n<r>a</r>",     # a single CR, before the root
+                        "<r>x\r\ny<e/>z\r\nw</r>",                 # the last CR in a later value
+                        "<r>\r\n<a>x\r\ny</a>\r\n</r>",            # a value that opens on it
+                        "<r>x\r</r>",                              # a value that ends on it
+                        "<r>\r x</r>",                             # a lone CR that opens a value
+                        "<r>\r</r>",                               # a value that is a lone CR
+                        "<r>\r\nx\ry</r>",                         # CR LF first, then a CR
+                        "<r>a\r\nb<e\r\n/>c</r>",                  # the last CR in a tag
+                        "<r>a&amp;\r\nb<e>x&amp;y</e>\r\n</r>")    # references, with a CR or not
+                @test values_of(parse(doc, FlatNode)) == values_of(parse(doc, Node))
+            end
         end
 
         @testset "an entity's text: line ends first, then the declarations" begin
@@ -5848,24 +5879,28 @@ Base.thisind(w::WrappedSource, i::Int) = thisind(w.s, i)
     end
 
     @testset "line ends normalize on read, whatever the value-producing accessor" begin
-        # The lazy readers rewrite no document at its entry, so each value is normalized as it
-        # is reported (XML 1.0 §2.11). This walks the whole matrix rather
-        # than a written-out list — every node kind that carries a value, through both lazy
-        # readers, from both a String and a non-String source — so a kind added later, or an
-        # accessor left unwired, fails here instead of quietly returning raw CRs.
+        # `Cursor`, `LazyNode` and `FlatNode` rewrite no document at its entry, so each
+        # value is normalized as it is reported (XML 1.0 §2.11). This walks the whole
+        # matrix rather than a written-out list: every node kind that carries a value,
+        # through each of those readers, from both a String and a non-String source. A kind
+        # added later, or an accessor left unwired, then fails here instead of quietly
+        # returning raw CRs.
         crlf = "<?xml version=\"1.0\"?>\r\n<?pi a\r\nb?>\r\n<!--c\r\nd-->\r\n" *
                "<!DOCTYPE r [\r\n<!ELEMENT r ANY>\r\n]>\r\n" *
-               "<r>t\r\nu<![CDATA[x\r\ny]]></r>"
+               "<r>t&amp;\r\nu<![CDATA[x\r\ny]]></r>"
         seen = Set{XML.NodeType}()
         function assert_clean(v, kind)
             v === nothing && return
             push!(seen, kind)
             @test !occursin('\r', v)
         end
-        function walk_lazy(n)
-            assert_clean(value(n), nodetype(n))
+        function walk_tree(n)
+            nt = nodetype(n)
+            assert_clean(value(n), nt)
+            # `string_value` joins the texts of an element, each normalized as it is read
+            nt in (DTD, Declaration) || assert_clean(string_value(n), nt)
             for c in children(n)
-                walk_lazy(c)
+                walk_tree(c)
             end
         end
         for src in (crlf, SubString(crlf, 1, lastindex(crlf)), WrappedSource(crlf))
@@ -5873,7 +5908,8 @@ Base.thisind(w::WrappedSource, i::Int) = thisind(w.s, i)
             while next!(cur) !== nothing
                 assert_clean(value(cur), nodetype(cur))
             end
-            walk_lazy(parse(src, LazyNode))
+            walk_tree(parse(src, LazyNode))
+            walk_tree(parse(src, FlatNode))
         end
         # guard the guard: the probe document has to reach the value-bearing kinds
         @test Text in seen && Comment in seen && CData in seen &&
@@ -5882,22 +5918,26 @@ Base.thisind(w::WrappedSource, i::Int) = thisind(w.s, i)
         # `simple_value` / `is_simple_value` reach the token stream by their own path
         simple = "<a>p\r\nq</a>"
         for src in (simple, SubString(simple, 1, lastindex(simple)), WrappedSource(simple))
-            el = only(elements(parse(src, LazyNode)))
-            @test is_simple_value(el) == "p\nq"
-            @test simple_value(el) == "p\nq"
+            for R in (LazyNode, FlatNode)
+                el = only(elements(parse(src, R)))
+                @test is_simple_value(el) == "p\nq"
+                @test simple_value(el) == "p\nq"
+            end
             cur = Cursor(src); next!(cur)
             @test is_simple_value(cur) == "p\nq"
         end
 
-        # Attribute values reach §3.3.3 with their line ends still literal, since the lazy
-        # readers rewrite nothing at the entry, so that pass is what folds them — and it has to fold
-        # a CR LF pair to ONE space, the two rules composing as the specification orders them.
+        # Attribute values reach §3.3.3 with their line ends still literal, since these
+        # readers rewrite nothing at the entry, so that pass is what folds them. It has to
+        # fold a CR LF pair to ONE space, the two rules composing as the specification
+        # orders them.
         attrs = "<a crlf=\"p\r\nq\" lone=\"p\rq\" lf=\"p\nq\" tab=\"p\tq\"/>"
         for src in (attrs, SubString(attrs, 1, lastindex(attrs)), WrappedSource(attrs))
             a = attributes(only(elements(parse(src, LazyNode))))
+            f = only(elements(parse(src, FlatNode)))
             for key in ("crlf", "lone", "lf", "tab")
-                @test a[key] == "p q"
-                @test ncodeunits(a[key]) == 3        # one space, not two
+                @test a[key] == "p q" == f[key]
+                @test ncodeunits(a[key]) == 3 == ncodeunits(f[key])     # one space, not two
             end
         end
 
@@ -5905,6 +5945,7 @@ Base.thisind(w::WrappedSource, i::Int) = thisind(w.s, i)
         ref = "<a>x&#13;y\r\nz</a>"
         for src in (ref, SubString(ref, 1, lastindex(ref)), WrappedSource(ref))
             @test value(only(children(only(elements(parse(src, LazyNode)))))) == "x\ry\nz"
+            @test value(only(children(only(elements(parse(src, FlatNode)))))) == "x\ry\nz"
             cur = Cursor(src); next!(cur); next!(cur)
             @test value(cur) == "x\ry\nz"
         end

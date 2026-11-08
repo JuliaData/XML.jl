@@ -19,6 +19,15 @@ const RICH_XML = """<?xml version="1.0"?><!DOCTYPE root [<!ENTITY x "y">]>
     @test f == n
     @test XML.write(f) == XML.write(n)
 
+    # The same document saved with CR LF: `FlatNode` reads it in place and normalizes each
+    # value as it reads it, where `Node` normalizes a copy at the entry.
+    crlf = replace(RICH_XML, "\n" => "\r\n")
+    fc, nc = parse(crlf, FlatNode), parse(crlf, Node)
+    @test fc == nc == n
+    @test XML.write(fc) == XML.write(nc) == XML.write(n)
+    @test Node(fc) == nc
+    @test string_value(fc) == string_value(nc) == string_value(n)
+
     path = joinpath(@__DIR__, "data", "books.xml")
     if isfile(path)
         @test read(path, FlatNode) == read(path, Node)
@@ -171,6 +180,16 @@ end
     @test sourcetext(it) == "<item>plain</item>"
     # re-parsing an element's slice reproduces the subtree
     @test Node(only(eachelement(parse(String(sourcetext(it)), FlatNode; wellformed = :lenient)))) == Node(it)
+
+    # The slices of a document saved with CR LF keep the line ends it was given.
+    crlf = "<?xml version=\"1.0\"?>\r\n<r a=\"1\">\r\n  <item>x\r\ny</item>\r\n</r>\r\n"
+    fc = parse(crlf, FlatNode)
+    @test sourcetext(fc) == crlf
+    itc = only(eachelement(only(eachelement(fc))))
+    @test sourcetext(itc) == "<item>x\r\ny</item>"
+    # an indentation keeps its CR in its source text, and reads from its LF on
+    ind = first(children(only(eachelement(fc))))
+    @test sourcetext(ind) == "\r\n  " && value(ind) == "\n  "
 end
 
 @testset "sourcespan (character-index spans)" begin
@@ -217,6 +236,14 @@ end
     @test splicetext(it) == xml[1:prevind(xml, first(sp))] * xml[nextind(xml, last(sp)):end]
     lzit = first(c for c in children(first(c for c in children(lz) if nodetype(c) === XML.Element)) if nodetype(c) === XML.Element)
     @test splicetext(lzit, "<c/>") == stripped                   # cross-reader parity
+
+    # A document saved with CR LF: the spans index the string it was given, and a splice
+    # keeps its line ends, as on a `LazyNode`.
+    crlf = "<r>\r\n  <item>x\r\ny</item>\r\n</r>\r\n"
+    fit = only(eachelement(only(eachelement(parse(crlf, FlatNode)))))
+    lit = only(eachelement(only(eachelement(parse(crlf, LazyNode)))))
+    @test crlf[sourcespan(fit)] == "<item>x\r\ny</item>"
+    @test splicetext(fit, "<c/>") == "<r>\r\n  <c/>\r\n</r>\r\n" == splicetext(lit, "<c/>")
 end
 
 @testset "BOM handling" begin

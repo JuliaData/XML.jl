@@ -487,10 +487,11 @@ measure_charscan(s) = Base.@allocations XML._check_chars_strict(s)
     end
 end
 
-# Full read of a `String` — `Cursor` and `LazyNode` take it as it is and normalize each value
-# as they read it: no copy at the entry, even when the document holds a CR, and no box per
-# value. The only CR LF follows the XML declaration, as in a part saved by Excel, so no value
-# of the 10,000 is rewritten and a ceiling of 1,000 bytes holds whatever their number.
+# Full read of a `String` — `Cursor`, `LazyNode` and `FlatNode` take it as it is and
+# normalize each value as they read it: no copy at the entry, even when the document holds
+# a CR, and no box per value. The only CR LF follows the XML declaration, as in a part
+# saved by Excel, so no value of the 10,000 is rewritten and a ceiling of 1,000 bytes holds
+# whatever their number.
 function cursor_read_all(s)
     c = Cursor(s)
     n = 0
@@ -500,7 +501,7 @@ function cursor_read_all(s)
     end
     n
 end
-function lazy_read_all(nodes)
+function read_values(nodes)
     n = 0
     for x in nodes
         v = value(x)
@@ -509,30 +510,42 @@ function lazy_read_all(nodes)
     n
 end
 measure_cursor_read_all(s) = @allocated cursor_read_all(s)
-measure_lazy_read_all(nodes) = @allocated lazy_read_all(nodes)
+measure_read_values(nodes) = @allocated read_values(nodes)
 measure_lazy_parse(s) = @allocated parse(s, LazyNode)
 
 @testset "Full read of a String: no copy at the entry, nothing per value" begin
     body = repeat("<c>v</c>", 10_000)
     for doc in ("<r>" * body * "</r>", "<?xml version=\"1.0\"?>\r\n<r>" * body * "</r>")
         nodes = [only(children(c)) for c in elements(only(elements(parse(doc, LazyNode))))]
-        @test lazy_read_all(nodes) == 10_000
+        flat = parse(doc, FlatNode)
+        fnodes = [only(children(c)) for c in elements(only(elements(flat)))]
+        @test read_values(nodes) == 10_000 == read_values(fnodes)
         @test cursor_read_all(doc) >= 10_000
+        # a `FlatNode` builds its arrays, but keeps the caller's bytes as its source
+        @test pointer(sourcetext(flat)) == pointer(doc)
         measure_lazy_parse(doc)                                               # warm-up
         if _NO_COVERAGE
             @test measure_lazy_parse(doc) < 1_000
             @test measure_cursor_read_all(doc) < 1_000
-            @test measure_lazy_read_all(nodes) < 1_000
+            @test measure_read_values(nodes) < 1_000
+            @test measure_read_values(fnodes) < 1_000
         end
     end
     # a file saved with CR LF and indented: each line break opens a value, which comes back
     # as a view of its own bytes, so the 10,001 of them allocate nothing either
     ind = "<r>" * repeat("\r\n  <c>v</c>", 10_000) * "\r\n</r>"
-    breaks = [x for x in children(only(elements(parse(ind, LazyNode)))) if nodetype(x) === XML.Text]
-    @test lazy_read_all(breaks) == 3 * 10_000 + 1
+    texts(doc) = [x for x in children(only(elements(doc))) if nodetype(x) === XML.Text]
+    flat_ind = parse(ind, FlatNode)
+    breaks, fbreaks = texts(parse(ind, LazyNode)), texts(flat_ind)
+    @test read_values(breaks) == 3 * 10_000 + 1 == read_values(fbreaks)
     @test cursor_read_all(ind) == 3 * 10_000 + 1 + 10_000
+    @test pointer(sourcetext(flat_ind)) == pointer(ind)
+    # `FlatNode` keeps each of them from its LF on when it builds the document, so no record
+    # asks for work: reading them takes the path of a file without CR
+    @test all(x -> XML._rec(x).value_len >= 0, fbreaks)
     if _NO_COVERAGE
         @test measure_cursor_read_all(ind) < 1_000
-        @test measure_lazy_read_all(breaks) < 1_000
+        @test measure_read_values(breaks) < 1_000
+        @test measure_read_values(fbreaks) < 1_000
     end
 end

@@ -2,21 +2,25 @@
 # The whole document is materialized ONCE into a FlatStore: one contiguous Vector of isbits
 # records with integer index links (parent / first_child / next_sibling) plus a side Vector
 # for attributes — instead of Node's per-node heap objects. Zero-copy: records hold byte
-# ranges into the retained source; text/attribute values are entity-decoded at access.
-# A FlatNode is a lightweight handle (store, index); the Document node is index 1.
+# ranges into the retained source, and text/attribute values are normalized and decoded at
+# access. A FlatNode is a lightweight handle (store, index); the Document node is index 1.
 
 struct _FlatAttr                      # isbits, 16 B
     name_offset::Int32; name_len::Int32
     value_offset::Int32; value_len::Int32   # value_len < 0 ⇒ value carries entities (decode at access)
 end
 
+# A value that needs work before it is returned has a negative `value_len`. A Text says
+# which work in its `name_len`, a field it does not use: 0 references to decode, -1 line
+# ends to normalize (§2.11), -2 both. Any other kind holds no reference: its work is its
+# line ends.
 struct _FlatRec                       # isbits, no pointers
     kind::NodeType
     parent::Int32
     first_child::Int32
     next_sibling::Int32
-    name_offset::Int32; name_len::Int32     # Element tag / PI target
-    value_offset::Int32; value_len::Int32   # content; offset == -1 ⇒ NO value (vs empty ""); len < 0 ⇒ entities
+    name_offset::Int32; name_len::Int32     # Element tag / PI target; Text: its work, see above
+    value_offset::Int32; value_len::Int32   # content; offset == -1 ⇒ NO value (vs empty ""); len < 0 ⇒ work
     attr_first::Int32; attr_count::Int32
 end
 
@@ -52,7 +56,7 @@ The whole document is parsed once into a contiguous columnar store (a `Vector` o
 records indexing into the retained source string), so building is fast, random access is
 O(1), repeated traversals never re-decode structure, and the garbage collector sees a
 handful of arrays instead of one object per node. Text and attribute values are zero-copy
-`SubString`s, entity-decoded on access.
+`SubString`s, entity-decoded on access, and their line ends are normalized as they are read.
 
 Compared with `Node`:
 - **read-only** — no `push!`/`setindex!`; build documents with `Node` / [`h`](@ref).
@@ -111,7 +115,7 @@ end
 # Token-stream → FlatStore builder: the same single visibly-pushdown pass as `_parse`
 # (see parse.jl), with the same well-formedness checks at the same token points — gated by
 # `Val{W}` so :lenient costs nothing — but appending isbits records instead of heap nodes.
-function _flat_parse(xml::String, ::Val{W}) where {W}
+function _flat_parse(xml::String, lastcr::Int, ::Val{W}) where {W}
     strict = W === :strict ? _strict_context(xml) : _NO_DTD
     ncodeunits(xml) <= typemax(Int32) ||
         error("FlatNode stores byte offsets as Int32: source is larger than 2 GiB. Use `parse(xml, Node)`.")
@@ -140,11 +144,13 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
             W === :strict && _check_chars_strict(rawtext)
             W === :strict && token.has_entities && _check_refs_strict(rawtext, strict, false)
             off, len = _frng(rawtext)
-            token.has_entities && (len = -len)
+            voff, vlen, cr = _flat_value(rawtext, off, len, lastcr)
+            (token.has_entities || cr) && (vlen = -vlen)
+            work = cr ? (token.has_entities ? Int32(-2) : Int32(-1)) : Int32(0)
             idx = Int32(length(recs) + 1)
             p = _fattach!(recs, pstack, lastchild, idx)
-            push!(recs, _FlatRec(Text, p, Int32(0), Int32(0), Int32(0), Int32(0), off, len, Int32(0), Int32(0)))
-            push!(spans, (off, off + abs(len)))
+            push!(recs, _FlatRec(Text, p, Int32(0), Int32(0), Int32(0), work, voff, vlen, Int32(0), Int32(0)))
+            push!(spans, (off, off + len))
 
         elseif k === K.OPEN_TAG
             nm = tag_name(token, xml)
@@ -244,7 +250,8 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
             W === :strict && _check_chars_strict(cmt)
             W === :strict && occursin("--", cmt) && error("not well-formed: \"--\" within a comment")
             W === :strict && endswith(cmt, '-') && error("not well-formed: \"-\" immediately before \"-->\" in a comment (XML 1.0 §2.5)")
-            off, len = _frng(cmt)
+            off, len, cr = _flat_value(cmt, _frng(cmt)..., lastcr)
+            cr && (len = -len)
             idx = Int32(length(recs) + 1)
             p = _fattach!(recs, pstack, lastchild, idx)
             push!(recs, _FlatRec(Comment, p, Int32(0), Int32(0), Int32(0), Int32(0), off, len, Int32(0), Int32(0)))
@@ -254,7 +261,8 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
         elseif k === K.CDATA_CONTENT
             cdata = raw(token, xml)
             W === :strict && _check_chars_strict(cdata)
-            off, len = _frng(cdata)
+            off, len, cr = _flat_value(cdata, _frng(cdata)..., lastcr)
+            cr && (len = -len)
             idx = Int32(length(recs) + 1)
             p = _fattach!(recs, pstack, lastchild, idx)
             push!(recs, _FlatRec(CData, p, Int32(0), Int32(0), Int32(0), Int32(0), off, len, Int32(0), Int32(0)))
@@ -264,7 +272,9 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
         elseif k === K.DOCTYPE_CONTENT
             W !== :lenient && length(pstack) > 1 &&
                 error("not well-formed: DOCTYPE declaration inside element content")
-            off, len = _frng(lstrip(raw(token, xml)))        # mirror _parse: lstrip'd DTD value
+            dtd = lstrip(raw(token, xml))                    # mirror _parse: lstrip'd DTD value
+            off, len, cr = _flat_value(dtd, _frng(dtd)..., lastcr)
+            cr && (len = -len)
             idx = Int32(length(recs) + 1)
             p = _fattach!(recs, pstack, lastchild, idx)
             push!(recs, _FlatRec(DTD, p, Int32(0), Int32(0), Int32(0), Int32(0), off, len, Int32(0), Int32(0)))
@@ -286,7 +296,8 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
             content = lstrip(raw(token, xml))                # mirror _parse: lstrip'd, empty → none
             W === :strict && _check_chars_strict(content)
             if !isempty(content)
-                off, len = _frng(content)
+                off, len, cr = _flat_value(content, _frng(content)..., lastcr)
+                cr && (len = -len)
                 @inbounds recs[pend] = _fset_value(recs[pend], off, len)
             end
         end
@@ -301,6 +312,23 @@ function _flat_parse(xml::String, ::Val{W}) where {W}
     FlatNode(store, Int32(1))
 end
 
+# A value `v` at byte offset `off`, of length `len`, as its record keeps it, and whether it
+# still holds a CR to normalize (§2.11). Only a value that starts before the document's last
+# CR can hold one: a document without one is never searched, nor is a part saved by Excel,
+# whose only CR follows its XML declaration. A value that opens on its only CR LF, as the
+# indentation of a file saved with CR LF does, is kept from its LF on, and needs no work
+# when it is read.
+@inline _flat_value(v::SubString{String}, off::Int32, len::Int32, lastcr::Int) =
+    off < lastcr ? _flat_value_cr(v, off, len) : (off, len, false)
+@noinline function _flat_value_cr(v::SubString{String}, off::Int32, len::Int32)
+    j = XMLTokenizer._findbyte(v, UInt8('\r'), 1)
+    j === nothing && return (off, len, false)
+    j == 1 && len >= 2 && codeunit(v, 2) == 0x0A &&
+        XMLTokenizer._findbyte(v, UInt8('\r'), 3) === nothing &&
+        return (off + Int32(1), len - Int32(1), false)
+    return (off, len, true)
+end
+
 @inline _fsub_or_empty(source::String, off::Int32, len::Int32) =
     len > 0 ? (@inbounds _noshift_substring(source, Int(off), Int(len))) : SubString(source, 1, 0)
 
@@ -310,15 +338,32 @@ _check_flat_names(source::String, attrs::Vector{_FlatAttr}, r::_FlatRec) =
                          for ai in r.attr_first:(r.attr_first + r.attr_count - Int32(1))])
 
 #-----------------------------------------------------------------------------# parse / read entry points
-Base.parse(xml::AbstractString, ::Type{FlatNode}; wellformed::Symbol=:structural) =
-    (_check_wellformed(wellformed);
-     _flat_parse(_apply_declarations(_normalize_input_eol(_drop_bom(String(xml)))), Val(wellformed)))
+# The store keeps the `String` as it stands, CRs included, and each value is normalized as
+# it is read (§2.11, `_flat_slow`). A document that the declarations of its DOCTYPE rewrite
+# is read in that copy, whose line ends the rewrite has normalized: a CR left there comes
+# from a character reference, and stays.
+function Base.parse(xml::AbstractString, ::Type{FlatNode}; wellformed::Symbol=:structural)
+    _check_wellformed(wellformed)
+    source, rewritten = _declared_source(_drop_bom(String(xml)))
+    return _flat_parse(source, rewritten ? 0 : _last_cr(source), Val(wellformed))
+end
 Base.parse(::Type{FlatNode}, xml::AbstractString; wellformed::Symbol=:structural) =
     parse(xml, FlatNode; wellformed)
 Base.read(filename::AbstractString, ::Type{FlatNode}; wellformed::Symbol=:structural) =
     (_check_wellformed(wellformed); parse(String(_normalize_bom(read(filename))), FlatNode; wellformed))
 Base.read(io::IO, ::Type{FlatNode}; wellformed::Symbol=:structural) =
     (_check_wellformed(wellformed); parse(String(_normalize_bom(read(io))), FlatNode; wellformed))
+
+# The position of the last CR of a document read in place, or 0. Two forward searches find
+# it when the document holds a single CR, as a part saved by Excel does after its XML
+# declaration. With more, the search runs back from the end, where a file saved with CR LF
+# has its last one.
+function _last_cr(s::String)
+    i = XMLTokenizer._findbyte(s, UInt8('\r'), 1)
+    i === nothing && return 0
+    XMLTokenizer._findbyte(s, UInt8('\r'), i + 1) === nothing && return i
+    return findprev(==(UInt8('\r')), codeunits(s), ncodeunits(s))::Int
+end
 
 #-----------------------------------------------------------------------------# accessors
 @inline nodetype(n::FlatNode) = _rec(n).kind
@@ -328,11 +373,21 @@ Base.read(io::IO, ::Type{FlatNode}; wellformed::Symbol=:structural) =
     r.name_len > 0 ? _fsub(n.store, r.name_offset, r.name_len) : nothing
 end
 
+# A value whose record asks for work (`value_len < 0`), and the work it asks for (see
+# `_FlatRec`): line ends normalized first (§2.11), then references decoded. Out of line, as
+# `unescape` is, and given the view and the code alone: each accessor keeps the one test of
+# its fast path, and no copy of the record.
+@inline _flat_work(r::_FlatRec) = r.kind === Text ? r.name_len : Int32(-1)
+@noinline function _flat_slow(raw::SubString{String}, work::Int32)
+    s = work < 0 ? _read_eol(raw, false) : raw
+    return work == -1 ? s : unescape(s)
+end
+
 @inline function value(n::FlatNode)
     r = _rec(n)
     r.value_offset < 0 && return nothing          # absent (empty content is offset ≥ 0, len 0)
     raw = _fsub(n.store, r.value_offset, abs(r.value_len))
-    r.value_len < 0 ? unescape(raw) : raw
+    r.value_len < 0 ? _flat_slow(raw, _flat_work(r)) : raw
 end
 
 function attributes(n::FlatNode)
@@ -357,8 +412,9 @@ end
 The node's exact raw source slice, markup included — `<tag …>…</tag>` for an element,
 `<!--…-->` for a comment, and the whole document for the Document node. Zero-copy: the
 store keeps per-record source spans. The slice is taken from the document the store holds:
-always a `String`, normalized when its lines end in CR, and rewritten when the declarations of
-its DOCTYPE change it (see the `LazyNode` method).
+the `String` given to `parse`, CRs included. The store holds a copy only of a document given
+as another string type or with a BOM, and the rewritten copy of one that the declarations of
+its DOCTYPE change (see the `LazyNode` method).
 """
 function sourcetext(n::FlatNode)
     so, se = @inbounds n.store.spans[n.i]
@@ -383,8 +439,8 @@ end
     splicetext(n::FlatNode, replacement::AbstractString = "") -> String
 
 Same contract as the `LazyNode` method; the node's span is answered in O(1) from the
-store. The result is built from the document the store holds, normalized when it holds a CR:
-its line ends are then LF, where `splicetext` on a `LazyNode` keeps the ones it was given.
+store. The result is built from the document the store holds (see [`sourcetext`](@ref)),
+whose line ends it keeps.
 """
 splicetext(n::FlatNode, replacement::AbstractString = "") =
     _splice_span(n.store.source, sourcespan(n), replacement)
@@ -534,7 +590,7 @@ is_simple(n::FlatNode) = (r = _rec(n);
     c = @inbounds n.store.recs[_rec(n).first_child]
     c.value_offset < 0 && return nothing
     raw = _fsub(n.store, c.value_offset, abs(c.value_len))
-    c.value_len < 0 ? unescape(raw) : raw
+    c.value_len < 0 ? _flat_slow(raw, _flat_work(c)) : raw
 end
 
 @inline function simple_value(n::FlatNode)
@@ -542,7 +598,7 @@ end
     c = @inbounds n.store.recs[_rec(n).first_child]
     c.value_offset < 0 && return nothing
     raw = _fsub(n.store, c.value_offset, abs(c.value_len))
-    c.value_len < 0 ? unescape(raw) : raw
+    c.value_len < 0 ? _flat_slow(raw, _flat_work(c)) : raw
 end
 
 #-----------------------------------------------------------------------------# string_value
@@ -564,7 +620,7 @@ function string_value(n::FlatNode)
         _flat_counts(c) || continue
         k == 0 && (first = j)
         k += 1
-        m += c.value_len >= 0 ? Int(c.value_len) : _flat_decode(store, c)[2]
+        m += c.value_len >= 0 ? Int(c.value_len) : _flat_slow_size(store, c)
     end
     k == 0 && return SubString(store.source, 1, 0)
     k == 1 && return _flat_text(store, @inbounds recs[first])
@@ -576,8 +632,7 @@ function string_value(n::FlatNode)
         if c.value_len >= 0
             i = _sv_put!(out, i, _fsub(store, c.value_offset, c.value_len))
         else
-            buf, len, _ = _flat_decode(store, c)
-            i = _sv_put!(out, i, buf, len)
+            i = _flat_slow_put!(out, i, store, c)
         end
     end
     return SubString(_sv_check(out, i))
@@ -599,14 +654,27 @@ end
 # the document, whose own texts are not text for XPath.
 @inline _flat_counts(c::_FlatRec) = (c.kind === Text || c.kind === CData) && c.parent != 1
 
-# A record's text as `value` gives it, and its decoding into the scratch of `unescape`.
+# A record's text as `value` gives it. A text that asks for work is, for the two passes of
+# `string_value`, normalized when its record says so, then, for a Text, decoded into the
+# scratch of `unescape`: its size first, then its bytes.
 @inline function _flat_text(store::FlatStore, c::_FlatRec)
     raw = _fsub(store, c.value_offset, abs(c.value_len))
-    return c.value_len < 0 ? unescape(raw) : raw
+    return c.value_len < 0 ? _flat_slow(raw, _flat_work(c)) : raw
 end
-@inline function _flat_decode(store::FlatStore, c::_FlatRec)
+@inline function _flat_slow_raw(store::FlatStore, c::_FlatRec)
     raw = _fsub(store, c.value_offset, -c.value_len)
-    return _decode_to_scratch!(codeunits(raw), ncodeunits(raw))
+    return _flat_work(c) < 0 ? _read_eol(raw, false) : raw
+end
+function _flat_slow_size(store::FlatStore, c::_FlatRec)
+    s = _flat_slow_raw(store, c)
+    _flat_work(c) == -1 && return ncodeunits(s)
+    return _decode_to_scratch!(codeunits(s), ncodeunits(s))[2]
+end
+function _flat_slow_put!(out::String, i::Int, store::FlatStore, c::_FlatRec)
+    s = _flat_slow_raw(store, c)
+    _flat_work(c) == -1 && return _sv_put!(out, i, s)
+    buf, len, _ = _decode_to_scratch!(codeunits(s), ncodeunits(s))
+    return _sv_put!(out, i, buf, len)
 end
 
 #-----------------------------------------------------------------------------# conversion / write / show
