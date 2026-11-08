@@ -404,21 +404,24 @@ end
 #
 # How that is honoured depends on the reader:
 #
-#   - `Node` and `FlatNode` copy their source into a `String` anyway, and rewrite it here,
+#   - `Node` copies its values anyway and keeps no source, so it rewrites its `String` here,
 #     once, at the entry (next to the BOM handling). A CR-free one comes back unchanged after
 #     a single memchr-backed scan. A `SubString{String}`, a source past its BOM, comes back as
 #     a view of the rewritten `String`;
 #   - `Cursor` and `LazyNode` read their source where it lies, whatever its type, and
-#     normalize each value on the way out (`_read_eol` below): a document is never copied for
-#     its line ends, and its source text keeps them. A document that the declarations of its
-#     DOCTYPE rewrite is the exception: the rewrite reads it with its line ends normalized
-#     (`_declared_source`), and the reader reports the values of that copy as they stand.
+#     `FlatNode` its `String`. All three normalize each value on the way out (`_read_eol`
+#     below): a document is never copied for its line ends, and its source text keeps
+#     them. `FlatNode` searches its values when it is built, only those that start before
+#     the last CR of its document, and marks the ones to normalize. A document that the
+#     declarations of its DOCTYPE rewrite is the exception: the rewrite reads it with its
+#     line ends normalized (`_declared_source`), and the reader reports the values of that
+#     copy as they stand.
 #
 # Searching each value for a CR adds a live branch to accessors whose return is a union. Some
 # shapes of that branch make the caller box the clean-path return, 32 B per value. The shape
 # below — a memchr per value, the rare rewrite returned as a `SubString{String}`, one type —
 # boxes nothing from Julia 1.10 to 1.14 under either bounds setting; the allocation tests
-# guard it on full reads through `Cursor` and `LazyNode`.
+# guard it on full reads through `Cursor`, `LazyNode` and `FlatNode`.
 _normalize_input_eol(s::String) = occursin('\r', s) ? _rewrite_content_eol(s) : s
 # Under Julia 1.10, a `SubString{String}`'s own search for a character decodes every
 # character; `XMLTokenizer._findbyte` searches its parent's bytes with `memchr` instead.

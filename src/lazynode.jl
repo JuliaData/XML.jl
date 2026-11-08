@@ -501,9 +501,8 @@ The node's document source with the node's own text replaced by `replacement` â€
 entirely by default. This is the packaged, multi-byte-safe form of splicing around
 [`sourcespan`](@ref): `Base.splice!`'s remove-and-insert, applied to the retained source
 and returning a new `String` (nothing is mutated). The retained source is the one
-[`sourcespan`](@ref) describes: a `LazyNode` keeps the line ends of the text it was given,
-unless the declarations of its DOCTYPE change it (see [`sourcetext`](@ref)), and a
-`FlatNode`, which normalizes its copy of the source when it reads it in, gives LF.
+[`sourcespan`](@ref) describes: a `LazyNode` or a `FlatNode` keeps the line ends of the text
+it was given, unless the declarations of its DOCTYPE change it (see [`sourcetext`](@ref)).
 
 Defined for the two source-retaining readers (`LazyNode`, `FlatNode`).
 """

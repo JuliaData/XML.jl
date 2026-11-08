@@ -317,13 +317,15 @@ XML.write(n; normalize=true) # re-parse + pretty-print, collapses source whitesp
 
 ### Line ends
 
-XML 1.0 asks a reader to turn each CR LF pair, and each lone CR, into a line feed (§2.11). `Cursor` and `LazyNode` do it value by value, as each value is read, so they never copy a document for its line ends:
+XML 1.0 asks a reader to turn each CR LF pair, and each lone CR, into a line feed (§2.11). `Cursor`, `LazyNode` and `FlatNode` do it value by value, as each value is read, so they never copy a document for its line ends:
 
 - a value is the same whatever the line ends of the file, and is normalized only when you ask for it;
-- `sourcetext` and `sourcespan` refer to the bytes of the string you passed, CRs included;
+- `sourcetext`, `sourcespan` and `splicetext` refer to the bytes of the string you passed, CRs included;
 - a document that the declarations of its DOCTYPE change is read from a rewritten copy, to which `sourcetext` and `sourcespan` then refer (see [String types and DOCTYPE declarations](#string-types-and-doctype-declarations)). That copy has its line ends in LF, since XML 1.0 normalizes them before the declarations apply.
 
-`Node` and `FlatNode` normalize the line ends once, at the entry, in a copy of a document that holds a CR. `sourcetext`, `sourcespan` and `splicetext` on a `FlatNode` refer to that copy, whose lines end in LF: to edit a file and keep its line ends, read it with `LazyNode`.
+`FlatNode` looks for CRs once, when it builds the document, and only in the values that start before its last CR: in a part saved by Excel, whose only CR follows the XML declaration, it looks in none. An indentation that opens on its only CR LF is then read as fast as in a file without CR. A value with a line end within it is copied each time it is read.
+
+`Node` normalizes the line ends once, at the entry, in a copy of a document that holds a CR: it copies its values anyway, and keeps no source.
 
 ### Memory-mapped files
 
