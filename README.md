@@ -321,7 +321,7 @@ XML 1.0 asks a reader to turn each CR LF pair, and each lone CR, into a line fee
 
 - a value is the same whatever the line ends of the file, and is normalized only when you ask for it;
 - `sourcetext` and `sourcespan` refer to the bytes of the string you passed, CRs included;
-- a document that the declarations of its DOCTYPE change is read from a rewritten copy, to which `sourcetext` and `sourcespan` then refer (see [String types and DOCTYPE declarations](#string-types-and-doctype-declarations)).
+- a document that the declarations of its DOCTYPE change is read from a rewritten copy, to which `sourcetext` and `sourcespan` then refer (see [String types and DOCTYPE declarations](#string-types-and-doctype-declarations)). That copy has its line ends in LF, since XML 1.0 normalizes them before the declarations apply.
 
 `Node` and `FlatNode` normalize the line ends once, at the entry, in a copy of a document that holds a CR. `sourcetext`, `sourcespan` and `splicetext` on a `FlatNode` refer to that copy, whose lines end in LF: to edit a file and keep its line ends, read it with `LazyNode`.
 
@@ -348,7 +348,7 @@ Opening costs one probe of the prolog, about 25 ns on a mapped 14 MB document, L
 - the line-end normalization the specification requires happens on each value as it is read;
 - a file written with CR LF or a lone CR thus copies only the values you actually ask for, and only those that carry a line end.
 
-The exception is a document that the declarations of its DOCTYPE change: the entities it uses, the default attribute values it receives, the spaces of the attributes declared with a type other than CDATA (XML 1.0 §4.4.2, §3.3.2, §3.3.3). The reader then reads a copy of it in the heap, with these changes made (see [String types and DOCTYPE declarations](#string-types-and-doctype-declarations)).
+The exception is a document that the declarations of its DOCTYPE change: the entities it uses, the default attribute values it receives, the spaces of the attributes declared with a type other than CDATA (XML 1.0 §4.4.2, §3.3.2, §3.3.3). The reader then reads a copy of it in the heap, with these changes made and its line ends in LF (see [String types and DOCTYPE declarations](#string-types-and-doctype-declarations)).
 
 > [!WARNING]
 > This is a limitation for a file too large for memory. XML.jl does not refuse such a document, but the rewritten copy can exceed the physical memory. The system then either swaps memory to disk, which can make the reading very long, or refuses the allocation.

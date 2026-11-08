@@ -234,26 +234,56 @@ end
 
 canon_tests = filter(t -> !isempty(t.output), xml10_tests)
 
+# Each reader that builds a tree is compared: each applies the declarations of the DOCTYPE
+# and normalizes line ends at its own point. `LazyNode` checks no well-formedness, so it
+# reads without the keyword.
+canon_read(R, uri) = R === LazyNode ? read(uri, R) : read(uri, R; wellformed = :strict)
+
 @testset "Canonical output matches the suite's out/ references" begin
     # Scope pin: the xmlts20130923 suite carries 262 reference pairs reachable at
     # ENTITIES="none" / XML 1.0. A lower count means the collector or a filter regressed.
     @test count(t -> isfile(t.uri) && isfile(t.output), canon_tests) == 262
-    n_conforming = 0
-    n_known = 0
-    regressions = String[]
-    for t in canon_tests
-        (isfile(t.uri) && isfile(t.output)) || continue
-        doc = read(t.uri, Node; wellformed = :strict)
-        ok = canonical_xml(doc) == String(read(t.output))
-        if haskey(CANON_KNOWN_FAIL, t.id)
-            @test_broken ok  # ledgered gap: flips to an unexpected pass once its feature is implemented
-            n_known += 1
-        else
+    @testset "$R" for R in (Node, LazyNode, FlatNode)
+        n_conforming = 0
+        n_known = 0
+        regressions = String[]
+        for t in canon_tests
+            (isfile(t.uri) && isfile(t.output)) || continue
+            ok = canonical_xml(canon_read(R, t.uri)) == String(read(t.output))
+            if haskey(CANON_KNOWN_FAIL, t.id)
+                @test_broken ok  # ledgered gap: flips to an unexpected pass once its feature is implemented
+                n_known += 1
+            else
+                ok || push!(regressions, t.id)
+                @test ok
+                n_conforming += ok
+            end
+        end
+        isempty(regressions) || @warn "canonical-output regressions" R regressions
+        @info "W3C canonical output, $R: $n_conforming byte-identical, $n_known ledgered gaps (CANON_KNOWN_FAIL)"
+    end
+end
+
+# The same documents written with CR LF, as a Windows checkout writes them. Line ends are no
+# part of a document's data (§2.11), so each reader must give the same canonical output. The
+# text is read as `read` reads a file, then its line ends are made CR LF.
+function crlf_text(uri)
+    s = String(XML._normalize_bom(read(uri)))
+    replace(replace(s, "\r\n" => "\n", "\r" => "\n"), "\n" => "\r\n")
+end
+canon_parse(R, s) = R === LazyNode ? parse(s, R) : parse(s, R; wellformed = :strict)
+
+@testset "Canonical output of the same documents with CR LF line ends" begin
+    @testset "$R" for R in (Node, LazyNode, FlatNode)
+        regressions = String[]
+        for t in canon_tests
+            (isfile(t.uri) && isfile(t.output)) || continue
+            haskey(CANON_KNOWN_FAIL, t.id) && continue
+            ok = canonical_xml(canon_parse(R, crlf_text(t.uri))) == String(read(t.output))
             ok || push!(regressions, t.id)
             @test ok
-            n_conforming += ok
         end
+        isempty(regressions) ||
+            @warn "canonical-output regressions with CR LF" R regressions
     end
-    isempty(regressions) || @warn "canonical-output regressions" regressions
-    @info "W3C canonical output: $n_conforming byte-identical, $n_known ledgered gaps (CANON_KNOWN_FAIL)"
 end
