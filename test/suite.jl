@@ -4841,6 +4841,15 @@ end
             lz = LazyNode(crlf, Document)                       # public two-argument entry
             @test value(only(children(only(elements(only(elements(lz))))))) == "x\ny"
 
+            # the three-argument constructors leave the flag lowered: the source is read
+            # where it lies, and each value is normalized as it is read
+            tok = XML.XMLTokenizer.no_token(crlf)
+            for d in (LazyNode(crlf, tok, Document), LazyNode{String}(crlf, tok, Document))
+                @test d == lz
+                @test sourcetext(d) == crlf
+                @test value(only(children(only(elements(only(elements(d))))))) == "x\ny"
+            end
+
             function cursor_values(c)
                 out = String[]
                 while next!(c) !== nothing
