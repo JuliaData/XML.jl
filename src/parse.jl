@@ -179,6 +179,35 @@ end
 @noinline _not_a_name(what::String, name::AbstractString) =
     error("not well-formed: invalid ", what, " \"", name, "\" (XML 1.0 §2.3)")
 
+# XML 1.0 §2.6: [17] reserves the processing-instruction target `xml` in every case, and
+# [16] puts white space between a target and the rest of the instruction, which the
+# tokenizer gives as the content: empty, or starting with white space.
+_is_reserved_pi_target(t::AbstractString) = ncodeunits(t) == 3 &&
+    (codeunit(t, 1) | 0x20) == UInt8('x') && (codeunit(t, 2) | 0x20) == UInt8('m') &&
+    (codeunit(t, 3) | 0x20) == UInt8('l')
+_pi_content_spaced(c::AbstractString) =
+    isempty(c) || XMLTokenizer.is_whitespace(codeunit(c, 1))
+@noinline _reserved_pi_target(t::AbstractString) =
+    error("not well-formed: the processing-instruction target \"", t,
+          "\" is reserved (XML 1.0 §2.6)")
+@noinline _unspaced_pi_target(t::AbstractString) =
+    error("not well-formed: no white space after the processing-instruction target \"", t,
+          "\" (XML 1.0 §2.6)")
+# A processing instruction of the internal subset, `s[i:j-1]` between its `<?` and its `?>`,
+# which the DTD reader steps over: its target ends at the first byte that no name holds, as
+# the tokenizer ends it in the document, and is checked as one there.
+function _check_subset_pi(s::AbstractString, i::Int, j::Int)
+    k = i
+    while k < j && XMLTokenizer.is_name_byte(codeunit(s, k))
+        k += 1
+    end
+    target = SubString(s, i, prevind(s, k))
+    _is_xml10_name(target) || _not_a_name("processing-instruction target", target)
+    _is_reserved_pi_target(target) && _reserved_pi_target(target)
+    _pi_content_spaced(SubString(s, k, prevind(s, j))) || _unspaced_pi_target(target)
+    return nothing
+end
+
 # Document-shape well-formedness (`:structural`/`:strict`): exactly one root element (prolog
 # markup with no root is rejected; an empty `""` or a whitespace-only input is still accepted — the
 # former an empty Document, the latter a Document whose only child is whitespace Text), any
@@ -639,10 +668,15 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
             pending_pi_tag = pi_target(token, xml)
             W === :strict && (_is_xml10_name(pending_pi_tag) ||
                               _not_a_name("processing-instruction target", pending_pi_tag))
+            W === :strict && _is_reserved_pi_target(pending_pi_tag) &&
+                _reserved_pi_target(pending_pi_tag)
             pending_pi_value = nothing
 
         elseif k === TokenKinds.PI_CONTENT
-            content = lstrip(raw(token, xml))
+            text = raw(token, xml)
+            W === :strict && (_pi_content_spaced(text) ||
+                              _unspaced_pi_target(pending_pi_tag))
+            content = lstrip(text)
             W === :strict && _check_chars_strict(content)
             pending_pi_value = isempty(content) ? nothing : _to(S, content)
 

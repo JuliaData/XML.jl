@@ -650,6 +650,49 @@ end
         @test nodetype(parse("<root><? data?></root>", Node; wellformed=:lenient)) == Document
     end
 
+    @testset ":strict requires white space after a PI target and refuses the target xml" begin
+        # [16] `PI ::= '<?' PITarget (S (Char* - (Char* '?>' Char*)))? '?>'`: white space
+        # separates the target from the rest of the instruction. [17] `PITarget ::= Name -
+        # (('X' | 'x') ('M' | 'm') ('L' | 'l'))`: the target `xml` is reserved in every
+        # case. The tokenizer ends the target at the first byte that no name holds.
+        bad = (
+            "<?a#b x?><r/>" => "no white space after the processing-instruction target \"a\"",
+            "<r><?bad-pi+x?></r>" => "no white space after the processing-instruction target \"bad-pi\"",
+            "<r><?xmlversion=\"1\"?></r>" => "no white space after the processing-instruction target \"xmlversion\"",
+            "<?XML version=\"1.0\"?><r/>" => "the processing-instruction target \"XML\" is reserved",
+            "<r><?xmL?></r>" => "the processing-instruction target \"xmL\" is reserved",
+            "<r><?xMl x?></r>" => "the processing-instruction target \"xMl\" is reserved",
+        )
+        for (xml, what) in bad, T in (Node, Node{SubString{String}}, FlatNode)
+            err = try parse(xml, T; wellformed = :strict); nothing catch e; e end
+            @test err isa ErrorException && occursin(what, err.msg)
+            for wf in (:lenient, :structural)   # the other levels keep accepting it
+                @test nodetype(parse(xml, T; wellformed = wf)) == Document
+            end
+        end
+        # No content, white space of each kind before the content, and a target that only
+        # starts with `xml` pass under :strict.
+        ok = ("<r><?pi?></r>", "<r><?pi ?></r>", "<r><?pi x?></r>", "<r><?pi\tx?></r>",
+              "<r><?pi\nx?></r>", "<r><?pi\r\nx?></r>", "<r><?xml-stylesheet href=\"a\"?></r>",
+              "<r><?xmlx y?></r>")
+        for xml in ok, T in (Node, Node{SubString{String}}, FlatNode)
+            @test nodetype(parse(xml, T; wellformed = :strict)) == Document
+        end
+        # A processing instruction of the internal subset follows the same rules, and its
+        # target the Name rule, as one in the document.
+        inner = (
+            "<!DOCTYPE r [<?a#b x?>]><r/>" => "no white space after the processing-instruction target \"a\"",
+            "<!DOCTYPE r [<?xml version=\"1.0\"?>]><r/>" => "the processing-instruction target \"xml\" is reserved",
+            "<!DOCTYPE r [<?123 x?>]><r/>" => "invalid processing-instruction target \"123\"",
+        )
+        for (xml, what) in inner, T in (Node, Node{SubString{String}}, FlatNode)
+            err = try parse(xml, T; wellformed = :strict); nothing catch e; e end
+            @test err isa ErrorException && occursin(what, err.msg)
+            @test nodetype(parse(xml, T; wellformed = :structural)) == Document
+        end
+        @test nodetype(parse("<!DOCTYPE r [<?pi x?><?pi?>]><r/>", Node; wellformed = :strict)) == Document
+    end
+
     @testset "every short span gets the verdict and message of the pattern-based check" begin
         # The reference is the check written with a pattern, kept here as the specification: each
         # `&`, from left to right, must start a match of one pattern with three groups, or it is
