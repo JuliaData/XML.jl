@@ -289,6 +289,7 @@ function _flat_parse(xml::String, lastcr::Int, ::Val{W}) where {W}
             target = pi_target(token, xml)
             W === :strict && (_is_xml10_name(target) ||
                               _not_a_name("processing-instruction target", target))
+            W === :strict && _is_reserved_pi_target(target) && _reserved_pi_target(target)
             noff, nlen = _frng(target)
             idx = Int32(length(recs) + 1)
             p = _fattach!(recs, pstack, lastchild, idx)
@@ -297,7 +298,10 @@ function _flat_parse(xml::String, lastcr::Int, ::Val{W}) where {W}
             pend = idx
 
         elseif k === K.PI_CONTENT
-            content = lstrip(raw(token, xml))                # mirror _parse: lstrip'd, empty → none
+            text = raw(token, xml)
+            W === :strict && (_pi_content_spaced(text) || _unspaced_pi_target(
+                _fsub_or_empty(xml, recs[pend].name_offset, recs[pend].name_len)))
+            content = lstrip(text)          # mirror _parse: lstrip'd, empty → none
             W === :strict && _check_chars_strict(content)
             if !isempty(content)
                 off, len, cr = _flat_value(content, _frng(content)..., lastcr)

@@ -215,9 +215,11 @@ function _read_subset!(r::_SubsetReader, s::String, pos::Int, subset::Bool)
             stop === nothing && break
             pos = last(stop) + 1
         elseif c == '<' && startswith(SubString(s, pos), "<?")
-            # and so is a processing instruction's (§2.6), to its `?>`
+            # and so is a processing instruction's (§2.6), to its `?>`; `:strict` checks its
+            # target as in the document: a Name other than `xml`, then white space or `?>`
             stop = findnext("?>", s, pos + 2)
             stop === nothing && break
+            r.strict === nothing || _check_subset_pi(s, pos + 2, first(stop))
             pos = last(stop) + 1
         elseif c == '<' && startswith(SubString(s, pos), "<!ENTITY")
             start = pos
