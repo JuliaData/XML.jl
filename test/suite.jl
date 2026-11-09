@@ -466,6 +466,9 @@ end
         @test_throws Base.InvalidCharError parse("<root>a\xc0\x80b</root>", Node; wellformed=:strict)
         @test_throws Base.InvalidCharError parse("<root>a\xc1\x81b</root>", Node; wellformed=:strict)
         @test_throws Base.InvalidCharError parse("<root>a\xe0\x81\x81b</root>", Node; wellformed=:strict)
+        # Up to Julia 1.13, `UInt32` raises on an overlong sequence; from 1.14, it decodes
+        # it, and the scan tests for one itself. A probe reads this once, at load time.
+        @test XML._OVERLONG_DECODES == (VERSION >= v"1.14.0-")
 
         # The decoding loop the scan replaces is its specification, written to return its verdict
         # rather than throw it (a throw costs a backtrace, and the scan's own throws are the ones
