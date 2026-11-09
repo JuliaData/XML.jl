@@ -11,9 +11,13 @@ struct _FlatAttr                      # isbits, 16 B
 end
 
 # A value that needs work before it is returned has a negative `value_len`. A Text says
-# which work in its `name_len`, a field it does not use: 0 references to decode, -1 line
-# ends to normalize (§2.11), -2 both. Any other kind holds no reference: its work is its
-# line ends.
+# which work in its `name_offset`, a field it does not use: 0 references to decode, -1
+# line ends to normalize (§2.11), -2 both. Any other kind holds no reference: its work is
+# its line ends.
+#
+# A record without a name has a `name_len` of -1, and an empty name a `name_len` of 0.
+# `tag` reads from that one field whether a node has a name and how long it is, so the
+# compiler can merge the test for a name with the use of its length.
 struct _FlatRec                       # isbits, no pointers
     kind::NodeType
     parent::Int32
@@ -124,7 +128,7 @@ function _flat_parse(xml::String, lastcr::Int, ::Val{W}) where {W}
     spans = NTuple{2,Int32}[]
     sizehint!(recs, ncodeunits(xml) >> 4)
     sizehint!(spans, ncodeunits(xml) >> 4)
-    push!(recs, _FlatRec(Document, Int32(0), Int32(0), Int32(0), Int32(0), Int32(0), Int32(-1), Int32(0), Int32(0), Int32(0)))
+    push!(recs, _FlatRec(Document, Int32(0), Int32(0), Int32(0), Int32(0), Int32(-1), Int32(-1), Int32(0), Int32(0), Int32(0)))
     push!(spans, (Int32(0), Int32(ncodeunits(xml))))
     pstack    = Int32[1]
     lastchild = Int32[0]
@@ -149,7 +153,7 @@ function _flat_parse(xml::String, lastcr::Int, ::Val{W}) where {W}
             work = cr ? (token.has_entities ? Int32(-2) : Int32(-1)) : Int32(0)
             idx = Int32(length(recs) + 1)
             p = _fattach!(recs, pstack, lastchild, idx)
-            push!(recs, _FlatRec(Text, p, Int32(0), Int32(0), Int32(0), work, voff, vlen, Int32(0), Int32(0)))
+            push!(recs, _FlatRec(Text, p, Int32(0), Int32(0), work, Int32(-1), voff, vlen, Int32(0), Int32(0)))
             push!(spans, (off, off + len))
 
         elseif k === K.OPEN_TAG
@@ -229,7 +233,7 @@ function _flat_parse(xml::String, lastcr::Int, ::Val{W}) where {W}
                 error("not well-formed: XML declaration inside element content")
             idx = Int32(length(recs) + 1)
             p = _fattach!(recs, pstack, lastchild, idx)
-            push!(recs, _FlatRec(Declaration, p, Int32(0), Int32(0), Int32(0), Int32(0), Int32(-1), Int32(0), Int32(0), Int32(0)))
+            push!(recs, _FlatRec(Declaration, p, Int32(0), Int32(0), Int32(0), Int32(-1), Int32(-1), Int32(0), Int32(0), Int32(0)))
             push!(spans, (Int32(token.offset), Int32(0)))
             cur = idx
             pend = idx
@@ -254,7 +258,7 @@ function _flat_parse(xml::String, lastcr::Int, ::Val{W}) where {W}
             cr && (len = -len)
             idx = Int32(length(recs) + 1)
             p = _fattach!(recs, pstack, lastchild, idx)
-            push!(recs, _FlatRec(Comment, p, Int32(0), Int32(0), Int32(0), Int32(0), off, len, Int32(0), Int32(0)))
+            push!(recs, _FlatRec(Comment, p, Int32(0), Int32(0), Int32(0), Int32(-1), off, len, Int32(0), Int32(0)))
             push!(spans, (open_off, Int32(0)))
             pend = idx
 
@@ -265,7 +269,7 @@ function _flat_parse(xml::String, lastcr::Int, ::Val{W}) where {W}
             cr && (len = -len)
             idx = Int32(length(recs) + 1)
             p = _fattach!(recs, pstack, lastchild, idx)
-            push!(recs, _FlatRec(CData, p, Int32(0), Int32(0), Int32(0), Int32(0), off, len, Int32(0), Int32(0)))
+            push!(recs, _FlatRec(CData, p, Int32(0), Int32(0), Int32(0), Int32(-1), off, len, Int32(0), Int32(0)))
             push!(spans, (open_off, Int32(0)))
             pend = idx
 
@@ -277,7 +281,7 @@ function _flat_parse(xml::String, lastcr::Int, ::Val{W}) where {W}
             cr && (len = -len)
             idx = Int32(length(recs) + 1)
             p = _fattach!(recs, pstack, lastchild, idx)
-            push!(recs, _FlatRec(DTD, p, Int32(0), Int32(0), Int32(0), Int32(0), off, len, Int32(0), Int32(0)))
+            push!(recs, _FlatRec(DTD, p, Int32(0), Int32(0), Int32(0), Int32(-1), off, len, Int32(0), Int32(0)))
             push!(spans, (open_off, Int32(0)))
             pend = idx
 
@@ -370,14 +374,14 @@ end
 
 @inline function tag(n::FlatNode)
     r = _rec(n)
-    r.name_len > 0 ? _fsub(n.store, r.name_offset, r.name_len) : nothing
+    r.name_len >= 0 ? _fsub(n.store, r.name_offset, r.name_len) : nothing
 end
 
 # A value whose record asks for work (`value_len < 0`), and the work it asks for (see
 # `_FlatRec`): line ends normalized first (§2.11), then references decoded. Out of line, as
 # `unescape` is, and given the view and the code alone: each accessor keeps the one test of
 # its fast path, and no copy of the record.
-@inline _flat_work(r::_FlatRec) = r.kind === Text ? r.name_len : Int32(-1)
+@inline _flat_work(r::_FlatRec) = r.kind === Text ? r.name_offset : Int32(-1)
 @noinline function _flat_slow(raw::SubString{String}, work::Int32)
     s = work < 0 ? _read_eol(raw, false) : raw
     return work == -1 ? s : unescape(s)
