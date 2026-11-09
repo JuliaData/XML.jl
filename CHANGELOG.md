@@ -33,6 +33,8 @@ With the changes below, the same call can give another result than with v0.4.8.
 
 - **`LazyNode` and `Cursor` read the line ends of a declared entity's text as `Node` and `FlatNode` do** ([#223](https://github.com/JuliaData/XML.jl/issues/223)). A CR from a character reference such as `&#13;` stays a CR, and a CR LF written in the declaration reads as one line feed, as [XML 1.0 §2.11](https://www.w3.org/TR/xml/#sec-line-ends) and [§4.5](https://www.w3.org/TR/xml/#intern-replacement) require. In v0.4.8, these two readers gave a line feed for the first, two spaces in an attribute value for the second, and failed the W3C cases `valid-sa-068` and `valid-sa-108`. A document that the declarations of its DOCTYPE change is read from a copy with LF line ends, which `sourcetext` and `sourcespan` show.
 
+- **`tag` on a `FlatNode` returns an empty string for a processing instruction without a target, as the other readers do** ([#226](https://github.com/JuliaData/XML.jl/issues/226)). The default `wellformed = :structural` accepts such an instruction, and `:lenient` accepts an element without a name, which now gets an empty tag too. In v0.4.8, `tag` returned `nothing` for both, so `XML.write` and `Node(n)` threw on such a `FlatNode`, and `==` with the matching `Node` was `false`.
+
 ## [0.4.8] - 2026-11-04
 
 ### Changed

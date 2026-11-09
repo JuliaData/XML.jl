@@ -43,6 +43,17 @@ const RICH_XML = """<?xml version="1.0"?><!DOCTYPE root [<!ENTITY x "y">]>
     @test value(rootels[2]) == "" && nodetype(rootels[2]) === XML.CData
     @test value(rootels[3]) === nothing && nodetype(rootels[3]) === XML.ProcessingInstruction
     @test attributes(only(eachelement(fe))) == ["x" => ""]
+
+    # An empty name is a NAME ("" — name_len 0), distinct from no name (nothing,
+    # name_len == -1): a processing instruction without a target, and under :lenient an
+    # element without a name, have the empty tag that `Node` gives them.
+    for (s, wf) in (("<doc><? ?></doc>", :structural), ("<doc>< /></doc>", :lenient))
+        fn, nn = parse(s, FlatNode; wellformed = wf), parse(s, Node; wellformed = wf)
+        @test tag(only(children(only(eachelement(fn))))) == ""
+        @test fn == nn
+        @test XML.write(fn) == XML.write(nn)
+        @test Node(fn) == nn
+    end
 end
 
 @testset "accessor surface" begin
