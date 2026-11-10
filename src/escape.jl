@@ -424,9 +424,9 @@ end
 # guard it on full reads through `Cursor`, `LazyNode` and `FlatNode`.
 _normalize_input_eol(s::String) = occursin('\r', s) ? _rewrite_content_eol(s) : s
 # Under Julia 1.10, a `SubString{String}`'s own search for a character decodes every
-# character; `XMLTokenizer._findbyte` searches its parent's bytes with `memchr` instead.
+# character; `_findbyte` searches its parent's bytes with `memchr` instead.
 _normalize_input_eol(s::SubString{String}) =
-    XMLTokenizer._findbyte(s, UInt8('\r'), 1) === nothing ? s :
+    _findbyte(s, UInt8('\r'), 1) === nothing ? s :
         SubString(_rewrite_content_eol(s))
 
 # §2.11 value by value, for the lazy readers: normalize one value's own bytes as it is
@@ -438,7 +438,7 @@ _normalize_input_eol(s::SubString{String}) =
 # ends are already normalized: a CR found there comes from a reference, and stays. The flag
 # is read only once a CR is found: a value without one costs the search alone.
 @inline _read_eol(s::SubString{String}, normalized::Bool) =
-    XMLTokenizer._findbyte(s, UInt8('\r'), 1) === nothing ? s : _read_eol_cr(s, normalized)
+    _findbyte(s, UInt8('\r'), 1) === nothing ? s : _read_eol_cr(s, normalized)
 _read_eol(s::AbstractString, normalized::Bool) =
     occursin('\r', s) && !normalized ? _rewrite_content_eol(s) : s
 
@@ -448,7 +448,7 @@ _read_eol(s::AbstractString, normalized::Bool) =
 @noinline function _read_eol_cr(s::SubString{String}, normalized::Bool)
     normalized && return s
     if ncodeunits(s) >= 2 && codeunit(s, 1) == 0x0D && codeunit(s, 2) == 0x0A &&
-       XMLTokenizer._findbyte(s, UInt8('\r'), 3) === nothing
+       _findbyte(s, UInt8('\r'), 3) === nothing
         return SubString(s, 2)
     end
     return SubString(_rewrite_content_eol(s))
@@ -503,7 +503,7 @@ end
 # its hot path, and a `Union{SubString{String}, String}` return would heap-box the dominant
 # clean-path SubString at every non-inlined call site — one 32-byte box per read (#98, #105).
 function unescape(x::SubString{String})
-    XMLTokenizer._hasbyte(x, UInt8('&')) || return x
+    _hasbyte(x, UInt8('&')) || return x
     cu = codeunits(x)
     buf, m, nrefs = _decode_to_scratch!(cu, length(cu))
     return nrefs == 0 ? x : SubString(_take_string(buf, m))

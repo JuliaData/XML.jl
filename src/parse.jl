@@ -367,25 +367,6 @@ end
 @noinline _char_range_error(cp::UInt32) =
     error("not well-formed: character U+$(uppercase(string(cp; base = 16, pad = 4))) is outside the legal XML range (XML 1.0 §2.2)")
 
-# Whether the text of a comment holds `--`, which XML 1.0 §2.5 does not allow there.
-# `:strict` only.
-_has_double_hyphen(s::AbstractString) = occursin("--", s)
-
-# Under Julia 1.10, Base searches a `SubString{String}` for a string one character at a
-# time, each of them decoded. There, each `-` is found through the bytes, and the byte after
-# it is read.
-if VERSION < v"1.11"
-    function _has_double_hyphen(s::SubString{String})
-        n = ncodeunits(s)
-        i = 1
-        while (j = XMLTokenizer._findbyte(s, UInt8('-'), i)) !== nothing
-            j < n && codeunit(s, j + 1) == UInt8('-') && return true
-            i = j + 1
-        end
-        return false
-    end
-end
-
 # `:strict` only, one pass over a span's references, character and named alike. Gated + DCE'd off
 # the :strict path and called only when a token carries entities, so :lenient/:structural cost
 # nothing. The pass reads code units: every byte where it stops — `&`, `#`, `x`, a digit, `;`, the
@@ -624,7 +605,7 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
 
         elseif k === TokenKinds.ATTR_VALUE
             rawval = attr_value(token, xml)
-            W !== :lenient && XMLTokenizer._hasbyte(rawval, UInt8('<')) &&
+            W !== :lenient && _hasbyte(rawval, UInt8('<')) &&
                 error("not well-formed: '<' in attribute value (XML 1.0 §3.1)")
             W === :strict && _check_chars_strict(rawval)
             W === :strict && token.has_entities && _check_refs_strict(rawval, strict, true)

@@ -30,22 +30,22 @@ if !(isdefined(Base, :StringView) && StringView === Base.StringView)
     XML._rebuild_source(::SubString{StringView{_ByteView}}, bytes::Vector{UInt8}) =
         SubString(StringView(view(bytes, 1:length(bytes))))
 
-    # The tokenizer's byte scan reads a string type it has no method for byte by byte. A
+    # `ByteSearch._findbyte` reads a string type it has no method for byte by byte. A
     # `StringView` holds its bytes in an array, which the scan searches as it does a `String`'s.
-    XML.XMLTokenizer._findbyte(s::Union{StringView, SubString{<:StringView}}, b::UInt8, i::Int) =
-        XML.XMLTokenizer._findbyte_bytes(codeunits(s), b, i)
+    XML.ByteSearch._findbyte(s::Union{StringView, SubString{<:StringView}}, b::UInt8, i::Int) =
+        XML.ByteSearch._findbyte_bytes(codeunits(s), b, i)
 
     # Under Julia 1.10, a search for a character through the string interface costs a
     # `StringView` several times the `memchr` call it ends in. There, the tokenizer's
     # searches for the end of a text or of an attribute value, and for a `&` within it, go
     # through the bytes, as they do for a `String`.
     if VERSION < v"1.11"
-        @inline XML.XMLTokenizer._hasbyte(data::Union{StringView, SubString{<:StringView}},
-                                          b::UInt8, start::Int, stop::Int) =
+        @inline XML.ByteSearch._hasbyte(data::Union{StringView, SubString{<:StringView}},
+                                        b::UInt8, start::Int, stop::Int) =
             findnext(==(b), view(codeunits(data), start:stop-1), 1) !== nothing
-        @inline XML.XMLTokenizer._findchar(data::Union{StringView, SubString{<:StringView}},
-                                           b::UInt8, i::Int) =
-            XML.XMLTokenizer._findbyte(data, b, i)
+        @inline XML.ByteSearch._findchar(data::Union{StringView, SubString{<:StringView}},
+                                         b::UInt8, i::Int) =
+            XML.ByteSearch._findbyte(data, b, i)
     end
 end
 

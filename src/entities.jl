@@ -141,7 +141,7 @@ function _subset_declarations(body::AbstractString, standalone::Bool = false,
     # §2.11 normalizes the internal subset with the rest of the document, before parsing:
     # the literal texts of its declarations have their line ends normalized, and only a
     # character reference gives a CR.
-    s = XMLTokenizer._findbyte(body, UInt8('\r'), 1) === nothing ? String(body) :
+    s = _findbyte(body, UInt8('\r'), 1) === nothing ? String(body) :
         _rewrite_content_eol(body)
     lb = findfirst('[', s)
     r = _SubsetReader(Dict{String, String}(), Dict{String, String}(),
@@ -431,7 +431,7 @@ function _write_doc!(io::IOBuffer, s::AbstractString)
     n = ncodeunits(s)
     i = 1
     while i <= n
-        j = XMLTokenizer._findbyte(s, UInt8('\r'), i)
+        j = _findbyte(s, UInt8('\r'), i)
         if j === nothing
             Base.write(io, SubString(s, i))
             return nothing
@@ -481,7 +481,7 @@ function _expand_refs!(io::IOBuffer, s::AbstractString, ents::InternalEntities, 
     i = firstindex(s)
     stop = lastindex(s)
     while i <= stop
-        amp = XMLTokenizer._findchar(s, UInt8('&'), i)
+        amp = _findchar(s, UInt8('&'), i)
         if amp === nothing
             _write_span!(io, SubString(s, i), literal, depth > 1)
             break
@@ -611,7 +611,7 @@ end
 function _references_declared(s::AbstractString, ents::InternalEntities)
     i = firstindex(s)
     stop = lastindex(s)
-    while (amp = XMLTokenizer._findchar(s, UInt8('&'), i)) !== nothing
+    while (amp = _findchar(s, UInt8('&'), i)) !== nothing
         j = nextind(s, amp)
         while j <= stop && _is_name_byte(codeunit(s, j))
             j = nextind(s, j)
@@ -851,18 +851,6 @@ function _after_doctype(s::AbstractString)
 end
 
 const _CDATA_OPENING = Tuple(codeunits("[CDATA["))   # after the `<!`
-
-# The index at or after `i` of the byte `b` in `cu`, the code units of `s`, or `nothing`.
-# Code units that are an array of bytes, as those of a `StringView`, or that belong to a
-# `String` or a `SubString{String}`, are searched with `memchr`. Those of another string
-# type claim to be a dense array too, and Julia 1.13 copies them all on each such search:
-# `XMLTokenizer._findbyte` reads that type byte by byte instead.
-const _StringCodeUnits = Base.CodeUnits{UInt8, <:Union{String, SubString{String}}}
-@inline _findbyte_cu(s::AbstractString, cu, b::UInt8, i::Int) = findnext(==(b), cu, i)
-@inline _findbyte_cu(s::AbstractString, cu::Base.CodeUnits{UInt8}, b::UInt8, i::Int) =
-    XMLTokenizer._findbyte(s, b, i)
-@inline _findbyte_cu(s::AbstractString, cu::_StringCodeUnits, b::UInt8, i::Int) =
-    findnext(==(b), cu, i)
 
 # The first index at or after `i` where the bytes `seq` start in `cu`, the code units of
 # `s`, or 0 if they start nowhere.

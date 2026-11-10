@@ -617,12 +617,13 @@ end
         end
         # The text is read alone: the hyphens that its neighbors hold on either side of it
         # make no pair with its own.
-        @test !XML._has_double_hyphen(SubString("--a-b--", 2, 6))
-        @test !XML._has_double_hyphen(SubString("---", 2, 2))
-        @test !XML._has_double_hyphen(SubString("--", 2, 1))
-        @test XML._has_double_hyphen(SubString("xa--bx", 2, 5))
-        @test XML._has_double_hyphen("--")
-        @test !XML._has_double_hyphen("-") && !XML._has_double_hyphen("")
+        double_hyphen = XML.ByteSearch._has_double_hyphen
+        @test !double_hyphen(SubString("--a-b--", 2, 6))
+        @test !double_hyphen(SubString("---", 2, 2))
+        @test !double_hyphen(SubString("--", 2, 1))
+        @test double_hyphen(SubString("xa--bx", 2, 5))
+        @test double_hyphen("--")
+        @test !double_hyphen("-") && !double_hyphen("")
     end
 end
 
@@ -1706,8 +1707,8 @@ end
                 check(collect(attributes(r)) == ["a" => "hi", "d" => "v"], "attributes")
                 check(value(only(children(r))) == "hi", "text")
                 check(parse(sv, Cursor) isa Cursor{typeof(sv)}, "Cursor type")
-                generic = which(XML.XMLTokenizer._findbyte, Tuple{AbstractString, UInt8, Int})
-                check(which(XML.XMLTokenizer._findbyte, Tuple{typeof(sv), UInt8, Int}) !== generic,
+                generic = which(XML.ByteSearch._findbyte, Tuple{AbstractString, UInt8, Int})
+                check(which(XML.ByteSearch._findbyte, Tuple{typeof(sv), UInt8, Int}) !== generic,
                       "byte search")
                 """
             mktemp() do path, io

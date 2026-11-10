@@ -1,5 +1,7 @@
 module XMLTokenizer
 
+using ..ByteSearch: ByteSearch, _findbyte, _findchar, _hasbyte
+
 #-----------------------------------------------------------------------# TokenKinds
 baremodule TokenKinds
     import Base: @enum
@@ -138,6 +140,10 @@ end
 @inline function _span_view(data::AbstractString, start::Int, stop::Int)
     @inbounds _noshift_substring(_token_root(data), _data_offset(data) + start - 1, stop - start)
 end
+# Whether the byte `b` occurs in the bytes [start, stop) of `data`, for any string type:
+# through the view of that span. `ByteSearch` holds the methods that read the bytes.
+@inline ByteSearch._hasbyte(data::AbstractString, b::UInt8, start::Int, stop::Int) =
+    occursin(Char(b), _span_view(data, start, stop))
 # The way back, for a reader that resumes a scan at a token it holds: the positions in `data`
 # of the token's first and last bytes.
 @inline _data_start(t::Token, data::AbstractString) = t.offset - _data_offset(data) + 1
@@ -624,71 +630,6 @@ end
         j += 1
     end
     return n + 1
-end
-
-# The index of the first byte `b` at or after `i`, or `nothing`; `b` is ASCII, so it never falls
-# inside a multi-byte character. A `String` is searched through its bytes, with `memchr` past a
-# short stretch. So is a `SubString{String}`, through its parent's bytes, since its own search
-# for a character decodes every character under Julia 1.10. Any other string type is read byte
-# by byte. On such a type, a search for a character decodes every character, and a byte search
-# on the code units copies them all under Julia 1.13, which takes them for a dense array. A
-# `StringView` is searched through its bytes, as a `String`: by the method below from Julia
-# 1.14, where Base defines the type, and by the StringViews extension before.
-@inline function _findbyte(data::AbstractString, b::UInt8, i::Int)
-    n = ncodeunits(data)
-    @inbounds while i <= n
-        codeunit(data, i) == b && return i
-        i += 1
-    end
-    return nothing
-end
-@inline _findbyte(s::String, b::UInt8, i::Int) = _findbyte_bytes(codeunits(s), b, i)
-@inline _findbyte(s::SubString{String}, b::UInt8, i::Int) =
-    _findbyte_bytes(view(codeunits(parent(s)), s.offset+1:s.offset+ncodeunits(s)), b, i)
-if isdefined(Base, :StringView)
-    @inline _findbyte(s::Union{Base.StringView, SubString{<:Base.StringView}}, b::UInt8, i::Int) =
-        _findbyte_bytes(codeunits(s), b, i)
-end
-
-# The search through bytes that `memchr` can scan. The first sixteen are read one at a time:
-# between dense tags the byte is mostly found within them, where the call to `memchr` costs
-# more than the loop. `memchr` takes the rest. It searches bytes, not characters, since the
-# stretch read one at a time may end inside a multi-byte character.
-@inline function _findbyte_bytes(bytes::AbstractVector{UInt8}, b::UInt8, i::Int)
-    n = length(bytes)
-    stop = min(n, i + 15)
-    @inbounds while i <= stop
-        bytes[i] == b && return i
-        i += 1
-    end
-    return findnext(==(b), bytes, i)
-end
-
-# Whether the byte `b` occurs in the bytes [start, stop) of `data`, or in the whole of `s`.
-# `b` is ASCII, so it never falls inside a multi-byte character. This search is for a byte
-# that is mostly absent, as the `&` of a text: it reads every byte, so it has no use for
-# the stretch that `_findbyte` reads one byte at a time.
-@inline _hasbyte(data::AbstractString, b::UInt8, start::Int, stop::Int) =
-    occursin(Char(b), _span_view(data, start, stop))
-@inline _hasbyte(s::AbstractString, b::UInt8) = occursin(Char(b), s)
-
-# The index of the first byte `b` at or after `i`, or `nothing`, by the string's own search
-# for a character: the `<` that ends a text, the quote that closes an attribute value, the
-# `&` that opens a reference.
-@inline _findchar(data::AbstractString, b::UInt8, i::Int) = findnext(Char(b), data, i)
-
-# Under Julia 1.10, Base searches a `String` for a character through its bytes, with
-# `memchr`, but a `SubString{String}` one character at a time, each of them decoded. There,
-# a span of a `String` is searched through the bytes of that `String`, and a
-# `SubString{String}` through those of its parent.
-if VERSION < v"1.11"
-    @inline _hasbyte(data::String, b::UInt8, start::Int, stop::Int) =
-        findnext(==(b), view(codeunits(data), start:stop-1), 1) !== nothing
-    @inline _hasbyte(data::SubString{String}, b::UInt8, start::Int, stop::Int) =
-        _hasbyte(data.string, b, data.offset + start, data.offset + stop)
-    @inline _hasbyte(s::SubString{String}, b::UInt8) =
-        _hasbyte(s.string, b, s.offset + 1, s.offset + ncodeunits(s) + 1)
-    @inline _findchar(data::SubString{String}, b::UInt8, i::Int) = _findbyte(data, b, i)
 end
 
 # Find the end of a comment, a CDATA section or a processing instruction whose text starts at

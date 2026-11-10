@@ -544,7 +544,7 @@ end
     # types has its own search there, apart from the one that goes through the string
     # interface. A `String` keeps that one to find a character: Base runs it with `memchr`.
     if VERSION < v"1.11"
-        T = XML.XMLTokenizer
+        T = XML.ByteSearch
         for S in (String, SubString{String}, StringView{Vector{UInt8}},
                   SubString{StringView{Vector{UInt8}}})
             @test which(T._hasbyte, Tuple{S, UInt8, Int, Int}) !==
@@ -556,13 +556,13 @@ end
         @test which(T._hasbyte, Tuple{SubString{String}, UInt8}) !==
               which(T._hasbyte, Tuple{AbstractString, UInt8})
         # and so has the search of a comment for `--`
-        @test which(XML._has_double_hyphen, Tuple{SubString{String}}) !==
-              which(XML._has_double_hyphen, Tuple{AbstractString})
+        @test which(T._has_double_hyphen, Tuple{SubString{String}}) !==
+              which(T._has_double_hyphen, Tuple{AbstractString})
     end
 end
 
 @testset "a byte is searched for within a view, not past its ends" begin
-    hasbyte = XML.XMLTokenizer._hasbyte
+    hasbyte = XML.ByteSearch._hasbyte
     lt = UInt8('<')
     # The parent holds the byte on either side of the view, which holds it at its first
     # byte, at its last one, or nowhere. The last view is empty, between two of them.
