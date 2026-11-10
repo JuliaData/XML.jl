@@ -310,11 +310,14 @@ end
 What the document's internal subset declares that the entry rewrite applies: its general
 entities, and the attributes that ask for work, by element — a value to supply or to reduce.
 `nothing` when it declares neither, the case that must cost nothing beyond the prolog walk.
+`cr` says whether the document holds a CR: the rewrite then normalizes the line ends of each
+span that it copies, and copies a document without one as it stands.
 """
 struct _Declarations
     entities::Union{Nothing, InternalEntities}
     attributes::Union{Nothing, Dict{String, Vector{_DeclaredAttr}}}
     budget::_Budget
+    cr::Bool
 end
 
 function _declarations(xml::AbstractString)
@@ -328,7 +331,7 @@ function _declarations(xml::AbstractString)
            InternalEntities(r.entities, _check_and_scan(r.entities), budget)
     attrs = _working_attributes(r.attributes)
     ents === nothing && attrs === nothing && return nothing
-    _Declarations(ents, attrs, budget)
+    _Declarations(ents, attrs, budget, _findbyte(xml, UInt8('\r'), 1) !== nothing)
 end
 
 # The declared attributes that ask for work; an attribute declared CDATA with no default asks
@@ -444,19 +447,22 @@ function _write_doc!(io::IOBuffer, s::AbstractString)
     return nothing
 end
 
-# A span that a walk copies as it stands. The document's own text is written with its line
-# ends normalized; an entity's text, whose literal line ends were normalized when the
-# internal subset was read, keeps the CRs that its character references give.
-@inline _copy_span!(io::IOBuffer, s::AbstractString, entity::Bool) =
-    entity ? (Base.write(io, s); nothing) : _write_doc!(io, s)
+# A span that a walk copies. The document's own text is written with its line ends
+# normalized. `asis` says that the span is written as it stands: an entity's text, whose
+# literal line ends were normalized when the internal subset was read, and which keeps the
+# CRs that its character references give; or the text of a document that holds no CR.
+@inline _copy_span!(io::IOBuffer, s::AbstractString, asis::Bool) =
+    asis ? (Base.write(io, s); nothing) : _write_doc!(io, s)
 
 # §3.3.3 reads each white space character of an attribute value as one space. The readers do
 # that for the value as written, with the CR LF pair already one line end (§2.11), so the
 # document's own text is written with its line ends normalized; a character that comes from
 # an entity's text is written here as the space it reads as, so that a CR LF pair there
-# gives two spaces (W3C valid-sa-110). `entity` says the span is an entity's text.
-function _write_span!(io::IOBuffer, s::AbstractString, literal::Bool, entity::Bool = false)
-    literal || return _copy_span!(io, s, entity)
+# gives two spaces (W3C valid-sa-110). `entity` says the span is an entity's text, and
+# `asis` that a span outside a literal is copied as it stands (`_copy_span!`).
+function _write_span!(io::IOBuffer, s::AbstractString, literal::Bool, entity::Bool = false,
+                      asis::Bool = entity)
+    literal || return _copy_span!(io, s, asis)
     cr = false                                       # the last character was a CR
     for c in s
         if entity
@@ -480,13 +486,15 @@ function _expand_refs!(io::IOBuffer, s::AbstractString, ents::InternalEntities, 
         error("entity expansion exceeded $(_MAX_ENTITY_DEPTH) levels of nesting")
     i = firstindex(s)
     stop = lastindex(s)
+    entity = depth > 1
+    asis = entity || (d !== nothing && !d.cr)
     while i <= stop
         amp = _findchar(s, UInt8('&'), i)
         if amp === nothing
-            _write_span!(io, SubString(s, i), literal, depth > 1)
+            _write_span!(io, SubString(s, i), literal, entity, asis)
             break
         end
-        amp > i && _write_span!(io, SubString(s, i, prevind(s, amp)), literal, depth > 1)
+        amp > i && _write_span!(io, SubString(s, i, prevind(s, amp)), literal, entity, asis)
         j = nextind(s, amp)
         while j <= stop && _is_name_byte(codeunit(s, j))
             j = nextind(s, j)
@@ -651,6 +659,8 @@ text when it is declared. The internal subset is read with its line ends normali
 each span of the document that the walk copies is written with them normalized
 (`_write_doc!`), while the text of an entity keeps the CRs that its references give. The
 rewrite thus holds a CR only where a reference wrote one, and the document is copied once.
+A document that holds no CR is searched for one once, and its spans are copied as they
+stand.
 """
 _apply_declarations(s::AbstractString) = first(_declared_source(s))
 
@@ -713,7 +723,7 @@ end
 # the walk over start tags alone then does the same work in less time.
 function _rewritten_bytes(s::AbstractString, d::_Declarations)
     if d.entities === nothing
-        done, bytes = _rewrite_tags(s, d.attributes, d.budget)
+        done, bytes = _rewrite_tags(s, d.attributes, d.budget, d.cr)
         done && return bytes
     end
     out = _rewrite_walk!(nothing, s, d, 1)
@@ -733,9 +743,10 @@ _rewrite_buffer(n::Int) = IOBuffer(sizehint = n + n >> 3 + 64)
 # defaults supplied as `_rewrite_walk!` does. The DOCTYPE is read by the tokenizer. On any
 # form this walk does not expect it returns `(false, nothing)`, and `_rewrite_walk!` reads
 # the document instead; otherwise `(true, bytes)`, `bytes` being `nothing` when nothing was
-# rewritten. Every search for a byte goes through `_findbyte_cu`.
+# rewritten. Every search for a byte goes through `_findbyte_cu`. `cr` says whether the
+# document holds a CR, as in `_Declarations`.
 function _rewrite_tags(s::AbstractString, attrs::Dict{String, Vector{_DeclaredAttr}},
-                       budget::_Budget = _Budget(ncodeunits(s)))
+                       budget::_Budget = _Budget(ncodeunits(s)), cr::Bool = true)
     cu = codeunits(s)
     n = length(cu)
     out = nothing
@@ -787,7 +798,7 @@ function _rewrite_tags(s::AbstractString, attrs::Dict{String, Vector{_DeclaredAt
                         att = current[a]
                         (written[a] || att.supplied === nothing) && continue
                         out === nothing && (out = _rewrite_buffer(n))
-                        _write_doc!(out, SubString(s, pos, prevind(s, k)))
+                        _copy_span!(out, SubString(s, pos, prevind(s, k)), !cr)
                         Base.write(out, ' ', att.name, "=\"", att.supplied, '"')
                         _check_written(budget, out.size)
                         pos = k
@@ -828,14 +839,14 @@ function _rewrite_tags(s::AbstractString, attrs::Dict{String, Vector{_DeclaredAt
             inner = SubString(s, v0 + 1, prevind(s, v1))
             _changes_when_reduced(inner, nothing) || continue
             out === nothing && (out = _rewrite_buffer(n))
-            _write_doc!(out, SubString(s, pos, v0))
+            _copy_span!(out, SubString(s, pos, v0), !cr)
             _write_reduced!(out, inner, nothing, q, 1)
             pos = v1
         end
         i = _findbyte_cu(s, cu, UInt8('<'), k)
     end
     out === nothing && return (true, nothing)
-    pos <= n && _write_doc!(out, SubString(s, pos))
+    pos <= n && _copy_span!(out, SubString(s, pos), !cr)
     (true, take!(out))
 end
 
@@ -872,6 +883,7 @@ end
 function _rewrite_walk!(out::Union{Nothing, IOBuffer}, s::AbstractString, d::_Declarations,
                         depth::Int, entity::AbstractString = "")
     fragment = depth > 1
+    asis = fragment || !d.cr                         # see `_copy_span!`
     if fragment
         depth > _MAX_ENTITY_DEPTH &&
             error("entity expansion exceeded $(_MAX_ENTITY_DEPTH) levels of nesting")
@@ -914,7 +926,7 @@ function _rewrite_walk!(out::Union{Nothing, IOBuffer}, s::AbstractString, d::_De
             _changes_when_reduced(inner, ents) || continue
             start = tok.offset - base + 1
             out === nothing && (out = _rewrite_buffer(ncodeunits(s)))
-            _copy_span!(out, SubString(s, pos, prevind(s, start)), fragment)
+            _copy_span!(out, SubString(s, pos, prevind(s, start)), asis)
             q = codeunit(span, 1)
             Base.write(out, q)
             _write_reduced!(out, inner, ents, q, depth)
@@ -928,7 +940,7 @@ function _rewrite_walk!(out::Union{Nothing, IOBuffer}, s::AbstractString, d::_De
                 a = current[i]
                 (written[i] || a.supplied === nothing) && continue
                 out === nothing && (out = _rewrite_buffer(ncodeunits(s)))
-                _copy_span!(out, SubString(s, pos, prevind(s, start)), fragment)
+                _copy_span!(out, SubString(s, pos, prevind(s, start)), asis)
                 Base.write(out, ' ', a.name, "=\"", a.supplied, '"')
                 _check_written(d.budget, out.size)
                 pos = start
@@ -947,7 +959,7 @@ function _rewrite_walk!(out::Union{Nothing, IOBuffer}, s::AbstractString, d::_De
         end
         start = tok.offset - base + 1
         out === nothing && (out = _rewrite_buffer(ncodeunits(s)))
-        _copy_span!(out, SubString(s, pos, prevind(s, start)), fragment)
+        _copy_span!(out, SubString(s, pos, prevind(s, start)), asis)
         if tok.kind === XMLTokenizer.TokenKinds.ATTR_VALUE
             # the span carries its delimiters; only what they enclose is expanded, in literal
             q = span[firstindex(span)]
@@ -961,7 +973,7 @@ function _rewrite_walk!(out::Union{Nothing, IOBuffer}, s::AbstractString, d::_De
         pos = start + tok.ncodeunits
     end
     out === nothing && return nothing
-    pos <= ncodeunits(s) && _copy_span!(out, SubString(s, pos), fragment)
+    pos <= ncodeunits(s) && _copy_span!(out, SubString(s, pos), asis)
     out
 end
 

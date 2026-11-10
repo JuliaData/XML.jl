@@ -4640,6 +4640,26 @@ end
 #==============================================================================#
 #                              LAZYNODE                                        #
 #==============================================================================#
+# A source whose searches for a CR are counted. `XML.ByteSearch._findbyte` is the search for
+# a byte, and a source type gives it a method, as the StringViews extension does. A document
+# of this type that its declarations rewrite comes back as the same type.
+struct CountedSource <: AbstractString
+    s::String
+end
+Base.ncodeunits(c::CountedSource) = ncodeunits(c.s)
+Base.codeunit(c::CountedSource) = codeunit(c.s)
+Base.codeunit(c::CountedSource, i::Integer) = codeunit(c.s, i)
+Base.isvalid(c::CountedSource, i::Integer) = isvalid(c.s, i)
+Base.iterate(c::CountedSource, i::Integer = firstindex(c.s)) = iterate(c.s, i)
+Base.thisind(c::CountedSource, i::Int) = thisind(c.s, i)
+const CR_SEARCHES = Ref(0)
+function XML.ByteSearch._findbyte(s::Union{CountedSource, SubString{CountedSource}},
+                                  b::UInt8, i::Int)
+    b == UInt8('\r') && (CR_SEARCHES[] += 1)
+    return invoke(XML.ByteSearch._findbyte, Tuple{AbstractString, UInt8, Int}, s, b, i)
+end
+XML._rebuild_source(::CountedSource, bytes::Vector{UInt8}) = CountedSource(String(bytes))
+
 @testset "LazyNode" begin
     @testset "parse and nodetype" begin
         doc = parse("<root/>", LazyNode)
@@ -5202,6 +5222,36 @@ end
                     @test !occursin('\r', sourcetext(lz))
                     @test cursor_rows(src) == want
                 end
+            end
+        end
+
+        @testset "a document without a CR is searched for one once" begin
+            # The rewrite normalizes the line ends of each span that it copies, which takes
+            # a search for a CR in each. A document that holds none has nothing to
+            # normalize: it is searched once, however many spans it is copied in, and they
+            # are written as they stand. `CountedSource` counts the searches for a CR in a
+            # source; the internal subset is searched once too, when it is read.
+            function searches(xml)
+                CR_SEARCHES[] = 0
+                out = XML._apply_declarations(CountedSource(xml))
+                @test out isa CountedSource && out.s == XML._apply_declarations(xml)
+                return CR_SEARCHES[]
+            end
+            # each line has a text and a value with references, a value to reduce, and an
+            # element that only receives its default: every kind of span that the walk
+            # copies, none of them empty
+            entities(n, eol) = "<!DOCTYPE r [<!ENTITY e \"v\">" *
+                "<!ATTLIST x a CDATA \"d\" n NMTOKENS #IMPLIED>]>" * eol * "<r>" *
+                ("t&e;u&e;w<x b=\"p&e;q\" n=\" y  z \"/>v<x c=\"1\"/>" * eol)^n *
+                "</r>" * eol
+            # a DTD that declares attributes and no entity takes the walk over start tags
+            attlist(n, eol) = "<!DOCTYPE r [" *
+                "<!ATTLIST x a CDATA \"d\" n NMTOKENS #IMPLIED>]>" * eol * "<r>" *
+                ("t<x n=\" y  z \"/>u<x c=\"1\"/>" * eol)^n * "</r>" * eol
+            for doc in (entities, attlist)
+                @test searches(doc(3, "\n")) == searches(doc(300, "\n")) <= 2
+                # with CRs, each span is searched: the count grows with the document
+                @test searches(doc(300, "\r\n")) > 300
             end
         end
     end
