@@ -200,7 +200,8 @@ function _flat_parse(xml::String, lastcr::Int, ::Val{W}) where {W}
 
         elseif k === K.ATTR_VALUE
             rawval = attr_value(token, xml)
-            W !== :lenient && occursin('<', rawval) && error("not well-formed: '<' in attribute value (XML 1.0 §3.1)")
+            W !== :lenient && XMLTokenizer._hasbyte(rawval, UInt8('<')) &&
+                error("not well-formed: '<' in attribute value (XML 1.0 §3.1)")
             W === :strict && _check_chars_strict(rawval)
             W === :strict && token.has_entities && _check_refs_strict(rawval, strict, true)
             name = _fsub_or_empty(xml, pan_off, pan_len)
@@ -252,7 +253,8 @@ function _flat_parse(xml::String, lastcr::Int, ::Val{W}) where {W}
         elseif k === K.COMMENT_CONTENT
             cmt = raw(token, xml)
             W === :strict && _check_chars_strict(cmt)
-            W === :strict && occursin("--", cmt) && error("not well-formed: \"--\" within a comment")
+            W === :strict && _has_double_hyphen(cmt) &&
+                error("not well-formed: \"--\" within a comment")
             W === :strict && endswith(cmt, '-') && error("not well-formed: \"-\" immediately before \"-->\" in a comment (XML 1.0 §2.5)")
             off, len, cr = _flat_value(cmt, _frng(cmt)..., lastcr)
             cr && (len = -len)

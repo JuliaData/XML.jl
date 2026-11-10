@@ -503,7 +503,7 @@ end
 # its hot path, and a `Union{SubString{String}, String}` return would heap-box the dominant
 # clean-path SubString at every non-inlined call site — one 32-byte box per read (#98, #105).
 function unescape(x::SubString{String})
-    occursin('&', x) || return x
+    XMLTokenizer._hasbyte(x, UInt8('&')) || return x
     cu = codeunits(x)
     buf, m, nrefs = _decode_to_scratch!(cu, length(cu))
     return nrefs == 0 ? x : SubString(_take_string(buf, m))

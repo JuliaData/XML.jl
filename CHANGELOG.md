@@ -37,6 +37,8 @@ With the changes below, the same call can give another result than with v0.4.8.
 
 - **`tag` on a `FlatNode` returns an empty string for a processing instruction without a target, as the other readers do** ([#226](https://github.com/JuliaData/XML.jl/issues/226)). The default `wellformed = :structural` accepts such an instruction, and `:lenient` accepts an element without a name, which now gets an empty tag too. In v0.4.8, `tag` returned `nothing` for both, so `XML.write` and `Node(n)` threw on such a `FlatNode`, and `==` with the matching `Node` was `false`.
 
+- **Under Julia 1.10, the readers search texts, attribute values and comments through their bytes** ([#233](https://github.com/JuliaData/XML.jl/issues/233)). Julia 1.10 reads a `SubString{String}` one character at a time to find a character in it, where later versions search its bytes. Every reader searched each text and each attribute value that way for a `&`. `parse` did the same for a `<` in each attribute value and, under `:strict`, for `--` in each comment, and so did the reading of a document whose DOCTYPE declares entities. On an Apple M5 with Julia 1.10.13 and a 13.5 MiB document, `next!` on a `Cursor` reaches the end 2.2 times faster than in v0.4.8, and so does a `LazyNode` walk with `value`. `parse` is 1.4 times faster to a `Node` and 1.6 times to a `FlatNode`. With a document passed as a `SubString{String}` or as a `StringView`, `next!` reaches the end 3.7 and 2.8 times faster. This change leaves the code that Julia 1.11 and later run as it was.
+
 ## [0.4.8] - 2026-11-04
 
 ### Changed

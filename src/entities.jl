@@ -481,7 +481,7 @@ function _expand_refs!(io::IOBuffer, s::AbstractString, ents::InternalEntities, 
     i = firstindex(s)
     stop = lastindex(s)
     while i <= stop
-        amp = findnext('&', s, i)
+        amp = XMLTokenizer._findchar(s, UInt8('&'), i)
         if amp === nothing
             _write_span!(io, SubString(s, i), literal, depth > 1)
             break
@@ -611,7 +611,7 @@ end
 function _references_declared(s::AbstractString, ents::InternalEntities)
     i = firstindex(s)
     stop = lastindex(s)
-    while (amp = findnext('&', s, i)) !== nothing
+    while (amp = XMLTokenizer._findchar(s, UInt8('&'), i)) !== nothing
         j = nextind(s, amp)
         while j <= stop && _is_name_byte(codeunit(s, j))
             j = nextind(s, j)

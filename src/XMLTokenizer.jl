@@ -315,15 +315,15 @@ end
 @noinline err(msg::AbstractString, pos::Int) = throw(ArgumentError("XML tokenizer error at position $pos: $msg"))
 
 #-----------------------------------------------------------------------# Text and markup
-# Read text content up to the next '<'. Uses `findnext` (memchr-backed for `String`) to
-# find the end-of-text delimiter, then scans for `&` only within the text region — a full
-# document `findnext('&', ...)` would be O(doc_size) per text token and degrade to
-# O(doc_size²) on entity-free documents.
+# Read text content up to the next '<'. Uses `_findchar` (memchr-backed for `String`) to
+# find the end-of-text delimiter, then `_hasbyte` scans for `&` only within the text
+# region — a full document `findnext('&', ...)` would be O(doc_size) per text token and
+# degrade to O(doc_size²) on entity-free documents.
 function read_text(data::AbstractString, pos::Int)
     start = pos
-    lt_idx = findnext('<', data, pos)
+    lt_idx = _findchar(data, UInt8('<'), pos)
     end_pos = isnothing(lt_idx) ? ncodeunits(data) + 1 : lt_idx
-    has_amp = occursin('&', _span_view(data, start, end_pos))
+    has_amp = _hasbyte(data, UInt8('&'), start, end_pos)
     tok = make_token(TokenKinds.TEXT, has_amp, data, start, end_pos)
     (tok, TokenizerState(end_pos, M_DEFAULT, no_token(data)))
 end
@@ -474,7 +474,7 @@ function read_in_tag(data::AbstractString, pos::Int, mode::Mode)
 end
 
 # Read a quoted attribute value (including the quotes). Same shape as `read_text`: use
-# `findnext` for the closing quote (memchr-backed for `String`), then a bounded `occursin`
+# `_findchar` for the closing quote (memchr-backed for `String`), then a bounded `_hasbyte`
 # over the value range for entity detection so we never scan past the quote.
 function read_attr_value(data::AbstractString, pos::Int, mode::Mode)
     iseof(data, pos) && err("expected attribute value", pos)
@@ -484,11 +484,10 @@ function read_attr_value(data::AbstractString, pos::Int, mode::Mode)
 
     start = pos
     pos += 1  # skip opening quote
-    quote_char = Char(q)
-    close_idx = findnext(quote_char, data, pos)
+    close_idx = _findchar(data, q, pos)
     isnothing(close_idx) && err("unterminated attribute value", start)
-    # Value range is [pos, close_idx - 1]; entity check is bounded to this view.
-    has_amp = occursin('&', _span_view(data, pos, close_idx))
+    # Value range is [pos, close_idx - 1]; entity check is bounded to this range.
+    has_amp = _hasbyte(data, UInt8('&'), pos, close_idx)
     pos = close_idx + 1  # one past the closing quote (always ASCII)
 
     next_state = (mode == M_XML_DECL_VALUE) ? M_XML_DECL : M_TAG
@@ -663,6 +662,33 @@ end
         i += 1
     end
     return findnext(==(b), bytes, i)
+end
+
+# Whether the byte `b` occurs in the bytes [start, stop) of `data`, or in the whole of `s`.
+# `b` is ASCII, so it never falls inside a multi-byte character. This search is for a byte
+# that is mostly absent, as the `&` of a text: it reads every byte, so it has no use for
+# the stretch that `_findbyte` reads one byte at a time.
+@inline _hasbyte(data::AbstractString, b::UInt8, start::Int, stop::Int) =
+    occursin(Char(b), _span_view(data, start, stop))
+@inline _hasbyte(s::AbstractString, b::UInt8) = occursin(Char(b), s)
+
+# The index of the first byte `b` at or after `i`, or `nothing`, by the string's own search
+# for a character: the `<` that ends a text, the quote that closes an attribute value, the
+# `&` that opens a reference.
+@inline _findchar(data::AbstractString, b::UInt8, i::Int) = findnext(Char(b), data, i)
+
+# Under Julia 1.10, Base searches a `String` for a character through its bytes, with
+# `memchr`, but a `SubString{String}` one character at a time, each of them decoded. There,
+# a span of a `String` is searched through the bytes of that `String`, and a
+# `SubString{String}` through those of its parent.
+if VERSION < v"1.11"
+    @inline _hasbyte(data::String, b::UInt8, start::Int, stop::Int) =
+        findnext(==(b), view(codeunits(data), start:stop-1), 1) !== nothing
+    @inline _hasbyte(data::SubString{String}, b::UInt8, start::Int, stop::Int) =
+        _hasbyte(data.string, b, data.offset + start, data.offset + stop)
+    @inline _hasbyte(s::SubString{String}, b::UInt8) =
+        _hasbyte(s.string, b, s.offset + 1, s.offset + ncodeunits(s) + 1)
+    @inline _findchar(data::SubString{String}, b::UInt8, i::Int) = _findbyte(data, b, i)
 end
 
 # Find the end of a comment, a CDATA section or a processing instruction whose text starts at
