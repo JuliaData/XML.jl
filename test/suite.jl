@@ -98,6 +98,16 @@ end
         @test unescape(s) == s
     end
 
+    @testset "unescape reads a view alone" begin
+        # The references that the parent holds on either side of a view leave the view as it
+        # is. One that opens the view, or ends it, is decoded.
+        v = SubString("&amp;ab&amp;", 6, 7)
+        @test v == "ab"
+        @test unescape(v) === v
+        @test unescape(SubString("x&amp;y", 2, 6)) == "&"
+        @test unescape(SubString("x" * "y"^40 * "&lt;", 2)) == "y"^40 * "<"
+    end
+
     @testset "multiple entities in one string" begin
         @test escape("a < b & c > d") == "a &lt; b &amp; c &gt; d"
         @test unescape("a &lt; b &amp; c &gt; d") == "a < b & c > d"
@@ -588,6 +598,32 @@ end
         @test nodetype(parse("<root><!-- foo ---></root>", Node; wellformed=:lenient)) == Document
         # a "-" NOT abutting the close is well-formed even at :strict
         @test nodetype(parse("<root><!-- a - b --></root>", Node; wellformed=:strict)) == Document
+
+        # A "--" that opens the text, ends it or lies far into it is refused the same way by
+        # both readers, next to single hyphens and to characters of several bytes. Single
+        # hyphens are read, however many.
+        refused = ErrorException("not well-formed: \"--\" within a comment")
+        doubles = ("--a", "a--", "a--b", "x"^40 * "--", "x"^40 * "--y", "-a-b--c", "é--é")
+        singles = ("a-b", "-a", "a - b - c", "x"^40 * "-y", "-a-b-c", "é-é", "")
+        for R in (Node, FlatNode)
+            for text in doubles
+                @test_throws refused parse("<r><!--$text--></r>", R; wellformed = :strict)
+                @test nodetype(parse("<r><!--$text--></r>", R)) == Document
+            end
+            for text in singles
+                doc = parse("<r><!--$text--></r>", R; wellformed = :strict)
+                @test nodetype(doc) == Document
+            end
+        end
+        # The text is read alone: the hyphens that its neighbors hold on either side of it
+        # make no pair with its own.
+        double_hyphen = XML.ByteSearch._has_double_hyphen
+        @test !double_hyphen(SubString("--a-b--", 2, 6))
+        @test !double_hyphen(SubString("---", 2, 2))
+        @test !double_hyphen(SubString("--", 2, 1))
+        @test double_hyphen(SubString("xa--bx", 2, 5))
+        @test double_hyphen("--")
+        @test !double_hyphen("-") && !double_hyphen("")
     end
 end
 
@@ -1119,6 +1155,19 @@ end
         @test_throws Exception parse("""<x a="1<2"/>""", Node; wellformed=:strict)
         @test parse("""<x a="1<2"/>""", Node; wellformed=:lenient)[1]["a"] == "1<2" # :lenient accepts
         @test parse("""<x a="1&lt;2"/>""", Node)[1]["a"] == "1<2"                    # &lt; is well-formed
+        # A `<` that opens a value, ends it or lies far into it is refused the same way, by
+        # both readers. A value that holds none is read, with a tag right after its own.
+        refused = ErrorException("not well-formed: '<' in attribute value (XML 1.0 §3.1)")
+        values = ("<", "<12", "12<", "x"^40 * "<", "<" * "x"^40, "é<", "<é")
+        for value in values, R in (Node, FlatNode)
+            doc = "<x a=\"$value\"/>"
+            @test_throws refused parse(doc, R)
+            @test_throws refused parse(doc, R; wellformed = :strict)
+            @test nodetype(parse(doc, R; wellformed = :lenient)) == Document
+        end
+        for value in ("", "1", "x"^40, "é"), R in (Node, FlatNode)
+            @test nodetype(parse("<x a=\"$value\"><y/></x>", R)) == Document
+        end
     end
 
     @testset "attribute with entity reference" begin
@@ -1325,6 +1374,32 @@ end
         @test ents("<?xml version=\"1.0\"?><!-- c --><a/>") === nothing
         @test ents("<!DOCTYPE a [<!ELEMENT a EMPTY>]><a/>") === nothing
         @test ents("<!DOCTYPE a SYSTEM \"a.dtd\"><a/>") === nothing
+    end
+
+    @testset "a reference is found at each place of a text and of an attribute value" begin
+        # The reference opens the span, ends it, or comes after more than sixteen bytes of
+        # it, next to predefined references and to characters of several bytes.
+        dtd = "<!DOCTYPE a [<!ENTITY e \"v\">]>"
+        far = "x"^40
+        bodies = ("&e;" => "v", "x&e;" => "xv", "&e;x" => "vx", far * "&e;" => far * "v",
+                  "&e;" * far * "&e;" => "v" * far * "v", "&amp;&e;&lt;" => "&v<",
+                  "é&e;é" => "évé", "&amp;" * far => "&" * far)
+        for (body, text) in bodies
+            @test root_text(dtd * "<a>" * body * "</a>") == fill(text, 8)
+            for R in (Node, FlatNode, LazyNode)
+                root = only(elements(parse(dtd * "<a b=\"" * body * "\"/>", R)))
+                @test collect(attributes(root)) == ["b" => text]
+            end
+        end
+        # The same through a `SubString{String}`, whose parent holds a reference on either
+        # side of it, and through a `StringView`.
+        doc = dtd * "<a b=\"x&e;\">" * far * "&e;</a>"
+        inner = SubString("&e;" * doc * "&e;", 4, 3 + ncodeunits(doc))
+        for src in (doc, inner, StringView(Vector{UInt8}(doc)))
+            root = only(elements(parse(src, LazyNode)))
+            @test value(only(children(root))) == far * "v"
+            @test collect(attributes(root)) == ["b" => "xv"]
+        end
     end
 
     @testset "the byte probe never misses a DOCTYPE the tokenizer finds" begin
@@ -1632,8 +1707,8 @@ end
                 check(collect(attributes(r)) == ["a" => "hi", "d" => "v"], "attributes")
                 check(value(only(children(r))) == "hi", "text")
                 check(parse(sv, Cursor) isa Cursor{typeof(sv)}, "Cursor type")
-                generic = which(XML.XMLTokenizer._findbyte, Tuple{AbstractString, UInt8, Int})
-                check(which(XML.XMLTokenizer._findbyte, Tuple{typeof(sv), UInt8, Int}) !== generic,
+                generic = which(XML.ByteSearch._findbyte, Tuple{AbstractString, UInt8, Int})
+                check(which(XML.ByteSearch._findbyte, Tuple{typeof(sv), UInt8, Int}) !== generic,
                       "byte search")
                 """
             mktemp() do path, io

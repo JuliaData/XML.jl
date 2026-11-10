@@ -605,7 +605,8 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
 
         elseif k === TokenKinds.ATTR_VALUE
             rawval = attr_value(token, xml)
-            W !== :lenient && occursin('<', rawval) && error("not well-formed: '<' in attribute value (XML 1.0 §3.1)")
+            W !== :lenient && _hasbyte(rawval, UInt8('<')) &&
+                error("not well-formed: '<' in attribute value (XML 1.0 §3.1)")
             W === :strict && _check_chars_strict(rawval)
             W === :strict && token.has_entities && _check_refs_strict(rawval, strict, true)
             val = _text_value(S, _normalize_attr_ws(rawval), token.has_entities, convert_text)
@@ -650,7 +651,8 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
         elseif k === TokenKinds.COMMENT_CONTENT
             cmt = raw(token, xml)
             W === :strict && _check_chars_strict(cmt)
-            W === :strict && occursin("--", cmt) && error("not well-formed: \"--\" within a comment")
+            W === :strict && _has_double_hyphen(cmt) &&
+                error("not well-formed: \"--\" within a comment")
             W === :strict && endswith(cmt, '-') && error("not well-formed: \"-\" immediately before \"-->\" in a comment (XML 1.0 §2.5)")
             push!(scratch_children, Node{S}(Comment, nothing, nothing, _to(S, cmt), nothing))
 

@@ -1,4 +1,4 @@
-using Test, XML
+using Test, XML, StringViews
 
 # Token-layer names are not exported by XMLTokenizer; import them explicitly so this file
 # runs both standalone and when included from runtests.jl. `raw(token, data)` reconstructs
@@ -484,6 +484,157 @@ end
         @test t.kind == tref.kind
         @test raw(t, sub) == raw(tref, MULTIBYTE_DOC)
         @test raw(t, sub) == checked_span(padded, t.offset, t.ncodeunits)
+    end
+end
+
+@testset "entity flag and span of a text and of an attribute value, by source type" begin
+    # The document is a `String` or a `StringView`, or a `SubString` of one whose parent
+    # holds a `&`, a `<` and both quotes on either side of it: a search that left the
+    # document would meet them.
+    bytes(doc) = StringView(Vector{UInt8}(doc))
+    function inner(doc, parent_type = identity)
+        parent = parent_type("&<\"'&" * doc * "&<\"'&")
+        SubString(parent, 6, prevind(parent, 6 + ncodeunits(doc)))
+    end
+    sources = (identity, inner, bytes, doc -> inner(doc, bytes))
+    # A text or a value of up to 40 bytes holds no `&`, or one at each position in turn.
+    # The text lies between two tags, opens the document, or ends it with no `<` after.
+    body(len, at) = at == 0 ? "x"^len : "x"^(at - 1) * "&" * "x"^(len - at)
+    shapes = (
+        (TokenKinds.TEXT, 1, b -> "<a>" * b * "</a>", identity),
+        (TokenKinds.TEXT, 1, b -> b * "<a/>", identity),
+        (TokenKinds.TEXT, 1, b -> "<a/>" * b, identity),
+        (TokenKinds.ATTR_VALUE, 0, b -> "<a b=\"" * b * "\"/>", b -> "\"" * b * "\""),
+        (TokenKinds.ATTR_VALUE, 0, b -> "<a b='" * b * "'/>", b -> "'" * b * "'"),
+    )
+    for source in sources, (kind, shortest, doc, span) in shapes
+        wrong = Tuple{Int, Int}[]
+        for len in shortest:40, at in 0:len
+            b = body(len, at)
+            src = source(doc(b))
+            t = only(tok for tok in tokenize(src) if tok.kind == kind)
+            t.has_entities == (at > 0) && raw(t, src) == span(b) || push!(wrong, (len, at))
+        end
+        @test isempty(wrong)
+    end
+    # A `&` next to characters of two, three and four bytes, and none among them.
+    multibyte = ("é&é" => true, "€&" => true, "&😀" => true, "日本&語" => true,
+                 "é€😀日本語" => false)
+    for source in sources, (b, flag) in multibyte
+        for (kind, doc) in ((TokenKinds.TEXT, "<a>" * b * "</a>"),
+                            (TokenKinds.ATTR_VALUE, "<a b=\"" * b * "\"/>"))
+            src = source(doc)
+            t = only(tok for tok in tokenize(src) if tok.kind == kind)
+            @test t.has_entities == flag
+        end
+    end
+    # A value with no closing quote, cut after its first byte or right after its opening
+    # quote: the search stops at the end of a `SubString` document, whose parent holds a
+    # quote past it.
+    for cut in ("<a b=\"x", "<a b=\""), parent_type in (identity, bytes)
+        @test_throws ArgumentError collect(tokenize(parent_type(cut)))
+        whole = parent_type(cut * "\"/>")
+        @test_throws ArgumentError collect(tokenize(SubString(whole, 1, ncodeunits(cut))))
+    end
+end
+
+@testset "under Julia 1.10, each source type is searched through its bytes" begin
+    # Julia 1.10 searches a `SubString{String}` for a character one character at a time, and
+    # a `StringView` at several times the cost of the `memchr` call. Each of these source
+    # types has its own search there, apart from the one that goes through the string
+    # interface. A `String` keeps that one to find a character: Base runs it with `memchr`.
+    if VERSION < v"1.11"
+        T = XML.ByteSearch
+        for S in (String, SubString{String}, StringView{Vector{UInt8}},
+                  SubString{StringView{Vector{UInt8}}})
+            @test which(T._hasbyte, Tuple{S, UInt8, Int, Int}) !==
+                  which(T._hasbyte, Tuple{AbstractString, UInt8, Int, Int})
+            S === String && continue
+            @test which(T._findchar, Tuple{S, UInt8, Int}) !==
+                  which(T._findchar, Tuple{AbstractString, UInt8, Int})
+        end
+        @test which(T._hasbyte, Tuple{SubString{String}, UInt8}) !==
+              which(T._hasbyte, Tuple{AbstractString, UInt8})
+        # and so has the search of a comment for `--`
+        @test which(T._has_double_hyphen, Tuple{SubString{String}}) !==
+              which(T._has_double_hyphen, Tuple{AbstractString})
+    end
+end
+
+@testset "a byte is searched for within a view, not past its ends" begin
+    hasbyte = XML.ByteSearch._hasbyte
+    lt = UInt8('<')
+    # The parent holds the byte on either side of the view, which holds it at its first
+    # byte, at its last one, or nowhere. The last view is empty, between two of them.
+    for len in (1, 2, 15, 16, 17, 64)
+        clean = SubString("<" * "x"^len * "<", 2, len + 1)
+        @test !hasbyte(clean, lt)
+        @test hasbyte(SubString("<<" * "x"^(len - 1) * "<", 2, len + 1), lt)
+        @test hasbyte(SubString("<" * "x"^(len - 1) * "<<", 2, len + 1), lt)
+    end
+    @test !hasbyte(SubString("<<", 2, 1), lt)
+    @test !hasbyte("", lt)
+    @test hasbyte("a<", lt)
+    @test !hasbyte("é€😀", lt)
+end
+
+@testset "long texts, attribute values and comments are searched through their bytes" begin
+    # A search that decodes each character of a text of some megabytes takes over a hundred
+    # times as long as `memchr` over the same bytes. Each operation below makes a few
+    # searches of the kind, and takes up to four times as long as `memchr` when they all go
+    # through the bytes. The bounds sit between the two, with room for a slow machine; each
+    # time is the best of five runs. An operation that also copies the span, or reads it
+    # byte by byte, is compared with a neighbor that does the same without the search.
+    best(f) = minimum(@elapsed(f()) for _ in 1:5)
+    count_tokens(src) = count(Returns(true), tokenize(src))
+    long = "x"^(4 * 2^20)
+    memchr = best(() -> findnext(==(UInt8('&')), codeunits(long), 1))
+    inner(doc) = SubString("<!--x-->" * doc, 9)
+    text, attribute = "<a>" * long * "</a>", "<a b=\"" * long * "\"/>"
+    for doc in (text, attribute), source in (identity, inner)
+        count_tokens(source("<a b=\"x\">y</a>"))      # compiles the readers for this type
+        src = source(doc)
+        @test best(() -> count_tokens(src)) < 10 * memchr
+    end
+    # `parse` searches each attribute value for a `<`, and `unescape` a view for a `&`. A
+    # `Node` copies the value, which takes longer than the search: its time is compared with
+    # that of the `:lenient` level, which makes no such search.
+    parse("<a b=\"x\"/>", FlatNode)
+    @test best(() -> parse(attribute, FlatNode)) < 20 * memchr
+    parse("<a b=\"x\"/>", Node), parse("<a b=\"x\"/>", Node; wellformed = :lenient)
+    @test best(() -> parse(attribute, Node)) <
+          3 * best(() -> parse(attribute, Node; wellformed = :lenient))
+    value = inner(long)
+    XML.unescape(inner("x"))
+    @test best(() -> XML.unescape(value)) < 10 * memchr
+    # A document whose DOCTYPE declares an entity is rewritten before it is read, and each
+    # text that holds a `&` is searched for a reference to that entity.
+    function walk(src)
+        cursor, count = Cursor(src), 0
+        while next!(cursor) !== nothing
+            count += 1
+        end
+        count
+    end
+    dtd = "<!DOCTYPE a [<!ENTITY e \"v\">]>"
+    walk(dtd * "<a>&e;<b>&amp;</b></a>")
+    @test best(() -> walk(dtd * "<a>&amp;" * long * "</a>")) < 20 * memchr
+    # A text that holds such a reference is copied too: its walk is compared with that of a
+    # document where the same long text is copied without being searched.
+    declared, apart = dtd * "<a>&e;" * long * "</a>", dtd * "<a>&e;<b>" * long * "</b></a>"
+    @test best(() -> walk(declared)) < 3 * best(() -> walk(apart))
+    # `:strict` searches each comment for `--`, once the tokenizer has read it byte by byte
+    # and its characters are checked. Under Julia 1.10, where that search goes through the
+    # bytes, its time is compared with that of a CDATA section of the same length, which is
+    # read and checked the same way without the search. Later versions run Base's own
+    # search.
+    if VERSION < v"1.11"
+        comment, cdata = "<a><!--" * long * "--></a>", "<a><![CDATA[" * long * "]]></a>"
+        for R in (Node, FlatNode)
+            parse("<a><!--c--><![CDATA[d]]></a>", R; wellformed = :strict)
+            @test best(() -> parse(comment, R; wellformed = :strict)) <
+                  3 * best(() -> parse(cdata, R; wellformed = :strict))
+        end
     end
 end
 

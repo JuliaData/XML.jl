@@ -200,7 +200,8 @@ function _flat_parse(xml::String, lastcr::Int, ::Val{W}) where {W}
 
         elseif k === K.ATTR_VALUE
             rawval = attr_value(token, xml)
-            W !== :lenient && occursin('<', rawval) && error("not well-formed: '<' in attribute value (XML 1.0 §3.1)")
+            W !== :lenient && _hasbyte(rawval, UInt8('<')) &&
+                error("not well-formed: '<' in attribute value (XML 1.0 §3.1)")
             W === :strict && _check_chars_strict(rawval)
             W === :strict && token.has_entities && _check_refs_strict(rawval, strict, true)
             name = _fsub_or_empty(xml, pan_off, pan_len)
@@ -252,7 +253,8 @@ function _flat_parse(xml::String, lastcr::Int, ::Val{W}) where {W}
         elseif k === K.COMMENT_CONTENT
             cmt = raw(token, xml)
             W === :strict && _check_chars_strict(cmt)
-            W === :strict && occursin("--", cmt) && error("not well-formed: \"--\" within a comment")
+            W === :strict && _has_double_hyphen(cmt) &&
+                error("not well-formed: \"--\" within a comment")
             W === :strict && endswith(cmt, '-') && error("not well-formed: \"-\" immediately before \"-->\" in a comment (XML 1.0 §2.5)")
             off, len, cr = _flat_value(cmt, _frng(cmt)..., lastcr)
             cr && (len = -len)
@@ -329,10 +331,10 @@ end
 @inline _flat_value(v::SubString{String}, off::Int32, len::Int32, lastcr::Int) =
     off < lastcr ? _flat_value_cr(v, off, len) : (off, len, false)
 @noinline function _flat_value_cr(v::SubString{String}, off::Int32, len::Int32)
-    j = XMLTokenizer._findbyte(v, UInt8('\r'), 1)
+    j = _findbyte(v, UInt8('\r'), 1)
     j === nothing && return (off, len, false)
     j == 1 && len >= 2 && codeunit(v, 2) == 0x0A &&
-        XMLTokenizer._findbyte(v, UInt8('\r'), 3) === nothing &&
+        _findbyte(v, UInt8('\r'), 3) === nothing &&
         return (off + Int32(1), len - Int32(1), false)
     return (off, len, true)
 end
@@ -367,9 +369,9 @@ Base.read(io::IO, ::Type{FlatNode}; wellformed::Symbol=:structural) =
 # declaration. With more, the search runs back from the end, where a file saved with CR LF
 # has its last one.
 function _last_cr(s::String)
-    i = XMLTokenizer._findbyte(s, UInt8('\r'), 1)
+    i = _findbyte(s, UInt8('\r'), 1)
     i === nothing && return 0
-    XMLTokenizer._findbyte(s, UInt8('\r'), i + 1) === nothing && return i
+    _findbyte(s, UInt8('\r'), i + 1) === nothing && return i
     return findprev(==(UInt8('\r')), codeunits(s), ncodeunits(s))::Int
 end
 

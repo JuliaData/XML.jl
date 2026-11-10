@@ -19,6 +19,9 @@ export
 # hence the guarded `eval` — a no-op on 1.10, which has no such notion.
 VERSION >= v"1.11" && eval(Meta.parse("public escape, unescape"))
 
+include("ByteSearch.jl")  # byte searches, by string type and Julia version — leaf
+using .ByteSearch: _findbyte, _findbyte_cu, _findchar, _hasbyte, _has_double_hyphen
+
 include("XMLTokenizer.jl")
 using .XMLTokenizer:
     XMLTokenizer, tokenize, tag_name, attr_value, pi_target, raw,

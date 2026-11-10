@@ -1,5 +1,7 @@
 module XMLTokenizer
 
+using ..ByteSearch: ByteSearch, _findbyte, _findchar, _hasbyte
+
 #-----------------------------------------------------------------------# TokenKinds
 baremodule TokenKinds
     import Base: @enum
@@ -138,6 +140,10 @@ end
 @inline function _span_view(data::AbstractString, start::Int, stop::Int)
     @inbounds _noshift_substring(_token_root(data), _data_offset(data) + start - 1, stop - start)
 end
+# Whether the byte `b` occurs in the bytes [start, stop) of `data`, for any string type:
+# through the view of that span. `ByteSearch` holds the methods that read the bytes.
+@inline ByteSearch._hasbyte(data::AbstractString, b::UInt8, start::Int, stop::Int) =
+    occursin(Char(b), _span_view(data, start, stop))
 # The way back, for a reader that resumes a scan at a token it holds: the positions in `data`
 # of the token's first and last bytes.
 @inline _data_start(t::Token, data::AbstractString) = t.offset - _data_offset(data) + 1
@@ -315,15 +321,15 @@ end
 @noinline err(msg::AbstractString, pos::Int) = throw(ArgumentError("XML tokenizer error at position $pos: $msg"))
 
 #-----------------------------------------------------------------------# Text and markup
-# Read text content up to the next '<'. Uses `findnext` (memchr-backed for `String`) to
-# find the end-of-text delimiter, then scans for `&` only within the text region — a full
-# document `findnext('&', ...)` would be O(doc_size) per text token and degrade to
-# O(doc_size²) on entity-free documents.
+# Read text content up to the next '<'. Uses `_findchar` (memchr-backed for `String`) to
+# find the end-of-text delimiter, then `_hasbyte` scans for `&` only within the text
+# region — a full document `findnext('&', ...)` would be O(doc_size) per text token and
+# degrade to O(doc_size²) on entity-free documents.
 function read_text(data::AbstractString, pos::Int)
     start = pos
-    lt_idx = findnext('<', data, pos)
+    lt_idx = _findchar(data, UInt8('<'), pos)
     end_pos = isnothing(lt_idx) ? ncodeunits(data) + 1 : lt_idx
-    has_amp = occursin('&', _span_view(data, start, end_pos))
+    has_amp = _hasbyte(data, UInt8('&'), start, end_pos)
     tok = make_token(TokenKinds.TEXT, has_amp, data, start, end_pos)
     (tok, TokenizerState(end_pos, M_DEFAULT, no_token(data)))
 end
@@ -474,7 +480,7 @@ function read_in_tag(data::AbstractString, pos::Int, mode::Mode)
 end
 
 # Read a quoted attribute value (including the quotes). Same shape as `read_text`: use
-# `findnext` for the closing quote (memchr-backed for `String`), then a bounded `occursin`
+# `_findchar` for the closing quote (memchr-backed for `String`), then a bounded `_hasbyte`
 # over the value range for entity detection so we never scan past the quote.
 function read_attr_value(data::AbstractString, pos::Int, mode::Mode)
     iseof(data, pos) && err("expected attribute value", pos)
@@ -484,11 +490,10 @@ function read_attr_value(data::AbstractString, pos::Int, mode::Mode)
 
     start = pos
     pos += 1  # skip opening quote
-    quote_char = Char(q)
-    close_idx = findnext(quote_char, data, pos)
+    close_idx = _findchar(data, q, pos)
     isnothing(close_idx) && err("unterminated attribute value", start)
-    # Value range is [pos, close_idx - 1]; entity check is bounded to this view.
-    has_amp = occursin('&', _span_view(data, pos, close_idx))
+    # Value range is [pos, close_idx - 1]; entity check is bounded to this range.
+    has_amp = _hasbyte(data, UInt8('&'), pos, close_idx)
     pos = close_idx + 1  # one past the closing quote (always ASCII)
 
     next_state = (mode == M_XML_DECL_VALUE) ? M_XML_DECL : M_TAG
@@ -625,44 +630,6 @@ end
         j += 1
     end
     return n + 1
-end
-
-# The index of the first byte `b` at or after `i`, or `nothing`; `b` is ASCII, so it never falls
-# inside a multi-byte character. A `String` is searched through its bytes, with `memchr` past a
-# short stretch. So is a `SubString{String}`, through its parent's bytes, since its own search
-# for a character decodes every character under Julia 1.10. Any other string type is read byte
-# by byte. On such a type, a search for a character decodes every character, and a byte search
-# on the code units copies them all under Julia 1.13, which takes them for a dense array. A
-# `StringView` is searched through its bytes, as a `String`: by the method below from Julia
-# 1.14, where Base defines the type, and by the StringViews extension before.
-@inline function _findbyte(data::AbstractString, b::UInt8, i::Int)
-    n = ncodeunits(data)
-    @inbounds while i <= n
-        codeunit(data, i) == b && return i
-        i += 1
-    end
-    return nothing
-end
-@inline _findbyte(s::String, b::UInt8, i::Int) = _findbyte_bytes(codeunits(s), b, i)
-@inline _findbyte(s::SubString{String}, b::UInt8, i::Int) =
-    _findbyte_bytes(view(codeunits(parent(s)), s.offset+1:s.offset+ncodeunits(s)), b, i)
-if isdefined(Base, :StringView)
-    @inline _findbyte(s::Union{Base.StringView, SubString{<:Base.StringView}}, b::UInt8, i::Int) =
-        _findbyte_bytes(codeunits(s), b, i)
-end
-
-# The search through bytes that `memchr` can scan. The first sixteen are read one at a time:
-# between dense tags the byte is mostly found within them, where the call to `memchr` costs
-# more than the loop. `memchr` takes the rest. It searches bytes, not characters, since the
-# stretch read one at a time may end inside a multi-byte character.
-@inline function _findbyte_bytes(bytes::AbstractVector{UInt8}, b::UInt8, i::Int)
-    n = length(bytes)
-    stop = min(n, i + 15)
-    @inbounds while i <= stop
-        bytes[i] == b && return i
-        i += 1
-    end
-    return findnext(==(b), bytes, i)
 end
 
 # Find the end of a comment, a CDATA section or a processing instruction whose text starts at
