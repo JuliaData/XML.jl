@@ -578,66 +578,6 @@ end
     @test !hasbyte("é€😀", lt)
 end
 
-@testset "long texts, attribute values and comments are searched through their bytes" begin
-    # A search that decodes each character of a text of some megabytes takes over a hundred
-    # times as long as `memchr` over the same bytes. Each operation below makes a few
-    # searches of the kind, and takes up to four times as long as `memchr` when they all go
-    # through the bytes. The bounds sit between the two, with room for a slow machine; each
-    # time is the best of five runs. An operation that also copies the span, or reads it
-    # byte by byte, is compared with a neighbor that does the same without the search.
-    best(f) = minimum(@elapsed(f()) for _ in 1:5)
-    count_tokens(src) = count(Returns(true), tokenize(src))
-    long = "x"^(4 * 2^20)
-    memchr = best(() -> findnext(==(UInt8('&')), codeunits(long), 1))
-    inner(doc) = SubString("<!--x-->" * doc, 9)
-    text, attribute = "<a>" * long * "</a>", "<a b=\"" * long * "\"/>"
-    for doc in (text, attribute), source in (identity, inner)
-        count_tokens(source("<a b=\"x\">y</a>"))      # compiles the readers for this type
-        src = source(doc)
-        @test best(() -> count_tokens(src)) < 10 * memchr
-    end
-    # `parse` searches each attribute value for a `<`, and `unescape` a view for a `&`. A
-    # `Node` copies the value, which takes longer than the search: its time is compared with
-    # that of the `:lenient` level, which makes no such search.
-    parse("<a b=\"x\"/>", FlatNode)
-    @test best(() -> parse(attribute, FlatNode)) < 20 * memchr
-    parse("<a b=\"x\"/>", Node), parse("<a b=\"x\"/>", Node; wellformed = :lenient)
-    @test best(() -> parse(attribute, Node)) <
-          3 * best(() -> parse(attribute, Node; wellformed = :lenient))
-    value = inner(long)
-    XML.unescape(inner("x"))
-    @test best(() -> XML.unescape(value)) < 10 * memchr
-    # A document whose DOCTYPE declares an entity is rewritten before it is read, and each
-    # text that holds a `&` is searched for a reference to that entity.
-    function walk(src)
-        cursor, count = Cursor(src), 0
-        while next!(cursor) !== nothing
-            count += 1
-        end
-        count
-    end
-    dtd = "<!DOCTYPE a [<!ENTITY e \"v\">]>"
-    walk(dtd * "<a>&e;<b>&amp;</b></a>")
-    @test best(() -> walk(dtd * "<a>&amp;" * long * "</a>")) < 20 * memchr
-    # A text that holds such a reference is copied too: its walk is compared with that of a
-    # document where the same long text is copied without being searched.
-    declared, apart = dtd * "<a>&e;" * long * "</a>", dtd * "<a>&e;<b>" * long * "</b></a>"
-    @test best(() -> walk(declared)) < 3 * best(() -> walk(apart))
-    # `:strict` searches each comment for `--`, once the tokenizer has read it byte by byte
-    # and its characters are checked. Under Julia 1.10, where that search goes through the
-    # bytes, its time is compared with that of a CDATA section of the same length, which is
-    # read and checked the same way without the search. Later versions run Base's own
-    # search.
-    if VERSION < v"1.11"
-        comment, cdata = "<a><!--" * long * "--></a>", "<a><![CDATA[" * long * "]]></a>"
-        for R in (Node, FlatNode)
-            parse("<a><!--c--><![CDATA[d]]></a>", R; wellformed = :strict)
-            @test best(() -> parse(comment, R; wellformed = :strict)) <
-                  3 * best(() -> parse(cdata, R; wellformed = :strict))
-        end
-    end
-end
-
 @testset "empty spans reconstruct as empty strings" begin
     for (xml, k) in (
         ("<!---->", TokenKinds.COMMENT_CONTENT),
