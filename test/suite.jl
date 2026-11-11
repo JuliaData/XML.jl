@@ -978,6 +978,155 @@ end
         @test nodetype(doc[3]) == Element
     end
 
+    @testset "doctype = :refuse refuses a document that has a DOCTYPE" begin
+        refused = "the document has a DOCTYPE, which doctype = :refuse does not accept"
+        thrown(f) = try f(); nothing catch e; e end
+        # What a cursor reads, to its end: the kind, the depth and the content of each node.
+        function events(c::Cursor)
+            out = Any[]
+            while next!(c) !== nothing
+                a = nodetype(c) === Element ? attributes(c) : nothing
+                push!(out, (nodetype(c), depth(c), tag(c), value(c), a === nothing ? a : collect(a)))
+            end
+            out
+        end
+        onfile(f, s) = mktemp() do path, io
+            write(io, s); close(io)
+            f(path)
+        end
+        # Each entry that takes a document, as a function of the document and its keywords.
+        entries = (
+            "parse(xml, Node)" => (s; kw...) -> parse(s, Node; kw...),
+            "parse(Node, xml)" => (s; kw...) -> parse(Node, s; kw...),
+            "parse(xml, Node{SubString{String}})" => (s; kw...) -> parse(s, Node{SubString{String}}; kw...),
+            "read(io, Node)" => (s; kw...) -> read(IOBuffer(s), Node; kw...),
+            "read(file, Node)" => (s; kw...) -> onfile(p -> read(p, Node; kw...), s),
+            "parse(xml, FlatNode)" => (s; kw...) -> parse(s, FlatNode; kw...),
+            "parse(FlatNode, xml)" => (s; kw...) -> parse(FlatNode, s; kw...),
+            "read(io, FlatNode)" => (s; kw...) -> read(IOBuffer(s), FlatNode; kw...),
+            "read(file, FlatNode)" => (s; kw...) -> onfile(p -> read(p, FlatNode; kw...), s),
+            "parse(xml, LazyNode)" => (s; kw...) -> parse(s, LazyNode; kw...),
+            "parse(LazyNode, xml)" => (s; kw...) -> parse(LazyNode, s; kw...),
+            "LazyNode(xml, Document)" => (s; kw...) -> LazyNode(s, Document; kw...),
+            "read(io, LazyNode)" => (s; kw...) -> read(IOBuffer(s), LazyNode; kw...),
+            "read(file, LazyNode)" => (s; kw...) -> onfile(p -> read(p, LazyNode; kw...), s),
+            "Cursor(xml)" => (s; kw...) -> events(Cursor(s; kw...)),
+            "parse(xml, Cursor)" => (s; kw...) -> events(parse(s, Cursor; kw...)),
+            "parse(Cursor, xml)" => (s; kw...) -> events(parse(Cursor, s; kw...)),
+            "read(io, Cursor)" => (s; kw...) -> events(read(IOBuffer(s), Cursor; kw...)),
+            "read(file, Cursor)" => (s; kw...) -> events(onfile(p -> read(p, Cursor; kw...), s)),
+        )
+        # A DOCTYPE before the root, whatever it declares and whatever comes before it.
+        doctypes = ("<!DOCTYPE a><a/>", "<!DOCTYPE a SYSTEM \"a.dtd\"><a/>", "<!DOCTYPE a []><a/>",
+                    "<!DOCTYPE a [<!ENTITY e \"x\">]><a>&e;</a>",
+                    "<!DOCTYPE a [<!ATTLIST a k CDATA \"v\">]><a/>",
+                    "<?xml version=\"1.0\"?>\n<!DOCTYPE a>\n<a/>",
+                    "<!-- c --><?p q?><!DOCTYPE a><a/>", "﻿<!DOCTYPE a><a/>",
+                    # after a comment or an instruction whose end is easy to find too early
+                    "<!--><a>--><!DOCTYPE a><a/>", "<!---><a>--><!DOCTYPE a><a/>",
+                    "<?><a>?><!DOCTYPE a><a/>")
+        plain = ("<a>t</a>", "<?xml version=\"1.0\"?>\n<!-- c --><a b=\"1\">x<![CDATA[y]]>&amp;</a>",
+                 "<a>l1\r\nl2</a>", "﻿<a/>")
+        # One that `:apply` refuses for what it declares: an entity that refers to itself.
+        selfref = "<!DOCTYPE a [<!ENTITY e \"&e;\">]><a/>"
+        @testset "$name" for (name, entry) in entries
+            for xml in doctypes
+                err = thrown(() -> entry(xml; doctype = :refuse))
+                @test err isa ErrorException && err.msg == refused
+                @test entry(xml; doctype = :apply) == entry(xml)
+            end
+            for xml in plain
+                @test entry(xml; doctype = :refuse) == entry(xml)
+            end
+            # The DOCTYPE is refused before its declarations are read.
+            err = thrown(() -> entry(selfref))
+            @test err isa ErrorException && occursin("refers to itself", err.msg)
+            err = thrown(() -> entry(selfref; doctype = :refuse))
+            @test err isa ErrorException && err.msg == refused
+            # Another value is an error: a misspelled `:refuse` must not read as `:apply`.
+            for bad in (:refsue, :ignore, :Refuse)
+                err = thrown(() -> entry("<a/>"; doctype = bad))
+                @test err isa ArgumentError &&
+                      all(s -> occursin(s, err.msg), (repr(bad), ":apply", ":refuse"))
+            end
+        end
+        # `read` checks the keyword before it opens the file.
+        for R in (Node, FlatNode, LazyNode, Cursor)
+            @test_throws ArgumentError read("no such file.xml", R; doctype = :refsue)
+        end
+        # It checks it before it reads a stream too, which stays where it stood.
+        for R in (Node, FlatNode, LazyNode, Cursor)
+            io = IOBuffer("<a/>")
+            @test_throws ArgumentError read(io, R; doctype = :refsue)
+            @test position(io) == 0
+        end
+        # The `wellformed` level does not change the answer.
+        for R in (Node, FlatNode), w in (:lenient, :structural, :strict)
+            err = thrown(() -> parse("<!DOCTYPE a><a/>", R; wellformed = w, doctype = :refuse))
+            @test err isa ErrorException && err.msg == refused
+            @test parse("<a/>", R; wellformed = w, doctype = :refuse) == parse("<a/>", R; wellformed = w)
+        end
+        # `LazyNode` and `Cursor` keep the string type of their source, and answer the same on
+        # a view of a `String` and on a `StringView`.
+        declared, plain_doc = "<!DOCTYPE a [<!ENTITY e \"x\">]><a>&e;</a>", "<?xml version=\"1.0\"?>\n<a>t</a>"
+        for wrap in (s -> SubString("<x/>" * s * "<y/>", 5, 4 + ncodeunits(s)),
+                     s -> StringView(Vector{UInt8}(s)))
+            for lazy in ((s; kw...) -> parse(s, LazyNode; kw...), (s; kw...) -> events(Cursor(s; kw...)))
+                err = thrown(() -> lazy(wrap(declared); doctype = :refuse))
+                @test err isa ErrorException && err.msg == refused
+                @test lazy(wrap(plain_doc); doctype = :refuse) == lazy(wrap(plain_doc))
+            end
+        end
+        # A DOCTYPE after the start tag of the root is never applied, and `:refuse` leaves
+        # it as it is: a `DTD` node for the lenient readers, and an error of its own from
+        # `:structural` on.
+        for xml in ("<a>&e;</a><!DOCTYPE a [<!ENTITY e \"x\">]>", "<a><!DOCTYPE a [<!ENTITY e \"x\">]>&e;</a>")
+            seen = events(Cursor(xml; doctype = :refuse))
+            @test seen == events(Cursor(xml))
+            @test any(e -> e[1] === DTD, seen) && any(e -> e[1] === Text && e[4] == "&e;", seen)
+            @test parse(xml, LazyNode; doctype = :refuse) == parse(xml, LazyNode)
+            for R in (Node, FlatNode)
+                @test parse(xml, R; wellformed = :lenient, doctype = :refuse) ==
+                      parse(xml, R; wellformed = :lenient)
+                err = thrown(() -> parse(xml, R; doctype = :refuse))
+                @test err isa ErrorException && startswith(err.msg, "not well-formed: DOCTYPE")
+            end
+        end
+        # A prolog that the byte probe does not recognise holds no DOCTYPE for it: only the
+        # tokenizer's answer refuses a document.
+        @test XML._has_doctype("x<a/>") && XML._doctype_body("x<a/>") === nothing
+        @test parse("x<a/>", LazyNode; doctype = :refuse) == parse("x<a/>", LazyNode)
+        @test parse("x<a/>", Node; wellformed = :lenient, doctype = :refuse) ==
+              parse("x<a/>", Node; wellformed = :lenient)
+        # A prolog that the tokenizer cannot read gives its own error: when the document is
+        # opened with `:refuse`, and when the walk reaches it otherwise.
+        @test Cursor("<!-- x") isa Cursor
+        for open in (() -> Cursor("<!-- x"; doctype = :refuse),
+                     () -> parse("<!-- x", LazyNode; doctype = :refuse))
+            err = thrown(open)
+            @test err isa ArgumentError && occursin("unterminated comment", err.msg)
+        end
+        # Over every fixture on disk, `:refuse` refuses exactly the documents in which the
+        # tokenizer finds a DOCTYPE, and returns the others as they stand.
+        files = String[]
+        for (dir, _, fs) in walkdir(joinpath(@__DIR__, "data")), f in fs
+            endswith(f, ".xml") && push!(files, joinpath(dir, f))
+        end
+        with = without = 0
+        wrong = String[]
+        for f in files
+            s = try read(f, String) catch; continue end
+            isvalid(s) || continue
+            found = try XML._doctype_body(s) !== nothing catch; continue end
+            r = try XML._declared_source(s, true) catch e; e end
+            ok = found ? (r isa ErrorException && r.msg == refused) : r == (s, false)
+            ok || push!(wrong, basename(f))
+            found ? (with += 1) : (without += 1)
+        end
+        @test isempty(wrong)
+        @test with > 100 && without > 100
+    end
+
     @testset ":strict rejects a parameter-entity reference inside a declaration (§2.8)" begin
         # WFC: PEs in Internal Subset. Between declarations a reference is allowed; inside one,
         # in the literal of an entity as in the body of an ELEMENT, ATTLIST or NOTATION, it is

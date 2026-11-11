@@ -54,7 +54,8 @@ random-access read API of `Node` at almost none of its GC cost.
     end
 
 `parse` and `read` take the same `wellformed` keyword as for [`Node`](@ref): `:lenient`,
-`:structural` (the default) or `:strict`.
+`:structural` (the default) or `:strict`. They take its `doctype` keyword too: with
+`doctype = :refuse`, a document that has a DOCTYPE is refused.
 
 The whole document is parsed once into a contiguous columnar store (a `Vector` of isbits
 records indexing into the retained source string), so building is fast, random access is
@@ -352,17 +353,20 @@ _check_flat_names(source::String, attrs::Vector{_FlatAttr}, r::_FlatRec) =
 # it is read (§2.11, `_flat_slow`). A document that the declarations of its DOCTYPE rewrite
 # is read in that copy, whose line ends the rewrite has normalized: a CR left there comes
 # from a character reference, and stays.
-function Base.parse(xml::AbstractString, ::Type{FlatNode}; wellformed::Symbol=:structural)
+function Base.parse(xml::AbstractString, ::Type{FlatNode}; wellformed::Symbol=:structural, doctype::Symbol=:apply)
     _check_wellformed(wellformed)
-    source, rewritten = _declared_source(_drop_bom(String(xml)))
+    refuse = _refuses_doctype(doctype)
+    source, rewritten = _declared_source(_drop_bom(String(xml)), refuse)
     return _flat_parse(source, rewritten ? 0 : _last_cr(source), Val(wellformed))
 end
-Base.parse(::Type{FlatNode}, xml::AbstractString; wellformed::Symbol=:structural) =
-    parse(xml, FlatNode; wellformed)
-Base.read(filename::AbstractString, ::Type{FlatNode}; wellformed::Symbol=:structural) =
-    (_check_wellformed(wellformed); parse(String(_normalize_bom(read(filename))), FlatNode; wellformed))
-Base.read(io::IO, ::Type{FlatNode}; wellformed::Symbol=:structural) =
-    (_check_wellformed(wellformed); parse(String(_normalize_bom(read(io))), FlatNode; wellformed))
+Base.parse(::Type{FlatNode}, xml::AbstractString; wellformed::Symbol=:structural, doctype::Symbol=:apply) =
+    parse(xml, FlatNode; wellformed, doctype)
+Base.read(filename::AbstractString, ::Type{FlatNode}; wellformed::Symbol=:structural, doctype::Symbol=:apply) =
+    (_check_wellformed(wellformed); _refuses_doctype(doctype);
+     parse(String(_normalize_bom(read(filename))), FlatNode; wellformed, doctype))
+Base.read(io::IO, ::Type{FlatNode}; wellformed::Symbol=:structural, doctype::Symbol=:apply) =
+    (_check_wellformed(wellformed); _refuses_doctype(doctype);
+     parse(String(_normalize_bom(read(io))), FlatNode; wellformed, doctype))
 
 # The position of the last CR of a document read in place, or 0. Two forward searches find
 # it when the document holds a single CR, as a part saved by Excel does after its XML

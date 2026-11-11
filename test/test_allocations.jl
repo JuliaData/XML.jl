@@ -512,6 +512,18 @@ end
 measure_cursor_read_all(s) = @allocated cursor_read_all(s)
 measure_read_values(nodes) = @allocated read_values(nodes)
 measure_lazy_parse(s) = @allocated parse(s, LazyNode)
+# The same entries with `doctype = :refuse`, on a document that has no DOCTYPE to refuse.
+function cursor_read_all_refusing(s)
+    c = Cursor(s; doctype = :refuse)
+    n = 0
+    while next!(c) !== nothing
+        v = value(c)
+        v === nothing || (n += ncodeunits(v))
+    end
+    n
+end
+measure_cursor_read_all_refusing(s) = @allocated cursor_read_all_refusing(s)
+measure_lazy_parse_refusing(s) = @allocated parse(s, LazyNode; doctype = :refuse)
 
 @testset "Full read of a String: no copy at the entry, nothing per value" begin
     body = repeat("<c>v</c>", 10_000)
@@ -523,12 +535,31 @@ measure_lazy_parse(s) = @allocated parse(s, LazyNode)
         @test cursor_read_all(doc) >= 10_000
         # a `FlatNode` builds its arrays, but keeps the caller's bytes as its source
         @test pointer(sourcetext(flat)) == pointer(doc)
+        # with `doctype = :refuse`, a document without DOCTYPE is read from the same bytes
+        @test cursor_read_all_refusing(doc) == cursor_read_all(doc)
+        @test pointer(sourcetext(parse(doc, FlatNode; doctype = :refuse))) == pointer(doc)
         measure_lazy_parse(doc)                                               # warm-up
+        measure_lazy_parse_refusing(doc)
         if _NO_COVERAGE
             @test measure_lazy_parse(doc) < 1_000
             @test measure_cursor_read_all(doc) < 1_000
             @test measure_read_values(nodes) < 1_000
             @test measure_read_values(fnodes) < 1_000
+            @test measure_lazy_parse_refusing(doc) < 1_000
+            @test measure_cursor_read_all_refusing(doc) < 1_000
+        end
+    end
+    # On a view of a `String` and on a `StringView`, the lazy readers allocate no more with
+    # `doctype = :refuse` than without it.
+    small = "<?xml version=\"1.0\"?>\n<r><c>v</c><c>w</c></r>"
+    for src in (SubString("<x/>" * small * "<y/>", 5, 4 + ncodeunits(small)),
+                StringView(Vector{UInt8}(small)))
+        @test cursor_read_all_refusing(src) == cursor_read_all(src) == 3
+        measure_lazy_parse(src); measure_lazy_parse_refusing(src)             # warm-up
+        measure_cursor_read_all(src); measure_cursor_read_all_refusing(src)
+        if _NO_COVERAGE
+            @test measure_lazy_parse_refusing(src) <= measure_lazy_parse(src)
+            @test measure_cursor_read_all_refusing(src) <= measure_cursor_read_all(src)
         end
     end
     # a file saved with CR LF and indented: each line break opens a value, which comes back

@@ -78,6 +78,11 @@ is checked: `:lenient`, `:structural` (the default) or `:strict`; any other valu
 `ArgumentError`. What each level rejects is listed in
 [WELL-FORMEDNESS.md](https://github.com/JuliaData/XML.jl/blob/main/WELL-FORMEDNESS.md).
 
+The `doctype` keyword of `parse` and `read` says what to do with a document that has a
+DOCTYPE: `:apply` (the default) reads its declarations, and `:refuse` throws an error before
+any of them is read, whatever they are. [`FlatNode`](@ref), [`LazyNode`](@ref) and
+[`Cursor`](@ref) take it too. Any other value throws an `ArgumentError`.
+
 Use the accessor functions ([`nodetype`](@ref), [`tag`](@ref), [`attributes`](@ref),
 [`value`](@ref), [`children`](@ref)) rather than the raw fields when navigating a tree.
 Integer indexing returns children (`node[1]`); string indexing returns attribute values

@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **`eachattribute!(c)` reads the attributes of a `Cursor`'s element where the cursor stands** ([#162](https://github.com/JuliaData/XML.jl/issues/162)), and the next `next!` goes on after them, so each attribute is read once. It gives the pairs of `eachattribute(LazyNode(c))`, which reads the tag a second time. A later call reads the tag again from its `<`, as `attributes(c)` does.
 
+- **`doctype = :refuse` refuses a document that has a DOCTYPE** ([#245](https://github.com/JuliaData/XML.jl/issues/245)), before any of its declarations is read and whatever they are: `<!DOCTYPE a><a/>` is refused too. `parse` and `read` take the keyword for the four readers, and so does `Cursor(data)`. Its default, `:apply`, reads a document as before, and any other value throws an `ArgumentError`. It suits a program that reads documents it did not write, in a format that has no DTD. The DOCTYPE refused is the one that a reader applies, which comes before the root element. One that comes after the start tag of the root is never applied, and keeps its treatment: `Node` and `FlatNode` reject it from `:structural` on, and `:lenient`, `Cursor` and `LazyNode` report it as a `DTD` node.
+
 ### Changed
 
 With the changes below, the same call can give another result than with v0.4.8.

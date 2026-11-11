@@ -682,18 +682,31 @@ each span of the document that the walk copies is written with them normalized
 rewrite thus holds a CR only where a reference wrote one, and the document is copied once.
 A document that holds no CR is searched for one once, and its spans are copied as they
 stand.
+
+With `refuse`, which the readers set for `doctype = :refuse`, nothing is applied: a document
+that has a DOCTYPE is refused (see `_declared_source`).
 """
-_apply_declarations(s::AbstractString) = first(_declared_source(s))
+_apply_declarations(s::AbstractString, refuse::Bool = false) = first(_declared_source(s, refuse))
 
 """
-    _declared_source(src) -> (source, rewritten::Bool)
+    _declared_source(src, refuse = false) -> (source, rewritten::Bool)
 
 What `_apply_declarations` returns, and whether it is the rewritten copy. A reader that
 normalizes line ends value by value, as `LazyNode` and `Cursor` do, must not normalize the
 values of that copy: its line ends are already normalized, and a CR left in it comes from a
 character reference, which stays.
+
+With `refuse`, a document that has a DOCTYPE is refused before any of its declarations is
+read, whatever they are, and any other document is returned as it stands. The DOCTYPE is the
+one whose declarations would apply, which the tokenizer finds before the root element
+(`_doctype_body`). The byte probe is not asked: it only spares the other path a walk of the
+prolog, and a refusal must not depend on what it recognises.
 """
-function _declared_source(s::AbstractString)
+function _declared_source(s::AbstractString, refuse::Bool = false)
+    if refuse
+        _doctype_body(s) === nothing || _doctype_refused()
+        return (s, false)
+    end
     d = _declarations(s)
     d === nothing && return (s, false)
     bytes = _rewritten_bytes(s, d)
@@ -702,6 +715,9 @@ function _declared_source(s::AbstractString)
     rebuilt === nothing && _unrebuildable(s)
     return (rebuilt, true)
 end
+
+@noinline _doctype_refused() =
+    error("the document has a DOCTYPE, which doctype = :refuse does not accept")
 
 @noinline _unrebuildable(s::AbstractString) = throw(ArgumentError(
     "XML.jl cannot apply this document's DTD declarations to a source held as $(typeof(s)); " *
