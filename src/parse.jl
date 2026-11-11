@@ -451,16 +451,26 @@ end
 
 # Duplicate attributes (XML 1.0 §3.1, WFC: Unique Att Spec). Each new name is compared with
 # the earlier names of its tag while they are fewer than `_SMALL_ATTRIBUTE_COUNT`. A tag of
-# more attributes is checked once they are complete, by sorting its names: n attributes then
-# cost O(n log n), whatever the names. A hash set would not guarantee that bound: Julia hashes
+# more attributes is checked once they are complete, by sorting its names with a merge sort:
+# n attributes then cost O(n log n), whatever their names. Julia's default sort would not
+# guarantee that bound: it is a quicksort that takes its pivots at fixed places, and names
+# ordered against it make the comparisons grow as n². Nor would a hash set: Julia hashes
 # strings with a fixed function, so the bound would rest on the names.
 const _SMALL_ATTRIBUTE_COUNT = 32
 
 # Throw on the name whose second occurrence comes first: the one that comparing each new name
-# with the earlier ones would report.
+# with the earlier ones would report. As Julia's default sort does before it sorts, one pass
+# looks whether the names are in order already, and a second one whether they are in reverse
+# order, each name smaller than the one before it.
 function _check_unique_names(names::AbstractVector)
     keyed = [(names[i], i) for i in eachindex(names)]
-    sort!(keyed)
+    if !issorted(keyed)
+        if issorted(keyed; lt = !isless)
+            reverse!(keyed)
+        else
+            sort!(keyed; alg = MergeSort)
+        end
+    end
     repeat_at = 0
     for k in 2:length(keyed)
         if keyed[k][1] == keyed[k - 1][1]
