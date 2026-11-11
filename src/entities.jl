@@ -47,6 +47,11 @@ _resolve_charrefs(v::AbstractString) = occursin('&', v) ? replace(v, _CHARREF_RE
 # unexpanded with nothing to show for it. So `false` is returned only on positive knowledge —
 # the root element was reached — and anything unrecognised defers to the tokenizer. A
 # differential test pins the pair over every fixture on disk.
+#
+# Each form ends where the tokenizer ends it. The end of a comment and of an instruction is
+# searched after their opening, which in `<!-->` and in `<?>` already holds what ends one.
+# The XML declaration is read past its values, which may hold `?>` (`_xml_declaration_end`).
+# And an end tag is not the root element: what follows it is left to the tokenizer.
 @inline function _has_doctype(s::AbstractString)
     n = ncodeunits(s)
     i = 1
@@ -61,22 +66,56 @@ _resolve_charrefs(v::AbstractString) = occursin('&', v) ? replace(v, _CHARREF_RE
         i + 1 > n && return false
         c = codeunit(s, i + 1)
         if c == UInt8('?')                           # the XML declaration, or a PI
-            j = findnext("?>", s, i)
-            j === nothing && return false
-            i = last(j) + 1
+            stop = _is_xml_declaration(s, i, n) ? _xml_declaration_end(s, i + 5, n) : 0
+            if stop == 0                             # an instruction, or no such end
+                j = findnext("?>", s, i + 2)
+                j === nothing && return false
+                stop = last(j)
+            end
+            i = stop + 1
         elseif c == UInt8('!')
             if i + 3 <= n && codeunit(s, i + 2) == UInt8('-') && codeunit(s, i + 3) == UInt8('-')
-                j = findnext("-->", s, i)            # a comment
+                j = findnext("-->", s, i + 4)        # a comment
                 j === nothing && return false
                 i = last(j) + 1
             else
                 return true                          # `<!DOCTYPE`, or something only the tokenizer reads
             end
+        elseif c == UInt8('/')
+            return true                              # an end tag: the tokenizer reads on
         else
             return false                             # the root element: the prolog is over
         end
     end
     false
+end
+
+# Whether the `<?` at byte `i` opens the XML declaration: its target is `xml`, in that case
+# and no other, as for the tokenizer.
+@inline _is_xml_declaration(s::AbstractString, i::Int, n::Int) =
+    i + 4 <= n && codeunit(s, i + 2) == UInt8('x') && codeunit(s, i + 3) == UInt8('m') &&
+    codeunit(s, i + 4) == UInt8('l') &&
+    (i + 5 > n || !XMLTokenizer.is_name_byte(codeunit(s, i + 5)))
+
+# The index of the `>` that ends an XML declaration, searched from byte `k`, or 0 when none
+# is found. The tokenizer reads each value to its closing quote, so a `?>` inside a value
+# does not end the declaration. Where none is found, as when its quotes do not match, the
+# tokenizer stops on an error whatever the probe answers, and the probe goes on from the
+# first `?>`.
+function _xml_declaration_end(s::AbstractString, k::Int, n::Int)
+    @inbounds while k <= n
+        b = codeunit(s, k)
+        if b == UInt8('"') || b == UInt8('\'')
+            k += 1
+            while k <= n && codeunit(s, k) != b
+                k += 1
+            end
+        elseif b == UInt8('?') && k < n && codeunit(s, k + 1) == UInt8('>')
+            return k + 1
+        end
+        k += 1
+    end
+    0
 end
 
 # The prolog is walked, not the document: a DOCTYPE precedes the root element, so tokenizing
