@@ -45,6 +45,8 @@ With the changes below, the same call can give another result than with v0.4.8.
 
 - **A chain of declared entities is checked in memory proportional to its length** ([#241](https://github.com/JuliaData/XML.jl/issues/241)). To refuse an entity that refers to itself, each reader walks the entities that the DOCTYPE declares, whether the document uses them or not. That walk kept a copy of the chain of names at each step from one entity to the next. A document of 410 kB that declares 16,000 entities, each referring to the next, thus asked for more than a gigabyte. The walk now keeps a single chain, and follows a chain of any length.
 
+- **A DOCTYPE is read when the comment before it begins with `>`** ([#246](https://github.com/JuliaData/XML.jl/issues/246)). Before a reader looks for a DOCTYPE, it decides from the first bytes of the document whether it can have one. That check looked for the end of a comment from its `<`, and found it in the opening of `<!-->`. When the text of such a comment looked like a start tag, the declarations of the DOCTYPE were not read. In v0.4.8, `<!--><a>--><!DOCTYPE a [<!ENTITY e "x">]><a>&e;</a>` gives `&e;` for the text of `<a>`, and `:strict` refuses it for a reference to an undeclared entity. It now gives `x`. The same check missed a DOCTYPE in three kinds of documents that are not well-formed, but that `Cursor` and `LazyNode` read: after a processing instruction without a target, after an XML declaration with `?>` in a value, and after an end tag.
+
 ## [0.4.8] - 2026-11-04
 
 ### Changed

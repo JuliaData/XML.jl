@@ -1613,6 +1613,35 @@ end
         @test isempty(missed)
         @test checked > 100
         @test wasted < checked ÷ 10        # the probe is a filter, not a coin toss
+        # Prologs that no fixture holds. The opening of `<!-->`, of `<!--->` and of `<?>`
+        # holds what ends a comment or an instruction, a value of the XML declaration can
+        # hold `?>`, and an end tag is not the root. Each comes before a DOCTYPE and shows a
+        # start tag.
+        dtd = "<!DOCTYPE a [<!ENTITY e \"x\">]><a>&e;</a>"
+        for prolog in ("<!--><a>-->", "<!---><a>-->", "<?><a>?>", "<?p?>\n<!--><a>-->",
+                       "<?xml version=\"?><a>\"?>", "<?xml version='?><a>'?>", "</a>")
+            @test XML._doctype_body(prolog * dtd) !== nothing
+            @test XML._has_doctype(prolog * dtd)
+        end
+        # An instruction whose target only begins with `xml` is an instruction: its text is
+        # free, and ends at the first `?>`, between quotes or not.
+        named = "<?xml-x \"?><!DOCTYPE a [<!ENTITY e 'x'>]>\"?><a>&e;</a>"
+        @test XML._doctype_body(named) !== nothing
+        @test XML._has_doctype(named)
+        # A declaration whose quotes do not match stops the tokenizer on an error, and the
+        # probe then answers as for an instruction, from its first `?>`.
+        @test_throws ArgumentError XML._doctype_body("<?xml version='1.0 ?>" * dtd)
+        @test XML._has_doctype("<?xml version='1.0 ?>" * dtd)
+        # The two that are well-formed are read with their declarations, by every reader.
+        @test root_text("<!--><a>-->" * dtd) == fill("x", 8)
+        @test root_text("<!---><a>-->" * dtd) == fill("x", 8)
+        # A document without DOCTYPE still costs no walk of its prolog by the tokenizer.
+        for s in ("<?xml version=\"1.0\"?><a/>", "<?xml version='1.0' encoding=\"UTF-8\"?>\n<a/>",
+                  "<!-- c --><?p q?><a/>", "<?xml-stylesheet href=\"a.xsl\"?><a/>", "<?xml?><a/>",
+                  "<?Xml version=\"?><a>\"?><!DOCTYPE a><a/>")
+            @test XML._doctype_body(s) === nothing
+            @test !XML._has_doctype(s)
+        end
     end
 
     @testset "declarations are read, the first binding each name (§4.2)" begin
