@@ -13,6 +13,40 @@ include("w3c_suite.jl")
     @test isdir(joinpath(W3C_DIR, "xmlconf"))
 end
 
+# Names that settle their order as late as they can, after M. D. McIlroy, "A Killer
+# Adversary for Quicksort" (1999). Each name is undecided at first. A comparison of two
+# undecided names gives one of them the smallest rank left, and an undecided name is greater
+# than any ranked one. A sort that takes its pivots at fixed places then compares each name
+# with most of the others. `LateRanks` holds the ranks and counts the comparisons. Its first
+# three names are ranked 2, 1 and 3: neither sorted nor sorted in reverse, which a sort may
+# look for first.
+mutable struct LateRanks
+    rank::Vector{Int}       # 0 while the name is undecided
+    ranked::Int
+    candidate::Int
+    comparisons::Int
+end
+LateRanks(n::Int) = LateRanks([2; 1; 3; zeros(Int, n - 3)], 3, 0, 0)
+struct LateName
+    id::Int
+    ranks::LateRanks
+end
+function Base.isless(a::LateName, b::LateName)
+    r, x, y = a.ranks, a.id, b.id
+    r.comparisons += 1
+    if r.rank[x] == 0 && r.rank[y] == 0
+        r.rank[x == r.candidate ? x : y] = (r.ranked += 1)
+    end
+    if r.rank[x] == 0
+        r.candidate = x
+    elseif r.rank[y] == 0
+        r.candidate = y
+    end
+    return r.rank[y] == 0 || (r.rank[x] != 0 && r.rank[x] < r.rank[y])
+end
+Base.isequal(a::LateName, b::LateName) = (a.ranks.comparisons += 1; a.id == b.id)
+Base.:(==)(a::LateName, b::LateName) = (a.ranks.comparisons += 1; a.id == b.id)
+
 #==============================================================================#
 #                              ESCAPE / UNESCAPE                               #
 #==============================================================================#
@@ -1484,6 +1518,55 @@ end
         for w in (:lenient, :structural, :strict)
             @test_throws "No Recursion" parse(rec, Node; wellformed = w)
         end
+    end
+
+    @testset "a recursion is reported with the chain of names that leads back to it" begin
+        # The walk starts from the names in order, whatever the order of the declarations,
+        # and follows the references of a replacement text from left to right.
+        doc(ds...) = "<!DOCTYPE d [" *
+            join(("<!ENTITY $(first(d)) \"$(last(d))\">" for d in ds)) * "]><d/>"
+        through(name, chain) = ErrorException("not well-formed: entity `$name` refers to " *
+            "itself (XML 1.0 well-formedness constraint: No Recursion), through $chain")
+        @test_throws through("a", "a -> a") ents(doc("a" => "&a;"))
+        @test_throws through("a", "a -> b -> a") ents(doc("b" => "&a;", "a" => "&b;"))
+        @test_throws through("b", "a -> b -> c -> b") ents(
+            doc("a" => "&b;", "b" => "&c;", "c" => "&b;"))
+        @test_throws through("e3", "e1 -> e2 -> e3 -> e4 -> e5 -> e3") ents(doc(
+            "e1" => "&e2;", "e2" => "&e3;", "e3" => "&e4;", "e4" => "&e5;", "e5" => "&e3;"))
+        @test_throws through("a", "a -> c -> a") ents(
+            doc("a" => "&b;&c;", "b" => "x", "c" => "&a;"))
+        @test_throws through("a", "a -> a") ents(doc("a" => "x &b; y &a; z", "b" => "v"))
+        # two paths to one entity are no recursion, nor is a reference to an undeclared one
+        @test !ents(doc("a" => "&b;&c;", "b" => "&d;", "c" => "&d;", "d" => "x")).markup
+        @test !ents(doc("a" => "&zz;&lt;&b;", "b" => "v")).markup
+    end
+
+    @testset "a chain of entities is checked in memory proportional to its length" begin
+        # Each entity refers to the next, and the document uses none of them. The walk
+        # keeps one chain of names: a copy of it at each level would hold n²/2 names at
+        # once, 72 MB for these 4,000 entities, where one chain takes 3 MB.
+        chain(n) = "<!DOCTYPE r [" *
+            join(("<!ENTITY e$k \"&e$(k + 1);\">" for k in 1:n-1)) *
+            "<!ENTITY e$n \"x\">]><r/>"
+        allocated(doc) = @allocated parse(doc, Node)
+        n = 4_000
+        short = chain(n)
+        allocated(short)
+        bounded = allocated(short) < 2_000n
+        @test bounded
+        # The walk also keeps its own stack, so a chain of 100,000 entities does not
+        # overflow the stack of calls. It is read only once the bound above holds: with a
+        # copy of the chain at each level, it would ask for tens of gigabytes.
+        bounded && @test nodetype(parse(chain(100_000), Node)) == Document
+    end
+
+    @testset "the names of the entities are sorted in O(n log n) comparisons" begin
+        # The walk starts from the names in order. As for the attribute names of a large
+        # tag, the sort is bounded whatever the names: see `LateName`.
+        n = 10_000
+        ranks = LateRanks(n)
+        XML._sorted_names([LateName(i, ranks) for i in 1:n])
+        @test ranks.comparisons < 4 * n * log2(n)
     end
 
     @testset "the subset is read as markup, not scanned for text" begin
@@ -3272,40 +3355,6 @@ end
 #==============================================================================#
 #                     ILL-FORMED XML (must error)                              #
 #==============================================================================#
-# Names that settle their order as late as they can, after M. D. McIlroy, "A Killer
-# Adversary for Quicksort" (1999). Each name is undecided at first. A comparison of two
-# undecided names gives one of them the smallest rank left, and an undecided name is greater
-# than any ranked one. A sort that takes its pivots at fixed places then compares each name
-# with most of the others. `LateRanks` holds the ranks and counts the comparisons. Its first
-# three names are ranked 2, 1 and 3: neither sorted nor sorted in reverse, which a sort may
-# look for first.
-mutable struct LateRanks
-    rank::Vector{Int}       # 0 while the name is undecided
-    ranked::Int
-    candidate::Int
-    comparisons::Int
-end
-LateRanks(n::Int) = LateRanks([2; 1; 3; zeros(Int, n - 3)], 3, 0, 0)
-struct LateName
-    id::Int
-    ranks::LateRanks
-end
-function Base.isless(a::LateName, b::LateName)
-    r, x, y = a.ranks, a.id, b.id
-    r.comparisons += 1
-    if r.rank[x] == 0 && r.rank[y] == 0
-        r.rank[x == r.candidate ? x : y] = (r.ranked += 1)
-    end
-    if r.rank[x] == 0
-        r.candidate = x
-    elseif r.rank[y] == 0
-        r.candidate = y
-    end
-    return r.rank[y] == 0 || (r.rank[x] != 0 && r.rank[x] < r.rank[y])
-end
-Base.isequal(a::LateName, b::LateName) = (a.ranks.comparisons += 1; a.id == b.id)
-Base.:(==)(a::LateName, b::LateName) = (a.ranks.comparisons += 1; a.id == b.id)
-
 @testset "Ill-Formed XML" begin
     # ---- Tag structure ----
     @testset "mismatched close tag" begin

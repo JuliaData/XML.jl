@@ -281,28 +281,49 @@ const _GENREF_RE = r"&([A-Za-z_:[:^ascii:]][A-Za-z0-9._:[:^ascii:]-]*);"
 # Well-formedness constraint "No Recursion" — a cycle is a termination hazard, refused at
 # every `wellformed` level.
 # The same walk answers whether any reachable replacement text carries a `<`.
+#
+# The walk starts from each name in order, and follows the references of a replacement text
+# from left to right. It keeps its own stack: `chain`, the names from the entity it started
+# at to the one it reads, and `resume`, where the search goes on in the text of each. A
+# chain of n entities thus costs memory in proportion to n, with no call nested in another.
 function _check_and_scan(values::Dict{String, String})
     markup = false
     state = Dict{String, Int}()   # 0 = visiting, 1 = done
-    function visit(name, chain)
-        get(state, name, -1) == 1 && return
-        haskey(state, name) && error("not well-formed: entity `$name` refers to itself " *
-                                     "(XML 1.0 well-formedness constraint: No Recursion), through $(join(chain, " -> "))")
-        state[name] = 0
-        v = values[name]
-        occursin('<', v) && (markup = true)
-        for m in eachmatch(_GENREF_RE, v)
+    chain = String[]
+    resume = Int[]
+    for start in _sorted_names(collect(keys(values)))
+        haskey(state, start) && continue
+        push!(chain, start); push!(resume, 1)
+        state[start] = 0
+        occursin('<', values[start]) && (markup = true)
+        while !isempty(chain)
+            name = chain[end]
+            m = match(_GENREF_RE, values[name], resume[end])
+            if m === nothing
+                state[name] = 1
+                pop!(chain); pop!(resume)
+                continue
+            end
+            resume[end] = m.offset + ncodeunits(m.match)
             ref = m.captures[1]
-            ref in _PREDEFINED && continue
-            haskey(values, ref) && visit(ref, [chain; ref])
+            (ref in _PREDEFINED || !haskey(values, ref)) && continue
+            seen = get(state, ref, -1)
+            seen == 1 && continue
+            push!(chain, ref)
+            seen == 0 && error("not well-formed: entity `$ref` refers to itself (XML 1.0 ",
+                               "well-formedness constraint: No Recursion), through ",
+                               join(chain, " -> "))
+            push!(resume, 1)
+            state[ref] = 0
+            occursin('<', values[ref]) && (markup = true)
         end
-        state[name] = 1
-    end
-    for name in sort!(collect(keys(values)))
-        visit(name, [name])
     end
     markup
 end
+
+# Names in order, by a merge sort, which is bounded whatever the names. Julia's default sort
+# is not: see `_check_unique_names`.
+_sorted_names(names::AbstractVector) = sort!(names; alg = MergeSort)
 
 """
     _declarations(xml) -> Union{Nothing, _Declarations}

@@ -41,6 +41,8 @@ With the changes below, the same call can give another result than with v0.4.8.
 
 - **A tag with many attributes is checked for duplicates in O(n log n) time, whatever its names** ([#238](https://github.com/JuliaData/XML.jl/issues/238)). v0.4.8 sorts the names of a tag of more than 32 attributes with Julia's default sort, whose time grows as n² on names put in an order chosen against it. One tag of about a megabyte, built that way, could hold `Node` or `FlatNode` for several seconds. The names are now sorted with a merge sort, which has no such order.
 
+- **A chain of declared entities is checked in memory proportional to its length** ([#241](https://github.com/JuliaData/XML.jl/issues/241)). To refuse an entity that refers to itself, each reader walks the entities that the DOCTYPE declares, whether the document uses them or not. That walk kept a copy of the chain of names at each step from one entity to the next. A document of 410 kB that declares 16,000 entities, each referring to the next, thus asked for more than a gigabyte. The walk now keeps a single chain, and follows a chain of any length.
+
 ## [0.4.8] - 2026-11-04
 
 ### Changed
