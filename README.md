@@ -166,14 +166,21 @@ parse(str, Node)         # or LazyNode, FlatNode, Cursor
 > [!WARNING]
 > XML.jl is not a [validating processor](https://www.w3.org/TR/xml/#proc-types): it never checks a document against its DTD.
 
-`Node` and `FlatNode` check that a document is well-formed, at three levels set by their `wellformed` keyword: `:lenient`, `:structural`, the default, and `:strict`. `Cursor` and `LazyNode` take no keyword: they check only the rules on entities, and accept mismatched tags.
+`Node` and `FlatNode` check that a document is well-formed, at three levels set by their `wellformed` keyword: `:lenient`, `:structural`, the default, and `:strict`. `Cursor` and `LazyNode` do not take it: they check only the rules on entities, and accept mismatched tags.
 
 ```julia
 parse("<a/><b/>", Node)                         # ERROR: not well-formed: multiple root elements (found 2)
 parse("<a/><b/>", Node; wellformed = :lenient)  # Document (2 children)
 ```
 
-[WELL-FORMEDNESS.md](WELL-FORMEDNESS.md) details what each level rejects, what validation would add, and when an undeclared entity is an error.
+The four readers take a `doctype` keyword. With `doctype = :refuse`, a document that has a DOCTYPE is refused before any of its declarations is read. It suits a program that reads documents it did not write, in a format that has no DTD:
+
+```julia
+parse("<!DOCTYPE a [<!ENTITY e \"x\">]><a>&e;</a>", Node; doctype = :refuse)
+# ERROR: the document has a DOCTYPE, which doctype = :refuse does not accept
+```
+
+[WELL-FORMEDNESS.md](WELL-FORMEDNESS.md) details what each level rejects, what validation would add, what the declarations of a DOCTYPE may cost, and when an undeclared entity is an error.
 
 <br>
 

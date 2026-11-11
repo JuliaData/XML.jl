@@ -31,17 +31,32 @@ function _check_wellformed(wellformed::Symbol)
     return nothing
 end
 
-Base.read(filename::AbstractString, ::Type{Node}; wellformed::Symbol=:structural) =
-    (_check_wellformed(wellformed); parse(String(_normalize_bom(read(filename))), Node; wellformed))
-Base.read(io::IO, ::Type{Node}; wellformed::Symbol=:structural) =
-    (_check_wellformed(wellformed); parse(String(_normalize_bom(read(io))), Node; wellformed))
+# Whether the `doctype` keyword of an entry point asks to refuse a document that has a
+# DOCTYPE. Another symbol than `:apply` and `:refuse` is an error: a misspelled `:refuse`
+# would otherwise read the declarations without notice. Every entry point calls it first;
+# `read` does so before it reads the document.
+function _refuses_doctype(doctype::Symbol)
+    doctype === :refuse && return true
+    doctype === :apply ||
+        throw(ArgumentError("doctype must be :apply or :refuse, not $(repr(doctype))"))
+    return false
+end
+
+Base.read(filename::AbstractString, ::Type{Node}; wellformed::Symbol=:structural, doctype::Symbol=:apply) =
+    (_check_wellformed(wellformed); _refuses_doctype(doctype);
+     parse(String(_normalize_bom(read(filename))), Node; wellformed, doctype))
+Base.read(io::IO, ::Type{Node}; wellformed::Symbol=:structural, doctype::Symbol=:apply) =
+    (_check_wellformed(wellformed); _refuses_doctype(doctype);
+     parse(String(_normalize_bom(read(io))), Node; wellformed, doctype))
 
 # Cursor shares the tree readers' entry points (#89): same argument order, same byte-level
 # BOM normalization. The Cursor(str) constructor alone only drops an already-decoded U+FEFF,
 # so a UTF-16 file needs this path (like read(_, Node)) to be transcoded.
-Base.read(filename::AbstractString, ::Type{Cursor}) = Cursor(String(_normalize_bom(read(filename))))
-Base.read(io::IO, ::Type{Cursor}) = Cursor(String(_normalize_bom(read(io))))
-Base.parse(xml::AbstractString, ::Type{Cursor}) = Cursor(xml)
+Base.read(filename::AbstractString, ::Type{Cursor}; doctype::Symbol=:apply) =
+    (_refuses_doctype(doctype); Cursor(String(_normalize_bom(read(filename))); doctype))
+Base.read(io::IO, ::Type{Cursor}; doctype::Symbol=:apply) =
+    (_refuses_doctype(doctype); Cursor(String(_normalize_bom(read(io))); doctype))
+Base.parse(xml::AbstractString, ::Type{Cursor}; doctype::Symbol=:apply) = Cursor(xml; doctype)
 
 #-----------------------------------------------------------------------------# parse
 # A leading U+FEFF (BOM as a character) isn't content — drop it so a BOM'd in-memory string
@@ -54,16 +69,20 @@ _drop_bom(s::String)::String = startswith(s, '\ufeff') ? s[nextind(s, 1):end] : 
 # parse(_, Node)/LazyNode paths — keeping all three readers consistent on a BOM'd string.
 _drop_bom(s::AbstractString) = startswith(s, Char(0xFEFF)) ? SubString(s, nextind(s, firstindex(s))) : s
 
-Base.parse(::Type{Node}, xml::AbstractString; wellformed::Symbol=:structural) = parse(xml, Node; wellformed)
+Base.parse(::Type{Node}, xml::AbstractString; wellformed::Symbol=:structural, doctype::Symbol=:apply) =
+    parse(xml, Node; wellformed, doctype)
 
-function Base.parse(xml::AbstractString, ::Type{Node}; wellformed::Symbol=:structural)
+function Base.parse(xml::AbstractString, ::Type{Node}; wellformed::Symbol=:structural, doctype::Symbol=:apply)
     _check_wellformed(wellformed)
-    _parse(_apply_declarations(_normalize_input_eol(_drop_bom(String(xml)))), String, unescape, Val(wellformed))
+    refuse = _refuses_doctype(doctype)
+    _parse(_apply_declarations(_normalize_input_eol(_drop_bom(String(xml))), refuse), String, unescape, Val(wellformed))
 end
 
-function Base.parse(xml::AbstractString, ::Type{Node{SubString{String}}}; wellformed::Symbol=:structural)
+function Base.parse(xml::AbstractString, ::Type{Node{SubString{String}}}; wellformed::Symbol=:structural,
+                    doctype::Symbol=:apply)
     _check_wellformed(wellformed)
-    _parse(_apply_declarations(_normalize_input_eol(_drop_bom(String(xml)))), SubString{String}, identity, Val(wellformed))
+    refuse = _refuses_doctype(doctype)
+    _parse(_apply_declarations(_normalize_input_eol(_drop_bom(String(xml))), refuse), SubString{String}, identity, Val(wellformed))
 end
 
 # Convert a parser substring to the requested storage type — copy to a fresh String, or

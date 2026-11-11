@@ -48,16 +48,19 @@ The copy can be made for a `String`, a `SubString{String}`, or a `StringView` ov
 vector `v` or over a slice `view(v, i:j)` of it; on any other string type, such a document
 raises an `ArgumentError` (see [`LazyNode`](@ref)). The cursor takes no `wellformed`
 keyword: it checks only the rules on entities and accepts mismatched tags, so read a document
-that must be checked with [`Node`](@ref) or [`FlatNode`](@ref).
+that must be checked with [`Node`](@ref) or [`FlatNode`](@ref). It takes the `doctype` keyword
+of [`Node`](@ref): `Cursor(data; doctype = :refuse)`, like `parse` and `read`, refuses a
+document that has a DOCTYPE.
 
 The cursor is a single mutable object reused across the whole walk. See the
 aliasing-contract note on [`next!`](@ref).
 """
-function Cursor(data::S) where {S <: AbstractString}
+function Cursor(data::S; doctype::Symbol = :apply) where {S <: AbstractString}
+    refuse = _refuses_doctype(doctype)
     data = _drop_bom(data)   # a leading U+FEFF BOM char is an encoding signature, not content (§4.3.3)
     # §2.11 — each value is normalized as it is read (`_read_eol`), whatever the source
     # type, unless the declarations of the DOCTYPE rewrite the document (`_declared_source`)
-    d, normalized = _declared_source(data)
+    d, normalized = _declared_source(data, refuse)
     _cursor_at(d, 1, normalized)
 end
 
@@ -71,7 +74,7 @@ end
     st = _CURSOR_XT.StatefulTokenizer(_CURSOR_XT.Tokenizer(d, pos))
     Cursor{S}(st, _CURSOR_XT.no_token(d), Document, 0, 0, false, false, normalized)
 end
-Base.parse(::Type{Cursor}, xml::AbstractString) = Cursor(xml)
+Base.parse(::Type{Cursor}, xml::AbstractString; doctype::Symbol = :apply) = Cursor(xml; doctype)
 
 """
     Cursor(data::AbstractString, startpos::Integer)

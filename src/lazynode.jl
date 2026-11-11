@@ -33,7 +33,8 @@ string type.
 
 `LazyNode` takes no `wellformed` keyword: it checks only the rules on entities and accepts
 mismatched tags, so read a document that must be checked with [`Node`](@ref) or
-[`FlatNode`](@ref).
+[`FlatNode`](@ref). `parse` and `read` take the `doctype` keyword of [`Node`](@ref): with
+`doctype = :refuse`, a document that has a DOCTYPE is refused.
 
 # Performance — which reader to use
 
@@ -67,8 +68,8 @@ LazyNode{S}(data::S, token::Token, nodetype::NodeType) where {S <: AbstractStrin
 # Public raw-string entry: the declarations of the DOCTYPE apply here as at `parse`/`read`,
 # and line ends are left, as at every lazy entry, for `_read_eol` to normalize value by value
 # (§2.11), whatever the source type, unless the declarations rewrite the document.
-function LazyNode(data::AbstractString, nt::NodeType)
-    d, normalized = _declared_source(data)
+function LazyNode(data::AbstractString, nt::NodeType; doctype::Symbol = :apply)
+    d, normalized = _declared_source(data, _refuses_doctype(doctype))
     _lazynode_at(d, nt, normalized)
 end
 
@@ -815,11 +816,14 @@ Base.only(n::LazyNode) = only(children(n))
 Base.length(n::LazyNode) = length(children(n))
 
 #-----------------------------------------------------------------------------# parse / read
-Base.parse(::Type{LazyNode}, xml::AbstractString) = parse(xml, LazyNode)
-Base.parse(xml::AbstractString, ::Type{LazyNode}) = LazyNode(_drop_bom(xml), Document)
+Base.parse(::Type{LazyNode}, xml::AbstractString; doctype::Symbol = :apply) = parse(xml, LazyNode; doctype)
+Base.parse(xml::AbstractString, ::Type{LazyNode}; doctype::Symbol = :apply) =
+    LazyNode(_drop_bom(xml), Document; doctype)
 
-Base.read(filename::AbstractString, ::Type{LazyNode}) = parse(String(_normalize_bom(read(filename))), LazyNode)
-Base.read(io::IO, ::Type{LazyNode}) = parse(String(_normalize_bom(read(io))), LazyNode)
+Base.read(filename::AbstractString, ::Type{LazyNode}; doctype::Symbol = :apply) =
+    (_refuses_doctype(doctype); parse(String(_normalize_bom(read(filename))), LazyNode; doctype))
+Base.read(io::IO, ::Type{LazyNode}; doctype::Symbol = :apply) =
+    (_refuses_doctype(doctype); parse(String(_normalize_bom(read(io))), LazyNode; doctype))
 
 #-----------------------------------------------------------------------------# show
 function Base.show(io::IO, n::LazyNode)

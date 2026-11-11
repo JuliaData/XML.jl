@@ -63,6 +63,16 @@ The declarations of a DOCTYPE can make a small document costly to read: an entit
 
 A large document is thus read whatever its size, as long as its declarations do not make it more than 100 times larger. For example, `<!ENTITY z0 "">`, named ten times by `z1`, itself named ten times by `z2`, and so on up to `z7`, would make a 426-byte document read 44 MB of entity text. It is refused after 8 MiB, although the rewritten document would be no larger. The two counts follow those of [Expat](https://libexpat.github.io/), with its values: 8 MiB and 100 times for what it reads, 64 MiB and 100 times for the memory it allocates.
 
+A program that reads documents it did not write, in a format that has no DTD, can refuse the DOCTYPE itself. The four readers take a `doctype` keyword, on `parse`, `read` and `Cursor(data)`. Its default, `:apply`, reads the declarations. With `:refuse`, a document that has a DOCTYPE is refused, whatever it declares, before any declaration is read:
+
+```julia
+parse("<!DOCTYPE a [<!ENTITY e \"x\">]><a>&e;</a>", Node; doctype = :refuse)
+# ERROR: the document has a DOCTYPE, which doctype = :refuse does not accept
+parse("<!DOCTYPE a><a/>", Node; doctype = :refuse)   # the same error
+```
+
+Any other value throws an `ArgumentError`. The DOCTYPE that `:refuse` refuses is the one that a reader applies, which comes before the root element. One that comes after the start tag of the root is never applied, and `:refuse` leaves it as it is: `Node` and `FlatNode` reject it from `:structural` on, while `:lenient`, `Cursor` and `LazyNode` report it as a `DTD` node.
+
 ## Streaming readers
 
 `Cursor` and `LazyNode` take no `wellformed` keyword and check nothing else: they accept mismatched tags and even a truncated document. When a document must be checked, read it with `Node` or `FlatNode`.
