@@ -3272,6 +3272,40 @@ end
 #==============================================================================#
 #                     ILL-FORMED XML (must error)                              #
 #==============================================================================#
+# Names that settle their order as late as they can, after M. D. McIlroy, "A Killer
+# Adversary for Quicksort" (1999). Each name is undecided at first. A comparison of two
+# undecided names gives one of them the smallest rank left, and an undecided name is greater
+# than any ranked one. A sort that takes its pivots at fixed places then compares each name
+# with most of the others. `LateRanks` holds the ranks and counts the comparisons. Its first
+# three names are ranked 2, 1 and 3: neither sorted nor sorted in reverse, which a sort may
+# look for first.
+mutable struct LateRanks
+    rank::Vector{Int}       # 0 while the name is undecided
+    ranked::Int
+    candidate::Int
+    comparisons::Int
+end
+LateRanks(n::Int) = LateRanks([2; 1; 3; zeros(Int, n - 3)], 3, 0, 0)
+struct LateName
+    id::Int
+    ranks::LateRanks
+end
+function Base.isless(a::LateName, b::LateName)
+    r, x, y = a.ranks, a.id, b.id
+    r.comparisons += 1
+    if r.rank[x] == 0 && r.rank[y] == 0
+        r.rank[x == r.candidate ? x : y] = (r.ranked += 1)
+    end
+    if r.rank[x] == 0
+        r.candidate = x
+    elseif r.rank[y] == 0
+        r.candidate = y
+    end
+    return r.rank[y] == 0 || (r.rank[x] != 0 && r.rank[x] < r.rank[y])
+end
+Base.isequal(a::LateName, b::LateName) = (a.ranks.comparisons += 1; a.id == b.id)
+Base.:(==)(a::LateName, b::LateName) = (a.ranks.comparisons += 1; a.id == b.id)
+
 @testset "Ill-Formed XML" begin
     # ---- Tag structure ----
     @testset "mismatched close tag" begin
@@ -3360,14 +3394,42 @@ end
             @test nodetype(parse(decl(many), T)) == Document
             @test_throws ErrorException("Duplicate attribute: a5") parse(decl([many; "a5"]), T)
         end
-        @testset "a tag of 100,000 attributes is checked in well under quadratic time" begin
-            # Comparing each name with every earlier one makes this tag cost seconds; sorting
-            # its names keeps it to milliseconds. The bound leaves room for slow machines and
-            # checked bounds, and a run is tried up to three times.
-            big = tag(["a$i" for i in 1:100_000], "/>")
-            for T in (Node, FlatNode)
-                parse(tag(many, "/>"), T)   # compiles the path of a large tag
-                @test any(_ -> @elapsed(parse(big, T)) < 2.0, 1:3)
+        @testset "a large tag costs O(n log n) comparisons, whatever its names" begin
+            # Sorting the names bounds the check only if the sort is bounded for any input.
+            # Names that settle their order as late as they can (`LateName`) lead a
+            # quicksort with fixed pivots to 37 million comparisons here, three quarters of
+            # n²/2. A merge sort makes 164 thousand: its worst case grows as n log2(n), and
+            # the bound leaves it room.
+            n = 10_000
+            ranks = LateRanks(n)
+            XML._check_unique_names([LateName(i, ranks) for i in 1:n])
+            @test ranks.comparisons < 4 * n * log2(n)
+            # Names in order, or in reverse order, are not sorted: one pass tells so for
+            # each order, as Julia's default sort does first. A pair of neighbours takes at
+            # most two comparisons of names in a pass, and one more to tell a duplicate.
+            for order in (1:n, n:-1:1)
+                ranks = LateRanks(collect(order), n, 0, 0)
+                XML._check_unique_names([LateName(i, ranks) for i in 1:n])
+                @test ranks.comparisons <= 3n
+            end
+        end
+        @testset "past 32 attributes, the names are checked once the tag closes" begin
+            # Up to 32 attributes, each name is compared with the earlier ones as it is
+            # read, and a duplicate is reported before an error in a later attribute. Past
+            # 32, that comparison would cost n²/2: the names wait for the end of the tag, or
+            # of the XML declaration, and the later error is reported first.
+            late = " z=\"<\""
+            for T in (Node, Node{SubString{String}}, FlatNode), ending in ("/>", "></r>")
+                @test_throws ErrorException("Duplicate attribute: a") parse(
+                    "<r a=\"v\" a=\"v\"" * late * ending, T)
+                @test_throws "'<' in attribute value" parse(
+                    tag([many; "a5"], late * ending), T)
+            end
+            for T in (Node, Node{SubString{String}}, FlatNode)
+                @test_throws ErrorException("Duplicate attribute: a") parse(
+                    "<?xml version=\"1.0\" a=\"v\" a=\"v\"" * late * "?><r/>", T)
+                @test_throws "'<' in attribute value" parse(
+                    replace(decl([many; "a5"]), "?>" => late * "?>"), T)
             end
         end
     end
