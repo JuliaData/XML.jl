@@ -37,7 +37,7 @@ With the changes below, the same call can give another result than with v0.4.8.
 
 ### Deprecated
 
-- **`for_each_child` and `@for_each_child`**, to be removed in v0.5 ([#220](https://github.com/JuliaData/XML.jl/issues/220)). Call `for_each_child!` and `@for_each_child!`, whose `!` says that they move the cursor, as `next!` does. The old names still work until then, and warn when they run under `--depwarn=yes`, as in `Pkg.test`.
+- **`for_each_child` and `@for_each_child`**, to be removed in v0.5 ([#220](https://github.com/JuliaData/XML.jl/issues/220)). Call `for_each_child!` and `@for_each_child!`, whose `!` says that they move the cursor, as `next!` does. The old names still work until then, and warn when they run under `--depwarn=yes`, as in `Pkg.test`. Under `--depwarn=error`, the first call raises, and a package that calls them in its precompile workload does not precompile.
 
 ### Fixed
 
