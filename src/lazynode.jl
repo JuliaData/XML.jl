@@ -12,8 +12,14 @@ Supports the same read-only interface as `Node`: [`nodetype`](@ref), [`tag`](@re
 [`attributes`](@ref), [`value`](@ref), [`children`](@ref), plus integer and string indexing.
 Accessors return `SubString` views into the original document — over whatever string type the
 document was handed in as — so navigating a large document through `LazyNode` does not duplicate
-its text data. The materialized [`attributes`](@ref) dict is the one exception: its pairs are
-always `SubString{String}`, so a non-`String` document has each attribute's own bytes copied.
+its text data. A name or a value is a copy in three cases only:
+
+- the reader had to change the value: it holds a reference such as `&amp;`, a line end
+  written CR LF or CR, or, in an attribute, a tab or a line break;
+- [`attributes`](@ref), [`eachattribute`](@ref) or `keys` gives it, and the document is
+  neither a `String` nor a `SubString{String}`, a memory-mapped `StringView` for example:
+  these three always give `SubString{String}`;
+- [`string_value`](@ref) joined several texts to make it.
 
 A document that the declarations of its DOCTYPE change — an entity it uses, a default attribute
 value it receives, the spaces of an attribute declared with a type other than CDATA — is read
@@ -45,9 +51,11 @@ lists, so one whole traversal can take longer than building a `Node` and walking
 traversals are dramatically slower, since each pass re-scans the whole document, whereas a
 `Node` tree is built once and then walked cheaply.
 
-- **Forward streaming of a large document** → [`Cursor`](@ref) — fastest, and allocation-free
-  over a `String` or `SubString{String}` document, except one copy when its lines end in CR or
-  when the declarations of its DOCTYPE change it.
+- **Forward streaming of a large document** → [`Cursor`](@ref) — fastest. Over a `String` or
+  `SubString{String}` document, [`next!`](@ref) allocates nothing, and a value is copied
+  only when reading it changes it: a reference, a CR line end, or a literal tab or newline
+  in an attribute value. A document that the declarations of its DOCTYPE change is copied
+  once.
 - **Repeated or random access** → [`Node`](@ref) — builds the tree once.
 - **`LazyNode`** → low-memory, *read-once* navigation, or as a holdable snapshot of a
   [`Cursor`](@ref) position (`LazyNode(c)` / `Cursor(::LazyNode)`).
@@ -200,10 +208,13 @@ Base.eltype(::Type{<:LazyAttrIterator}) = Pair{SubString{String}, SubString{Stri
     eachattribute(n::LazyNode)
 
 Lazy iterator yielding decoded `name => value` pairs for the attributes of `n` (an
-`Element` or `Declaration`). Over a `String` document, iteration steps allocate nothing — no
-[`Attributes`](@ref) dict, no intermediate vector, no per-pair boxing; creating the iterator
-costs one small object — suitable for hot paths that scan every attribute. Over any other
-source string type each pair copies its own bytes, since the pairs are `SubString{String}`.
+`Element` or `Declaration`). Over a `String` or `SubString{String}` document, iteration
+steps allocate nothing: no [`Attributes`](@ref) dict, no intermediate vector, no object per
+pair. Creating the iterator costs one small object. This suits a loop that reads the
+attributes of every element of a large document. The exception is a value that holds a
+reference, or a literal tab or newline, which becomes a space: it is a string of its own.
+Over any other source string type each pair copies its own bytes, since the pairs are
+`SubString{String}`.
 
 The iterator holds one shared cursor: every loop over the same object resumes after the
 last yielded pair, and an exhausted iterator stays exhausted — call `eachattribute`

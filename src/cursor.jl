@@ -122,12 +122,19 @@ end
 """
     Cursor(node::LazyNode)
 
-Convenience bridge: a cursor positioned to walk `node` and its subtree — the
-inverse of the `LazyNode(c)` snapshot. Both readers treat a source the same way — each value
-is normalized as it is read — so the bridge passes the source straight through, without the
-probes the raw-string constructors run on their argument; it is the only place `Cursor` mentions
-`LazyNode`, and it is an optional, removable convenience (a consumer that tracks
-subtree start offsets directly can call the primitive `Cursor(data, startpos)`).
+A cursor that starts at `node` — the inverse of the `LazyNode(c)` snapshot:
+
+    snapshot = LazyNode(cursor)   # the position, held past further `next!` calls
+    subtree  = Cursor(snapshot)   # a cursor whose stream starts at it
+
+The first [`next!`](@ref) reaches `node` at depth 1, whatever its depth in the document, and
+[`for_each_child!`](@ref) then gives its children and stops at its end. `next!` alone does
+not stop there: it goes on to the nodes that follow `node`. For a `Document` node, the
+cursor reads the whole document.
+
+Both readers treat a source the same way — each value is normalized as it is read — so the
+bridge passes the source straight through, without the probes the raw-string constructors
+run on their argument.
 """
 Cursor(node::LazyNode) =
     _cursor_at(node.data, _CURSOR_XT._data_start(node.token, node.data), node.normalized)
@@ -336,8 +343,9 @@ on: a loop after `isempty(it)` or `first(it)` loses none. In this it differs fro
 pairs stay valid after the cursor moves.
 
 Over a `String` or `SubString{String}` document, reading a pair allocates nothing, unless its
-value holds a reference, which is decoded into a string of its own. Over any other string type,
-each pair copies its own bytes, since the pairs are `SubString{String}`.
+value holds a reference, or a literal tab or newline, which becomes a space: the value is
+then a string of its own. Over any other string type, each pair copies its own bytes, since
+the pairs are `SubString{String}`.
 
 ```julia
 c = Cursor("<row r=\\"1\\"><c r=\\"A1\\" t=\\"s\\"><v>0</v></c></row>")

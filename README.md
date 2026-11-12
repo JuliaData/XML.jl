@@ -330,7 +330,7 @@ XML 1.0 asks a reader to turn each CR LF pair, and each lone CR, into a line fee
 - `sourcetext`, `sourcespan` and `splicetext` refer to the bytes of the string you passed, CRs included;
 - a document that the declarations of its DOCTYPE change is read from a rewritten copy, to which `sourcetext` and `sourcespan` then refer (see [String types and DOCTYPE declarations](#string-types-and-doctype-declarations)). That copy has its line ends in LF, since XML 1.0 normalizes them before the declarations apply.
 
-`FlatNode` looks for CRs once, when it builds the document, and only in the values that start before its last CR: in a part saved by Excel, whose only CR follows the XML declaration, it looks in none. An indentation that opens on its only CR LF is then read as fast as in a file without CR. A value with a line end within it is copied each time it is read.
+`FlatNode` looks for CRs once, when it builds the document, and only in the values that start before its last CR: in a part saved by Excel, whose only CR follows the XML declaration, it looks in none. An indentation that opens on its only CR LF is then read as fast as in a file without CR. A value with a CR line end after its first character is copied each time it is read.
 
 `Node` normalizes the line ends once, at the entry, in a copy of a document that holds a CR: it copies its values anyway, and keeps no source.
 
@@ -437,7 +437,7 @@ One number cannot rank the readers — cost depends on what you do with the docu
 
 Reading the table: `Cursor`'s walk *is* its parse — one tokenizing scan, nothing retained. `LazyNode` materializes nothing, so its open reads only the prolog, without allocating. The source is rewritten once only when its internal subset declares something to apply: general entities, attribute defaults, attributes of a type other than CDATA. After that it costs per node visited. That still makes it the pick for touching a *fraction* of a large document, and, as the walk column shows, the wrong tool for visiting all of it.
 
-`FlatNode` builds ~2.3× faster than `Node` and holds ~23% less memory. Its `parent` and `depth` are O(1), where `Node` searches from the root. Whole-tree walks are close, because `Node`'s exact-size children vectors keep its locality sharp. Pure value extraction is close too, with the flat store slightly faster: 2.9 against 3.8 ms, since a per-value `SubString` view costs two integer stores. `FlatNode` builds ~1.4× faster than even libxml2, and `Node`'s gap to the C library is materialization, not scanning (see [PERFORMANCE-v0.4.md](PERFORMANCE-v0.4.md)).
+`FlatNode` builds ~2.3× faster than `Node` and holds ~23% less memory. Its `parent` is O(1) and its `depth` one step per level, where `Node` searches from the root. Whole-tree walks are close, because `Node`'s exact-size children vectors keep its locality sharp. Pure value extraction is close too, with the flat store slightly faster: 2.9 against 3.8 ms, since a per-value `SubString` view costs two integer stores. `FlatNode` builds ~1.4× faster than even libxml2, and `Node`'s gap to the C library is materialization, not scanning (see [PERFORMANCE-v0.4.md](PERFORMANCE-v0.4.md)).
 
 _Measured 2026-11-12, Apple M5 (single-threaded), Julia 1.13.3, EzXML 1.2.3; BenchmarkTools medians._
 
@@ -464,4 +464,4 @@ into the stable GC-free work and the per-session GC share.
 
 For the per-access-pattern decomposition (streaming / partial reads / full DOM / stage breakdown) and the theory behind these numbers, see [**PERFORMANCE-v0.4.md**](PERFORMANCE-v0.4.md).
 
-_Measured 2026-11-12, Apple M5 (single-threaded), Julia 1.13.3; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3), XMLDict 0.4.2. Each cell is the median of four runs; [`benchmarks/benchmarks_results.md`](benchmarks/benchmarks_results.md) holds these medians for every row of the script. Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl)._
+_Measured 2026-11-12, Apple M5 (single-threaded), Julia 1.13.3; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3), XMLDict 0.4.2. Each cell is the median of four runs of [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl). [`benchmarks/benchmarks_results.md`](benchmarks/benchmarks_results.md) holds these medians for every row of the script: it is put together from the four runs, and a single run of the script writes its own times over it._

@@ -203,7 +203,7 @@ The old `Raw`/`LazyNode` forward/backward streaming is replaced by two options:
   children at the current position.
 
 **Choosing a reader.** For forward streaming of a large document, prefer `Cursor` (fastest,
-and allocation-free unless the document has declarations to apply). For repeated or random access, prefer `Node` (it builds the tree once, then walks
+with almost no allocation; a document with declarations to apply is copied once). For repeated or random access, prefer `Node` (it builds the tree once, then walks
 cheaply). Reach for `LazyNode` only when you need low-memory, *read-once* navigation: it holds no
 tree (≈ an order of magnitude less resident memory than `Node`) but re-tokenizes on every traversal,
 so it is the slowest choice for repeated walks.
@@ -212,10 +212,11 @@ so it is the slowest choice for repeated walks.
 
 - **`parent` / `depth` / `siblings` and the XPath `..` axis address nodes by value.** Because `Node`
   is an immutable value type, these locate the node within the tree by structural equality (`===`).
-  For a tree containing **value-identical** sibling nodes — e.g. two empty `<item/>` elements — they
-  may return the result for the *first* such node rather than the specific one you passed. Trees whose
-  repeated nodes differ in content are unaffected. A redesign (path-based addressing) is planned for a
-  later release.
+  For one of several **value-identical** nodes of a tree — e.g. one of two empty `<item/>` elements,
+  siblings or not — they raise an error (`ambiguous: the node matches multiple indistinguishable
+  occurrences in the tree; use FlatNode for positional navigation.`). Trees whose repeated nodes
+  differ in content are unaffected, and `FlatNode` has no such ambiguity, since it navigates by
+  position.
 - **Top-level CDATA is not rejected.** A CDATA section in the prolog or epilog — outside the root
   element — is accepted even at `:strict`, although XML 1.0 (`Misc` excludes `CDATA`) makes it
   ill-formed. CDATA *inside* an element is of course valid. A stricter check may be added later.
