@@ -570,6 +570,8 @@ function _compare_indicator(xml_ms, other_ms)
     string("(XML.jl ", _two_digits(gap), "× ", ratio > 1 ? "slower" : "faster", ")")
 end
 
+# This writes the times of this run alone. The file kept in the repository holds the medians
+# of four runs, put together from their outputs: do not commit a single run over it.
 outfile = joinpath(@__DIR__, "benchmarks_results.md")
 open(outfile, "w") do io
     println(io, "# XML.jl Benchmarks\n")

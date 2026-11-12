@@ -65,6 +65,11 @@ end
     # compiles both readings, the other is measured.
     cw = parse(Cursor, attr_xml); next!(cw)
     cm = parse(Cursor, attr_xml); next!(cm)
+    # The same element in a view of a `String`, which the lazy readers read where it lies.
+    attr_sub = SubString("<x/>" * attr_xml * "<y/>", 5, 4 + ncodeunits(attr_xml))
+    lzs = only(eachelement(parse(attr_sub, LazyNode)))
+    cws = parse(Cursor, attr_sub); next!(cws)
+    cms = parse(Cursor, attr_sub); next!(cms)
 
     slz = only(eachelement(parse(simple_xml, LazyNode)))
     sfl = only(eachelement(parse(simple_xml, FlatNode)))
@@ -138,6 +143,11 @@ end
         cr = parse(Cursor, attr_xml); next!(cr)
         @test collect(eachattribute!(cr)) == ["r" => "A1", "s" => "3", "t" => "str"]
         @test collect(eachattribute!(cr)) == ["r" => "A1", "s" => "3", "t" => "str"]
+        @test lzs isa LazyNode{SubString{String}} && cms isa Cursor{SubString{String}}
+        @test collect(eachattribute(lzs)) == ["r" => "A1", "s" => "3", "t" => "str"]
+        crs = parse(Cursor, attr_sub); next!(crs)
+        @test collect(eachattribute!(crs)) == ["r" => "A1", "s" => "3", "t" => "str"]
+        @test collect(eachattribute!(crs)) == ["r" => "A1", "s" => "3", "t" => "str"]
         for x in (tlz, tfl, tcu, tnd)
             @test value(x) == "hello"
         end
@@ -172,6 +182,8 @@ end
     end
     measure_eachattr(lz)
     measure_eachattr_cursor(cw); measure_eachattr_cursor(cw)
+    measure_eachattr(lzs)
+    measure_eachattr_cursor(cws); measure_eachattr_cursor(cws)
     foreach(measure_value, (tlz, tfl, tcu, tnd))
     foreach(measure_simple, (slz, sfl, scu, snd))
     foreach(measure_is_simple, (slz, sfl, scu, snd))
@@ -229,6 +241,10 @@ end
             @test measure_eachattr(lz) == 0
             @test measure_eachattr_cursor(cm) == 0   # from the cursor's stream
             @test measure_eachattr_cursor(cm) == 0   # again, from the `<`
+            # a view of a `String` gives its pairs without a copy either
+            @test measure_eachattr(lzs) == 0
+            @test measure_eachattr_cursor(cms) == 0
+            @test measure_eachattr_cursor(cms) == 0
         end
 
         @testset "sourcetext and sourcespan" begin

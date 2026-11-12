@@ -160,7 +160,7 @@ Measured on the same XMark-style document:
 
 _Table 5 — per-reader full-DOM comparison; *build* is the whole `parse` call, and *DOM size* is the **retained** live tree (`Base.summarysize`), not allocations._[^flatbench]
 
-Build allocations: 42.2 MiB (`FlatNode`) vs 99.8 MiB (`Node`), and on the *build* `FlatNode` is ~1.4× faster than libxml2 itself, `Node` ~1.6× slower than the C library. The GC cells say why `FlatNode` builds so cheaply: its build allocates a handful of arrays instead of 882 K objects, so its median GC share is ~0.1 ms where `Node`'s is ~15 ms. Access on the finished stores: whole-tree walks are close (2.9 vs 3.6 ms — exact-size children vectors keep `Node`'s locality sharp), `parent`/`depth` stay O(1) index hops on `FlatNode` where `Node` must search down from the root, and pure value extraction is close too, flat store slightly faster (2.9 vs 3.8 ms — a per-value `SubString` view costs two integer stores).
+Build allocations: 42.2 MiB (`FlatNode`) vs 99.8 MiB (`Node`), and on the *build* `FlatNode` is ~1.4× faster than libxml2 itself, `Node` ~1.6× slower than the C library. The GC cells say why `FlatNode` builds so cheaply: its build allocates a handful of arrays instead of 882 K objects, so its median GC share is ~0.1 ms where `Node`'s is ~15 ms. Access on the finished stores: whole-tree walks are close (2.9 vs 3.6 ms — exact-size children vectors keep `Node`'s locality sharp), `parent` is one index hop on `FlatNode` and `depth` one hop per level, where `Node` must search down from the root, and pure value extraction is close too, flat store slightly faster (2.9 vs 3.8 ms — a per-value `SubString` view costs two integer stores).
 
 ## Beyond the plain document: references, normalization, markup, and the `wellformed` levels
 
