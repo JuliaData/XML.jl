@@ -548,12 +548,26 @@ end setup=(doc = parse(ws_str_xml, LazyNode))
 end setup=(doc = parse(sst_entity_xml, LazyNode))
 
 #-----------------------------------------------------------------------------# Write benchmarks_results.md
-_fmt_ms(t) = string(round(t, sigdigits=3), " ms")
+# Two significant digits: a median moves by about 3 % from one run to the next, so a third
+# digit would be noise.
+_two_digits(x) = (r = round(x, sigdigits=2); r >= 10 ? string(round(Int, r)) : string(r))
 
+# A time in the unit that fits it, chosen once the time is rounded.
+function _fmt_time(ms)
+    r = round(ms, sigdigits=2)
+    v, unit = r >= 1e3 ? (r / 1e3, "s") : r >= 1 ? (r, "ms") :
+              r >= 1e-3 ? (r * 1e3, "µs") : (r * 1e6, "ns")
+    string(_two_digits(v), " ", unit)
+end
+
+# A ratio reads the same in both directions, where a percentage of time saved stops at
+# 100 %. Within 10 %, two times count as the same: a cell can move that much from one run to
+# the next.
 function _compare_indicator(xml_ms, other_ms)
     ratio = xml_ms / other_ms
-    pct = abs(round((ratio - 1) * 100, digits=1))
-    ratio > 1.05 ? "(XML.jl $(pct)% slower)" : ratio < 0.95 ? "(XML.jl $(pct)% faster)" : "(~same)"
+    gap = max(ratio, 1 / ratio)
+    gap <= 1.1 && return "(~same)"
+    string("(XML.jl ", _two_digits(gap), "× ", ratio > 1 ? "slower" : "faster", ")")
 end
 
 outfile = joinpath(@__DIR__, "benchmarks_results.md")
@@ -574,7 +588,7 @@ open(outfile, "w") do io
             if !isnothing(xml_ms) && !startswith(row.name, "XML.jl")
                 indicator = "  " * _compare_indicator(xml_ms, ms)
             end
-            println(io, "\t", rpad(row.name, 16), lpad(_fmt_ms(ms), 12), indicator)
+            println(io, "\t", rpad(row.name, 16), lpad(_fmt_time(ms), 12), indicator)
         end
         println(io)
     end
