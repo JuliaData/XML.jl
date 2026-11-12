@@ -120,10 +120,11 @@ The lexer is allocation-free; **the whole libxml2 gap is *materialising* the nat
 
 Traversal of a pre-built tree stays off the allocator where it counts — iteration *steps*
 are free for all three readers, and the allocation column is measured, not assumed. `Node`
-allocates nothing at all. Neither does `FlatNode` on this document: it copies a value only to
-decode a reference or to normalize a CR line end (see [Line ends](README.md#line-ends)).
-`LazyNode` allocates one small object per container node — its resumable child cursor, elided
-by the compiler wherever a container is empty:
+allocates nothing at all. Neither does `FlatNode` on this document. It copies a value only to
+decode a reference, to normalize a CR line end (see [Line ends](README.md#line-ends)), or to
+turn a literal tab or newline of an attribute value into a space. `LazyNode` allocates one
+small object per container node — its resumable child cursor, elided by the compiler wherever
+a container is empty:
 
 | Whole-tree traversal (same recursive function) | time (incl. GC) | allocations |
 |---|--:|--:|
