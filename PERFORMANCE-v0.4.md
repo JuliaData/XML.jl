@@ -45,7 +45,7 @@ Performance isn't one number — it splits by *what you do with the document*. T
 > are deterministic facts, identical under any protocol.
 > Tables 6 and 7 read their cells against one another, so they alternate them in rounds of one second within a run and quote the median of the rounds.
 > The tables that `profile.jl` measures, 1 to 4, 6, 7 and the memory-mapped one, quote the median of four runs.
-> A time keeps two significant digits, since a third is below the spread from one run to the next. The farthest of a cell's four runs lies about 3 % from their median, and 9 % or more for one cell in ten. Six cells between 100 and 199 ms keep three digits: their four runs agree within 2 %.
+> A time keeps two significant digits, since a third is below the spread from one run to the next. The farthest of a cell's four runs lies about 3 % from their median, and 9 % or more for one cell in ten. The two `LazyNode` cells of Table 4 keep three digits: their four runs agree within 2 %.
 
 ### Stream — events, no tree
 
@@ -176,7 +176,7 @@ XMark limits its documents to a restricted set of XML features by design: no ent
 | `parse` → `Node` | 55 ms · 2,526,927 | 63 ms · 2,658,494 | 66 ms · 2,567,123 | 68 ms · 2,572,527 |
 | `parse` → `Node{SubString}` | 48 ms · 2,416,965 | 49 ms · 2,429,766 | 59 ms · 2,457,161 | 60 ms · 2,457,171 |
 | `LazyNode` walk | 140 ms · 272,762 | 150 ms · 319,345 | 150 ms · 272,762 | 150 ms · 272,762 |
-| `LazyNode` attribute sweep | 146 ms · 272,762 | 150 ms · 290,362 | 148 ms · 272,762 | 149 ms · 272,762 |
+| `LazyNode` attribute sweep | 150 ms · 272,762 | 150 ms · 290,362 | 150 ms · 272,762 | 150 ms · 272,762 |
 | `FlatNode` walk | 3.4 ms · 0 | 8.7 ms · 46,583 | 3.5 ms · 0 | 3.5 ms · 0 |
 | EzXML `StreamReader` (libxml2) | 76 ms · 1,172,072 | 85 ms · 1,172,697 | 87 ms · 1,188,708 | 91 ms · 1,188,708 |
 | EzXML `parsexml` (libxml2) | 40 ms · — | 48 ms · — | 47 ms · — | 50 ms · — |
