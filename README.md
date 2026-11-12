@@ -305,7 +305,7 @@ doc = read("file.xml", LazyNode)
 - A traversal costs only the bytes it steps over: descending to a target is O(bytes before it).
 - Nothing is cached, so repeated visits cost again.
 
-It is unbeatable for descents and kilobyte-scale documents. For whole-tree walks (133 ms against ~30/~66 ms build + walk on the 14 MB document below) and repeated queries, build `FlatNode` or `Node` instead: see [Performance by access pattern](#performance-by-access-pattern).
+It is unbeatable for descents and kilobyte-scale documents. For whole-tree walks (130 ms against ~30/~66 ms build + walk on the 14 MB document below) and repeated queries, build `FlatNode` or `Node` instead: see [Performance by access pattern](#performance-by-access-pattern).
 
 For streaming and high-throughput workloads, several extra accessors avoid materializing intermediate collections:
 
@@ -429,15 +429,15 @@ One number cannot rank the readers — cost depends on what you do with the docu
 
 | | build | walk every node | extract all values | DOM size in memory |
 |---|--:|--:|--:|--:|
-| `Cursor` | — (streams) | 20.6 ms (its one scan) | — | — (no DOM) |
-| `LazyNode` | 22 ns (reads the prolog) | 133 ms (re-tokenizes) | — | — (source only) |
-| `FlatNode` | 27.4 ms | 2.88 ms | 2.93 ms | 54.9 MiB |
-| `Node` | 62.5 ms | 3.61 ms | 3.76 ms | 71.6 MiB |
-| EzXML (libxml2) | 38.3 ms | — | — | — |
+| `Cursor` | — (streams) | 21 ms (its one scan) | — | — (no DOM) |
+| `LazyNode` | 22 ns (reads the prolog) | 130 ms (re-tokenizes) | — | — (source only) |
+| `FlatNode` | 27 ms | 2.9 ms | 2.9 ms | 54.9 MiB |
+| `Node` | 62 ms | 3.6 ms | 3.8 ms | 71.6 MiB |
+| EzXML (libxml2) | 38 ms | — | — | — |
 
 Reading the table: `Cursor`'s walk *is* its parse — one tokenizing scan, nothing retained. `LazyNode` materializes nothing, so its open reads only the prolog, without allocating. The source is rewritten once only when its internal subset declares something to apply: general entities, attribute defaults, attributes of a type other than CDATA. After that it costs per node visited. That still makes it the pick for touching a *fraction* of a large document, and, as the walk column shows, the wrong tool for visiting all of it.
 
-`FlatNode` builds ~2.3× faster than `Node` and holds ~23% less memory. Its `parent` and `depth` are O(1), where `Node` searches from the root. Whole-tree walks are close, because `Node`'s exact-size children vectors keep its locality sharp. Pure value extraction is close too, with the flat store slightly faster: 2.93 against 3.76 ms, since a per-value `SubString` view costs two integer stores. `FlatNode` builds ~1.4× faster than even libxml2, and `Node`'s gap to the C library is materialization, not scanning (see [PERFORMANCE-v0.4.md](PERFORMANCE-v0.4.md)).
+`FlatNode` builds ~2.3× faster than `Node` and holds ~23% less memory. Its `parent` and `depth` are O(1), where `Node` searches from the root. Whole-tree walks are close, because `Node`'s exact-size children vectors keep its locality sharp. Pure value extraction is close too, with the flat store slightly faster: 2.9 against 3.8 ms, since a per-value `SubString` view costs two integer stores. `FlatNode` builds ~1.4× faster than even libxml2, and `Node`'s gap to the C library is materialization, not scanning (see [PERFORMANCE-v0.4.md](PERFORMANCE-v0.4.md)).
 
 _Measured 2026-11-12, Apple M5 (single-threaded), Julia 1.13.3, EzXML 1.2.3; BenchmarkTools medians._
 
@@ -451,12 +451,12 @@ What the constructions this document lacks cost, what each `wellformed` level ad
 
 | Benchmark | XML.jl | EzXML | LightXML | XMLDict |
 |---|--:|--:|--:|--:|
-| Parse, small | 14.1 µs | 11.3 µs | 11.1 µs | 131 µs |
-| Parse, medium | 68.1 ms | 40.4 ms | 40.3 ms | 351 ms |
-| Write, small | 4.22 µs | 5.71 µs | 57.8 µs | — |
-| Write, medium | 19.7 ms | 20.9 ms | 30.7 ms | — |
-| Collect tags, small | 0.340 µs | 1.09 µs | 1.75 µs | — |
-| Collect tags, medium | 4.73 ms | 9.96 ms | 13.7 ms | — |
+| Parse, small | 14 µs | 11 µs | 11 µs | 130 µs |
+| Parse, medium | 68 ms | 40 ms | 40 ms | 350 ms |
+| Write, small | 4.2 µs | 5.7 µs | 58 µs | — |
+| Write, medium | 20 ms | 21 ms | 31 ms | — |
+| Collect tags, small | 0.34 µs | 1.1 µs | 1.7 µs | — |
+| Collect tags, medium | 4.7 ms | 10 ms | 14 ms | — |
 
 EzXML and LightXML wrap libxml2 (C): faster on raw parse, slower on in-Julia traversal.
 Times include garbage collection; [PERFORMANCE](PERFORMANCE-v0.4.md) breaks each of its rows
@@ -464,4 +464,4 @@ into the stable GC-free work and the per-session GC share.
 
 For the per-access-pattern decomposition (streaming / partial reads / full DOM / stage breakdown) and the theory behind these numbers, see [**PERFORMANCE-v0.4.md**](PERFORMANCE-v0.4.md).
 
-_Measured 2026-11-12, Apple M5 (single-threaded), Julia 1.13.3; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3), XMLDict 0.4.2. Each cell is the median of four runs; [`benchmarks/benchmarks_results.md`](benchmarks/benchmarks_results.md) holds the run closest to these medians. Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl)._
+_Measured 2026-11-12, Apple M5 (single-threaded), Julia 1.13.3; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3), XMLDict 0.4.2. Each cell is the median of four runs; [`benchmarks/benchmarks_results.md`](benchmarks/benchmarks_results.md) holds these medians for every row of the script. Source: [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl)._
