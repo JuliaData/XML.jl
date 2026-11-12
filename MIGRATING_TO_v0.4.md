@@ -119,8 +119,8 @@ Review these even if your code compiles unchanged:
 
 5. **Stricter parsing by default.** `parse`/`read` default to `wellformed = :structural`, which
    rejects: multiple root elements; a document with **no** root element; non-whitespace text outside
-   the root; empty or invalid element names; a literal `<` in an attribute value; and a misplaced,
-   duplicate, or nested DOCTYPE or XML declaration.
+   the root; an element name that is empty or starts with a digit, `-` or `.`; a literal `<` in an
+   attribute value; and a misplaced, duplicate, or nested DOCTYPE or XML declaration.
 
    ```julia
    parse(str, Node)                          # :structural (default)
@@ -149,7 +149,7 @@ Review these even if your code compiles unchanged:
    bounds (see [WELL-FORMEDNESS.md](WELL-FORMEDNESS.md#what-the-declarations-may-cost)), and
    replacement text that is not balanced (§4.3.2).
 
-7. **Line ends are normalized** (from **v0.4.7**). Every reader reads CR LF and a lone CR as LF (XML 1.0 §2.11), in text, attribute values, comments, CDATA sections, processing instructions and the DOCTYPE. With `parse("<r>a\r\nb</r>", Node)`, the text of `r` is `"a\nb"`, where v0.4.6 returned `"a\r\nb"`. A CR written as `&#13;` still reads as CR. `sourcetext` on a `LazyNode` or a `FlatNode` gives the bytes passed, CRs included. In v0.4.7 and v0.4.8, `sourcetext` on a `FlatNode` referred to a copy whose lines end in LF.
+7. **Line ends are normalized** (from **v0.4.7**). Every reader reads CR LF and a lone CR as LF (XML 1.0 §2.11), in text, attribute values, comments, CDATA sections, processing instructions and the DOCTYPE. With `parse("<r>a\r\nb</r>", Node)`, the text of `r` is `"a\nb"`, where v0.4.6 returned `"a\r\nb"`. A CR written as `&#13;` still reads as CR. `sourcetext` on a `LazyNode` or a `FlatNode` gives the bytes passed, CRs included. A document that the declarations of its DOCTYPE change is the exception: it is read from a copy whose lines end in LF. In v0.4.7 and v0.4.8, `sourcetext` on a `FlatNode` referred to a copy whose lines end in LF.
 
 8. **Inter-element whitespace is preserved.** `parse`/`read` keep whitespace-only text between
    elements as `Text` nodes (0.3.x dropped it by default). So `children(root)` may include leading

@@ -4,7 +4,7 @@ The headline cross-library figures live in the [README](README.md#benchmarks). T
 
 ## The theory behind "optimal"
 
-XML parsing splits into two language-theory levels, and v0.4 hits the **asymptotic lower bound** of each — the sense in which the lexer and parser are "optimal". The gap to a C library like [libxml2](https://en.wikipedia.org/wiki/Libxml2) is constant-factor (C tuning, a leaner non-Julia-heap tree), not asymptotic — and only on the pointer-tree `Node` build; `FlatNode` builds faster than libxml2 (Table 5), and at streaming XML.jl is ~2.6× *faster* (Table 1).
+XML parsing splits into two language-theory levels, and v0.4 hits the **asymptotic lower bound** of each — the sense in which the lexer and parser are "optimal". The gap to a C library like [libxml2](https://en.wikipedia.org/wiki/Libxml2) is constant-factor (C tuning, a leaner non-Julia-heap tree), not asymptotic — and only on the pointer-tree `Node` build; `FlatNode` builds faster than libxml2 (Table 5), and at streaming XML.jl is 2.5 to 3× *faster* (Table 1).
 
 ### Level 1 — lexing is finite-state
 
@@ -53,16 +53,16 @@ untouched; EzXML's `StreamReader` is libxml2's reader, at one FFI call per event
 
 | Stream | time (incl. GC) | memory |
 |---|--:|--:|
-| **XML.jl `Cursor`** | **27 ms** | **0.0 MiB** |
-| EzXML `StreamReader` | 71 ms (GC 0.7) | 36 MiB |
+| **XML.jl `Cursor`** | **25 ms** | **0.0 MiB** |
+| EzXML `StreamReader` | 75 ms (GC 0.8) | 36 MiB |
 
 _Table 1 — streaming: events only, no tree built._[^profile]
 
-Structured pull helpers keep scans cheap without hand-tracked depth: `for_each_child` applies a function to the *immediate* children of the current node (nestable — composing calls yields a full depth-first walk), and `skip_element!` jumps a whole subtree in one byte-level scan, so structural walks classify nodes without tokenizing their contents.
+Structured pull helpers keep scans cheap without hand-tracked depth: `for_each_child!` applies a function to the *immediate* children of the current node (nestable — composing calls yields a full depth-first walk), and `skip_element!` jumps a whole subtree in one byte-level scan, so structural walks classify nodes without tokenizing their contents.
 
 ### Partial reads — `LazyNode`
 
-Opening builds nothing. Every document costs one probe of its prolog for declarations to apply, 16 ns on this 14 MB file and allocation-free. One whose DTD declares an entity, an attribute default or an attribute of a type other than CDATA costs a walk at the entry on top of that (Table 6). And nothing is ever cached: each visit re-tokenizes and rebuilds its small handles — iteration steps allocate nothing, and each child or attribute scan is one small resumable cursor object, elided when it never loops (Table 4 prices the full-scan case) — so a repeated look-up costs only its re-scan time, and costs repeat per visit. A traversal costs only the bytes it actually steps over: the child iterator defers a yielded element's subtree skip until the *next sibling* is requested, so descending to a target is O(bytes before it); scanning *everything* is the worst case, priced per reader in Table 4. What still costs: *horizontal* scans cost the subtrees they step past (as any index-free forward reader must), and *repeated* look-ups cost again — those two patterns tip the scale toward `FlatNode`/`Node`.
+Opening builds nothing. Every document costs one probe of its prolog for declarations to apply, 16 to 19 ns on this 14 MB file and allocation-free. One whose DTD declares an entity, an attribute default or an attribute of a type other than CDATA costs a walk at the entry on top of that (Table 6). And nothing is ever cached: each visit re-tokenizes and rebuilds its small handles — iteration steps allocate nothing, and each child or attribute scan is one small resumable cursor object, elided when it never loops (Table 4 prices the full-scan case) — so a repeated look-up costs only its re-scan time, and costs repeat per visit. A traversal costs only the bytes it actually steps over: the child iterator defers a yielded element's subtree skip until the *next sibling* is requested, so descending to a target is O(bytes before it); scanning *everything* is the worst case, priced per reader in Table 4. What still costs: *horizontal* scans cost the subtrees they step past (as any index-free forward reader must), and *repeated* look-ups cost again — those two patterns tip the scale toward `FlatNode`/`Node`.
 
 > [!NOTE]
 > Ask only for what you need: a `for` loop over `eachchildnode` fetches the next sibling — and runs its predecessor's deferred subtree skip — at the top of each round, so exit *from within the body* once you are done:
@@ -83,13 +83,13 @@ The lazy readers keep whatever string type the document arrives as, and rewrite 
 
 | | time | allocated |
 |---|--:|--:|
-| open | **24.3 ns** | 176 B |
-| open, then read 1 000 nodes | 37.2 µs | 38 KiB |
-| open, then read every node | 35.7 ms | 36.3 MiB |
+| open | **28.3 ns** | 224 B |
+| open, then read 1 000 nodes | 37.5 µs | 38 KiB |
+| open, then read every node | 35.6 ms | 36.3 MiB |
 
-An LF file opens in about the same time, 23.4 ns: the entry reads the prolog, not the document. Opening thus does not scale with the file's size, and a reader that touches a fraction of a mapped document costs only that fraction. Reading *all* of a CR LF document allocates more than normalizing one copy of it would. These are short-lived strings, reclaimed by the garbage collector as the reader moves on, where a normalized copy holds one document-sized block for as long as any handle into it lives. For a file larger than memory, that difference determines whether it can be read at all.[^mapped]
+An LF file opens in about the same time, 27.7 ns: the entry reads the prolog, not the document. Opening thus does not scale with the file's size, and a reader that touches a fraction of a mapped document costs only that fraction. Reading *all* of a CR LF document allocates more than normalizing one copy of it would. These are short-lived strings, reclaimed by the garbage collector as the reader moves on, where a normalized copy holds one document-sized block for as long as any handle into it lives. For a file larger than memory, that difference determines whether it can be read at all.[^mapped]
 
-[^mapped]: Measured 2026-11-04, same machine and settings as the rest, Julia 1.13.3; BenchmarkTools medians, each the median of four runs. Source: [`benchmarks/profile.jl`](benchmarks/profile.jl), section (5), which generates the CR LF twin of the XMark-style document beside it.
+[^mapped]: Measured 2026-11-12, same machine and settings as the rest, Julia 1.13.3; BenchmarkTools medians, each the median of four runs. Source: [`benchmarks/profile.jl`](benchmarks/profile.jl), section (5), which generates the CR LF twin of the XMark-style document beside it.
 
 ### Full DOM — parse + walk everything
 
@@ -97,11 +97,11 @@ libxml2 is fastest to build; XML.jl materialises an 882 K-node Julia tree, EzXML
 
 | Full DOM extract | time (incl. GC) | memory |
 |---|--:|--:|
-| EzXML (libxml2) | **59 ms** | **54 MiB** |
-| LightXML (elements only) | 48 ms (GC 1.6) | 57 MiB |
-| XML.jl (`SubString`, zero-copy) | 63 ms (GC 14) | 95 MiB |
-| XML.jl (`String`) | 67 ms (GC 14) | 100 MiB |
-| XML.jl **v0.3.9** (previous release) | 486 ms | 1422 MiB |
+| EzXML (libxml2) | **60 ms** | **54 MiB** |
+| LightXML (elements only) | 49 ms (GC 1.5) | 57 MiB |
+| XML.jl (`SubString`, zero-copy) | 62 ms (GC 15) | 95 MiB |
+| XML.jl (`String`) | 68 ms (GC 14) | 100 MiB |
+| XML.jl **v0.3.9** (previous release) | 478 ms | 1422 MiB |
 
 _Table 2 — full-DOM extraction (parse + pull every tag/text), cross-library._[^profile]
 
@@ -110,9 +110,9 @@ _Table 2 — full-DOM extraction (parse + pull every tag/text), cross-library._[
 | Stage | time (incl. GC) | allocated |
 |---|--:|--:|
 | read file (I/O) | 0.6 ms | — |
-| **lex — the DFA** | **23.0 ms** | **0 B** |
-| parse → DOM (lex + build the tree, the VPA) | 68 ms (GC 19) | 100 MiB |
-| traverse a built tree | 4.1 ms | 0 B |
+| **lex — the DFA** | **22.8 ms** | **0 B** |
+| parse → DOM (lex + build the tree, the VPA) | 70 ms (GC 19) | 100 MiB |
+| traverse a built tree | 4.3 ms | 0 B |
 
 _Table 3 — the XML.jl pipeline, decomposed (`String` variant)._[^profile]
 
@@ -120,15 +120,17 @@ The lexer is allocation-free; **the whole libxml2 gap is *materialising* the nat
 
 Traversal of a pre-built tree stays off the allocator where it counts — iteration *steps*
 are free for all three readers, and the allocation column is measured, not assumed. `Node`
-and `FlatNode` allocate nothing at all; `LazyNode` allocates one small object per container
-node — its resumable child cursor, elided by the compiler wherever a container is empty:
+allocates nothing at all. Neither does `FlatNode` on this document: it copies a value only to
+decode a reference or to normalize a CR line end (see [Line ends](README.md#line-ends)).
+`LazyNode` allocates one small object per container node — its resumable child cursor, elided
+by the compiler wherever a container is empty:
 
 | Whole-tree traversal (same recursive function) | time (incl. GC) | allocations |
 |---|--:|--:|
-| `FlatNode` | 3.4 ms | 0 |
-| `Node` | 4.1 ms | 0 |
-| `LazyNode` | 141 ms (GC 0.3) | 272,762 |
-| `LazyNode`, adding the attribute sweep | 144 ms (GC 0.3) | 272,762 |
+| `FlatNode` | 3.5 ms | 0 |
+| `Node` | 4.2 ms | 0 |
+| `LazyNode` | 138 ms (GC 0.3) | 272,762 |
+| `LazyNode`, adding the attribute sweep | 145 ms (GC 0.3) | 272,762 |
 
 _Table 4 — whole-tree traversal per reader: one child iterator and a tag + value read per
 visited node (the spreadsheet hot-loop shape). `LazyNode` re-tokenizes everything it steps
@@ -150,13 +152,13 @@ Measured on the same XMark-style document:
 
 | Full DOM, per reader | build (incl. GC) | walk every node | extract all values | DOM size in memory |
 |---|--:|--:|--:|--:|
-| **`FlatNode`** | **26.6 ms (GC 0.1)** | **2.88 ms** | **2.93 ms** | **54.9 MiB** |
-| `Node` | 62.7 ms (GC 15) | 3.59 ms | 3.76 ms | 71.6 MiB |
-| EzXML (libxml2) | 40.4 ms | — | — | — |
+| **`FlatNode`** | **27.4 ms (GC 0.1)** | **2.88 ms** | **2.93 ms** | **54.9 MiB** |
+| `Node` | 62.5 ms (GC 15) | 3.61 ms | 3.76 ms | 71.6 MiB |
+| EzXML (libxml2) | 38.3 ms | — | — | — |
 
 _Table 5 — per-reader full-DOM comparison; *build* is the whole `parse` call, and *DOM size* is the **retained** live tree (`Base.summarysize`), not allocations._[^flatbench]
 
-Build allocations: 42.2 MiB (`FlatNode`) vs 99.8 MiB (`Node`), and on the *build* `FlatNode` is ~1.4 to 1.5× faster than libxml2 itself, `Node` ~1.6 to 1.7× slower than the C library. The GC cells say why `FlatNode` builds so cheaply: its build allocates a handful of arrays instead of 882 K objects, so its median GC share is ~0.1 ms where `Node`'s is ~15 ms. Access on the finished stores: whole-tree walks are close (2.88 vs 3.59 ms — exact-size children vectors keep `Node`'s locality sharp), `parent`/`depth` stay O(1) index hops on `FlatNode` where `Node` must search down from the root, and pure value extraction is close too, flat store slightly faster (2.93 vs 3.76 ms — a per-value `SubString` view costs two integer stores).
+Build allocations: 42.2 MiB (`FlatNode`) vs 99.8 MiB (`Node`), and on the *build* `FlatNode` is ~1.4× faster than libxml2 itself, `Node` ~1.6× slower than the C library. The GC cells say why `FlatNode` builds so cheaply: its build allocates a handful of arrays instead of 882 K objects, so its median GC share is ~0.1 ms where `Node`'s is ~15 ms. Access on the finished stores: whole-tree walks are close (2.88 vs 3.61 ms — exact-size children vectors keep `Node`'s locality sharp), `parent`/`depth` stay O(1) index hops on `FlatNode` where `Node` must search down from the root, and pure value extraction is close too, flat store slightly faster (2.93 vs 3.76 ms — a per-value `SubString` view costs two integer stores).
 
 ## Beyond the plain document: references, normalization, markup, and the `wellformed` levels
 
@@ -168,36 +170,36 @@ XMark limits its documents to a restricted set of XML features by design: no ent
 
 | | XMark-style document | escaped twin | markup twin | defaults twin |
 |---|--:|--:|--:|--:|
-| `Cursor` stream | 25.2 ms · 1 | 32.1 ms · 46,584 | 36.4 ms · 193 | 36.9 ms · 203 |
-| `parse` → `Node` | 51.9 ms · 2,526,927 | 60.1 ms · 2,658,494 | 63.6 ms · 2,567,123 | 66.3 ms (GC 2.4) · 2,572,527 |
-| `parse` → `Node{SubString}` | 46.6 ms · 2,416,965 | 47.7 ms · 2,429,766 | 58.1 ms · 2,457,161 | 59.6 ms (GC 2.9) · 2,457,171 |
-| `LazyNode` walk | 141 ms · 272,762 | 151 ms · 319,345 | 144 ms · 272,762 | 145 ms · 272,762 |
-| `LazyNode` attribute sweep | 145 ms · 272,762 | 150 ms · 290,362 | 146 ms · 272,762 | 148 ms · 272,762 |
-| `FlatNode` walk | 3.40 ms · 0 | 8.29 ms · 46,583 | 3.46 ms · 0 | 3.46 ms · 0 |
-| EzXML `StreamReader` (libxml2) | 72.4 ms · 1,172,072 | 81.7 ms · 1,172,697 | 84.6 ms · 1,188,708 | 88.2 ms · 1,188,708 |
-| EzXML `parsexml` (libxml2) | 40.8 ms · — | 48.5 ms · — | 48.5 ms · — | 50.8 ms · — |
+| `Cursor` stream | 24.6 ms · 1 | 31.5 ms · 46,584 | 36.7 ms · 193 | 37.4 ms · 203 |
+| `parse` → `Node` | 55.1 ms · 2,526,927 | 63.2 ms · 2,658,494 | 66.3 ms · 2,567,123 | 68.4 ms · 2,572,527 |
+| `parse` → `Node{SubString}` | 47.6 ms · 2,416,965 | 49.3 ms · 2,429,766 | 58.8 ms · 2,457,161 | 60.2 ms · 2,457,171 |
+| `LazyNode` walk | 143 ms · 272,762 | 153 ms · 319,345 | 147 ms · 272,762 | 148 ms · 272,762 |
+| `LazyNode` attribute sweep | 146 ms · 272,762 | 150 ms · 290,362 | 148 ms · 272,762 | 149 ms · 272,762 |
+| `FlatNode` walk | 3.44 ms · 0 | 8.71 ms · 46,583 | 3.51 ms · 0 | 3.50 ms · 0 |
+| EzXML `StreamReader` (libxml2) | 76.1 ms · 1,172,072 | 84.6 ms · 1,172,697 | 87.0 ms · 1,188,708 | 91.2 ms · 1,188,708 |
+| EzXML `parsexml` (libxml2) | 40.0 ms · — | 47.7 ms · — | 47.3 ms · — | 49.7 ms · — |
 
 _Table 6 — the same operations over the XMark-style document and its three twins: time (incl. GC) · allocations. The four columns of a row alternate within one run, and the differences between them are the point. The libxml2 DOM lives in the C heap, where the allocation column does not apply. libxml2's DOM build supplies the defaults twin's attributes; its reader, as called here, does not report them._[^twins]
 
-The escaped column is the decode path. A decoded value allocates once, the result string, the same +46,583 on `Cursor`, `LazyNode` and `FlatNode` for the 46,583 text tokens that carry a reference: `unescape` decodes in one pass over the bytes into a scratch buffer kept per task, then copies out exactly the decoded bytes. `Node{SubString}` does not decode, and its +12,801 are the §3.3.3 normalization of the 3,200 attribute values that carry a literal tab or newline, four allocations each. The markup column costs its extra nodes and a walk at the entry. Its DOCTYPE declares no entity, but it declares ID and IDREF attributes, whose values [§3.3.3](https://www.w3.org/TR/xml/#AVNormalize) reduces: the entry reads the start tags to find them, and copies nothing, since every value is already reduced. That walk is most of the 11.3 ms `Cursor` takes over the document, and of its 193 allocations. The defaults column adds the supply itself: the entry writes the 2,697 attributes into a copy of the document, 14.7 MB. That copy costs `Cursor` 0.3 to 0.7 ms and 15.8 MiB, and each `parse` row too little to show against its run-to-run spread. The walk and the copy happen once, at the entry: the `LazyNode` and `FlatNode` rows, timed on a reader already built, do not include them.
+The escaped column is the decode path. A decoded value allocates once, the result string, the same +46,583 on `Cursor`, `LazyNode` and `FlatNode` for the 46,583 text tokens that carry a reference: `unescape` decodes in one pass over the bytes into a scratch buffer kept per task, then copies out exactly the decoded bytes. `Node{SubString}` does not decode, and its +12,801 are the §3.3.3 normalization of the 3,200 attribute values that carry a literal tab or newline, four allocations each. The markup column costs its extra nodes and a walk at the entry. Its DOCTYPE declares no entity, but it declares ID and IDREF attributes, whose values [§3.3.3](https://www.w3.org/TR/xml/#AVNormalize) reduces: the entry reads the start tags to find them, and copies nothing, since every value is already reduced. That walk is most of the 11.9 ms `Cursor` takes over the document, and of its 193 allocations. The defaults column adds the supply itself: the entry writes the 2,697 attributes into a copy of the document, 14.7 MB. That copy costs `Cursor` 0.5 to 1.7 ms and 15.8 MiB, and each `parse` row too little to show against its run-to-run spread. The walk and the copy happen once, at the entry: the `LazyNode` and `FlatNode` rows, timed on a reader already built, do not include them.
 
-The two libxml2 rows put the C library on the same four documents. Its reader touches node names only, so its escaped column carries the lexing of a reference and not its decoding. Its DOM build decodes for about 8 ms over the plain build, about as long as `parse` → `Node` takes over its own, 7 to 9 ms net of its GC share. The markup twin's comments, processing instructions, CDATA sections and DOCTYPE cost the C library 7 ms over the plain build, where `parse` → `Node` takes about 12 ms more, its extra nodes and the walk at the entry. Its DOM build supplies the defaults twin's attributes for about 2.5 ms over the markup twin. Every libxml2 cell frees its tree per sample outside the timing: EzXML attaches its finalizer to the document's node, so a cell that finalizes the document frees nothing, and a benchmark loop never wakes the collector.
+The two libxml2 rows put the C library on the same four documents. Its reader touches node names only, so its escaped column carries the lexing of a reference and not its decoding. Its DOM build decodes for about 8 ms over the plain build, about as long as `parse` → `Node` takes over its own, 5 to 8 ms net of its GC share. The markup twin's comments, processing instructions, CDATA sections and DOCTYPE cost the C library 7 ms over the plain build, where `parse` → `Node` takes about 12 ms more, its extra nodes and the walk at the entry. Its DOM build supplies the defaults twin's attributes for about 2.5 ms over the markup twin. Every libxml2 cell frees its tree per sample outside the timing: EzXML attaches its finalizer to the document's node, so a cell that finalizes the document frees nothing, and a benchmark loop never wakes the collector.
 
 ### Well-formedness levels
 
-`:strict` adds two checks over `:structural`: a character-range scan of every text, attribute value, comment, CDATA section and processing-instruction body, and a check of every reference in a token that carries one, against the character range for a numeric reference and against the five predefined names for a named one, every declared entity having been included by then. The first is read by the span. A long text goes through a loop that checks 64 bytes at a time with vector instructions; a short span, 16 bytes or less, an attribute value or the white space between two tags, is checked as two 8-byte words without any loop. It costs by the number of spans more than by the bytes. The second costs in proportion to the reference density, and the XMark-style document, which has no reference at all, measures the first alone. `:lenient` and `:structural` differ only in the document-shape checks, which add about 1 % at most on the document: 52.4 and 51.5 ms.
+`:strict` adds, over `:structural`, the checks that [WELL-FORMEDNESS.md](WELL-FORMEDNESS.md#the-three-levels) lists. Two of them read the content of the document. The first is a character-range scan of every text, attribute value, comment, CDATA section and processing-instruction body. The second checks every reference in a token that carries one: a numeric reference against the character range, a named one against the five predefined names, every declared entity having been included by then. The others read names, tags and declarations, such as each element name, attribute name and processing-instruction target against the Name rule, or the white space between two attributes. The scan is read by the span. A long text goes through a loop that checks 64 bytes at a time with vector instructions; a short span, 16 bytes or less, an attribute value or the white space between two tags, is checked as two 8-byte words without any loop. It costs by the number of spans more than by the bytes. The reference check costs in proportion to the reference density. The XMark-style document has no reference at all: it measures the scan, together with the checks of its names and tags. `:lenient` and `:structural` differ only in the document-shape checks, which add about 1 % at most on the document: 52.4 and 52.3 ms.
 
 | `parse(…, Node; wellformed = …)` | `:structural` | `:strict` | ratio |
 |---|--:|--:|--:|
-| the XMark-style document, text share 57 % | 51.5 ms | 54.7 ms | 1.06× |
-| its escaped twin, 81,799 references | 58.6 ms | 64.1 ms | 1.10× |
-| its character data alone, text share 100 %, 8.1 MB | 0.49 ms | 0.81 ms | 1.65× |
+| the XMark-style document, text share 57 % | 52.3 ms | 54.5 ms | 1.06× |
+| its escaped twin, 81,799 references | 59.0 ms | 64.8 ms | 1.09× |
+| its character data alone, text share 100 %, 8.1 MB | 0.49 ms | 0.80 ms | 1.65× |
 
 _Table 7 — what `:strict` adds, by document shape; the ratio is the median of the ratios taken round by round, on the times net of their GC shares._[^twins]
 
 Neither check allocates. The character-range scan reads the bytes of a span and decodes only a byte at or above 0x80, by the string's own `Char` iteration. The reference check reads the bytes of a token that carries a `&` and copies only a reference it rejects, into its message, so `:strict` allocates exactly what `:structural` does on every document.
 
-libxml2 has no levels: it always enforces well-formedness in full. Its DOM build takes 40 ms on the plain document, 47 ms on the escaped twin and 3.9 ms on its character data alone. On pure text the `:strict` character-range scan adds 0.3 ms to the parse, about a twelfth of the time the C library takes to parse, check and build from the same bytes.
+libxml2 has no levels: it always enforces well-formedness in full. Its DOM build takes 39 ms on the plain document, 45 ms on the escaped twin and 4.0 ms on its character data alone. On pure text the `:strict` character-range scan adds 0.3 ms to the parse, less than a tenth of the time the C library takes to parse, check and build from the same bytes.
 
 ## The other entry points
 
@@ -205,17 +207,17 @@ libxml2 has no levels: it always enforces well-formedness in full. Its DOM build
 
 | | time | allocations |
 |---|--:|--:|
-| `sourcespan(::FlatNode)` | 3.2 ns | 0 |
-| `sourcespan(::LazyNode)` | 242 ns | 0 |
-| `splicetext`, `FlatNode` / `LazyNode` | 312 / 326 µs | 3 / 3, the 13.5 MiB result |
+| `sourcespan(::FlatNode)` | 3.0 ns | 0 |
+| `sourcespan(::LazyNode)` | 241 ns | 0 |
+| `splicetext`, `FlatNode` / `LazyNode` | 315 / 325 µs | 3 / 3, the 13.5 MiB result |
 | `issamenode`, `FlatNode` / `LazyNode` | 1.6 / 1.5 ns | 0 |
 | `depth(::FlatNode)` | 2.1 ns | 0 |
-| `depth(::Node, root)` | 4.45 ms | 2 |
-| `siblings(::Node, root)` | 5.12 ms | 15 |
+| `depth(::Node, root)` | 4.49 ms | 2 |
+| `siblings(::Node, root)` | 5.33 ms | 15 |
 | `foreach_attr(::LazyNode)` | 31.2 ns | 0 |
-| `eachattribute(::LazyNode)` | 53.7 ns | 0 |
-| `xpath`, `/site/regions/asia/item[500]` | 2.5 µs | 26 |
-| `xpath`, `//item[@featured='yes']` | 8.88 ms | 60, 17.0 MiB |
+| `eachattribute(::LazyNode)` | 59.8 ns | 0 |
+| `xpath`, `/site/regions/asia/item[500]` | 2.4 µs | 26 |
+| `xpath`, `//item[@featured='yes']` | 9.03 ms | 60, 17.0 MiB |
 
 _Table 8 — the entry points no other table covers._[^entrypoints]
 
@@ -223,25 +225,25 @@ _Table 8 — the entry points no other table covers._[^entrypoints]
 
 ## Choosing a reader
 
-Stream / low-memory / read-only full-DOM / repeated traversal → **XML.jl**; `FlatNode` builds ~1.4 to 1.5× faster than the libxml2 binder (26.6 vs 40.4 ms), and the C library's one advantage is the one-shot *`Node`* build-and-extract (~1.1× end-to-end, Table 2) — either way, pure Julia, no C dependency. Against its own past, v0.4 is **~7× faster and ~14× leaner than 0.3.9** (486 → 67 ms and ~1.4 GiB → 100 MiB on this file, Table 2) — see [`benchmarks/profile.jl`](benchmarks/profile.jl), [`benchmarks/profile_vs_039.jl`](benchmarks/profile_vs_039.jl), [`benchmarks/compare.jl`](benchmarks/compare.jl).
+Stream / low-memory / read-only full-DOM / repeated traversal → **XML.jl**; `FlatNode` builds ~1.4× faster than the libxml2 binder (27.4 vs 38.3 ms), and the C library's one advantage is the one-shot *`Node`* build-and-extract (~1.1× end-to-end, Table 2) — either way, pure Julia, no C dependency. Against its own past, v0.4 is **~7× faster and ~14× leaner than 0.3.9** (478 → 68 ms and ~1.4 GiB → 100 MiB on this file, Table 2) — see [`benchmarks/profile.jl`](benchmarks/profile.jl), [`benchmarks/profile_vs_039.jl`](benchmarks/profile_vs_039.jl), [`benchmarks/compare.jl`](benchmarks/compare.jl).
 
 > [!TIP]
 > **GC tuning for tree-holding applications.** A single-threaded Julia process defaults to
 > *one* GC thread; `--gcthreads=4` (the performance-core count here) parallelizes the mark
 > phase, cutting a full collection with this document's 882 K-node `Node` tree live from
-> ~29 ms to ~11 ms (median `@benchmark GC.gc(true)` sample; the `--gc-only` mode of
+> ~30 ms to ~11 ms (median `@benchmark GC.gc(true)` sample; the `--gc-only` mode of
 > [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl) reproduces the pair) —
 > and the build's GC share shrinks accordingly. Mark threads sleep outside collections
 > and run only while compute is paused anyway, so the setting takes nothing from
 > computation. It trims GC pauses, not the materialization floor: the build's GC-free work
 > is unchanged.
 
-[^profile]: Tables 1–4: measured 2026-11-04, each cell the median of four runs — same machine and settings throughout: Apple M5 (single-threaded), Julia 1.13.3; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3); BenchmarkTools at a 5 s budget per cell, every C tree freed per sample outside the timing. Source: [`benchmarks/profile.jl`](benchmarks/profile.jl).
+[^profile]: Tables 1–4: measured 2026-11-12, each cell the median of four runs — same machine and settings throughout: Apple M5 (single-threaded), Julia 1.13.3; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3); BenchmarkTools at a 5 s budget per cell, every C tree freed per sample outside the timing. Source: [`benchmarks/profile.jl`](benchmarks/profile.jl).
 
-[^flatbench]: Table 5 (and the README access-pattern table): measured 2026-11-04, same machine, Julia and BenchmarkTools settings; source [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl).
+[^flatbench]: Table 5 (and the README access-pattern table): measured 2026-11-12, same machine, Julia and BenchmarkTools settings; source [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl).
 
-[^twins]: Tables 6 and 7 measured 2026-11-04 on Julia 1.13.3, same machine as the rest. Their cells, read against one another, alternate in rounds of one second within one run, in an order that rotates from one round to the next: five rounds for Table 6, fifteen for Table 7. Each cell is the median of its rounds' BenchmarkTools medians, and the figure shown is the median of four such runs. Source: [`benchmarks/profile.jl`](benchmarks/profile.jl), sections (7) and (8), which generate the escaped and markup twins beside the XMark-style document through the generator's opt-in features, and build the defaults twin from the markup twin in memory.
+[^twins]: Tables 6 and 7 measured 2026-11-12 on Julia 1.13.3, same machine as the rest. Their cells, read against one another, alternate in rounds of one second within one run, in an order that rotates from one round to the next: five rounds for Table 6, fifteen for Table 7. Each cell is the median of its rounds' BenchmarkTools medians, and the figure shown is the median of four such runs. Source: [`benchmarks/profile.jl`](benchmarks/profile.jl), sections (7) and (8), which generate the escaped and markup twins beside the XMark-style document through the generator's opt-in features, and build the defaults twin from the markup twin in memory.
 
-[^entrypoints]: Table 8: measured 2026-11-04, same settings; source [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl), its last section.
+[^entrypoints]: Table 8: measured 2026-11-12, same settings; source [`benchmarks/flatnode_bench.jl`](benchmarks/flatnode_bench.jl), its last section.
 
 [^xmark]: XMark is the XML benchmark of A. Schmidt, F. Waas, M. Kersten, M. J. Carey, I. Manolescu and R. Busse, "XMark: A Benchmark for XML Data Management", VLDB 2002, pp. 974–985 ([PDF](https://www.vldb.org/conf/2002/S30P01.pdf), [DOI](https://doi.org/10.1016/B978-155860869-6/50096-2)); D. Barbosa, I. Manolescu and J. X. Yu survey it and its peers in "XML Benchmarks", Encyclopedia of Database Systems, Springer, 2009 ([PDF](https://pages.saclay.inria.fr/ioana.manolescu/PAPERS/Encyclopedia-XMLBenchmarks), [DOI](https://doi.org/10.1007/978-0-387-39940-9_789)). The generator here follows the XMark DTD and vocabulary but is not xmlgen: its factor 1.0 gives a 14 MB document where xmlgen's gives 100 MB.
