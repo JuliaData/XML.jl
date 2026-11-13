@@ -227,36 +227,32 @@ function _check_subset_pi(s::AbstractString, i::Int, j::Int)
     return nothing
 end
 
-# Document-shape well-formedness (`:structural`/`:strict`): exactly one root element (prolog
-# markup with no root is rejected; an empty `""` or a whitespace-only input is still accepted — the
-# former an empty Document, the latter a Document whose only child is whitespace Text), any
-# top-level Text must be whitespace only, and a DOCTYPE must be a single declaration in the prolog
-# (before the root). (`:lenient` skips this — gated + DCE'd.)
+# Document-shape well-formedness (`:structural`/`:strict`): exactly one root element, so an
+# input that holds none is rejected, whether it is empty, made of white space, or made of a
+# comment, a declaration or a DOCTYPE alone; any top-level Text must be whitespace only; and
+# a DOCTYPE must be a single declaration in the prolog (before the root). (`:lenient` skips
+# this — gated + DCE'd.)
 function _check_document_wellformed(children)
     nroots = 0
     ndtds = 0
-    has_markup = false   # a Comment / PI / Declaration / CData / DTD at the top level
     for (idx, c) in enumerate(children)
         nt = nodetype(c)
         if nt === Element
             nroots += 1
         elseif nt === Text
             isempty(strip(value(c))) || error("not well-formed: non-whitespace text at the top level")
-        else
-            has_markup = true
-            if nt === DTD
-                ndtds += 1
-                nroots > 0 && error("not well-formed: DOCTYPE must precede the root element")
-            elseif nt === Declaration
-                # §2.8: the XML declaration must be the very first thing in the document. Only the
-                # first child may be a Declaration; a second (or any later) one is misplaced.
-                idx == 1 || error("not well-formed: the XML declaration must be the first thing in the document (XML 1.0 §2.8)")
-            end
+        elseif nt === DTD
+            ndtds += 1
+            nroots > 0 && error("not well-formed: DOCTYPE must precede the root element")
+        elseif nt === Declaration
+            # §2.8: the XML declaration must be the very first thing in the document.
+            # Only the first child may be a Declaration; a later one is misplaced.
+            idx == 1 || error("not well-formed: the XML declaration must be the first thing in the document (XML 1.0 §2.8)")
         end
     end
     nroots > 1 && error("not well-formed: multiple root elements (found $nroots)")
     ndtds > 1 && error("not well-formed: multiple DOCTYPE declarations (found $ndtds)")
-    nroots == 0 && has_markup && error("not well-formed: no root element")
+    nroots == 0 && error("not well-formed: no root element")
 end
 
 # XML §2.2 Char production — the code points a character reference may legally denote. Stricter
@@ -720,7 +716,8 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
     # Slice the document level out too: the scratch keeps its historical peak capacity,
     # which must not be retained by the returned tree.
     doc_children = _take_slice!(scratch_children, 0)
-    W !== :lenient && doc_children !== nothing && _check_document_wellformed(doc_children)
+    # An input that gives no node at all has no root either: the check runs on no child.
+    W !== :lenient && _check_document_wellformed(doc_children === nothing ? () : doc_children)
     Node{S}(Document, nothing, nothing, nothing, doc_children)
 end
 

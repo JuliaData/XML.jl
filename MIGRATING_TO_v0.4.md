@@ -140,6 +140,8 @@ Review these even if your code compiles unchanged:
    read("schema.dtd", Node; wellformed = :lenient)   # a DTD file has no root element
    ```
 
+   From **v0.4.10**, an empty input is rejected too, and so is one made of white space or of a byte order mark. `wellformed = :lenient` reads it as before.
+
 6. **Declarations of the internal subset are applied** (from **v0.4.7**). General entities are
    expanded where they are referenced, attribute defaults are supplied, and the values of
    attributes declared with a type other than CDATA are normalized (XML 1.0 §4.4.2, §3.3.2,

@@ -300,20 +300,35 @@ end
         @test nodetype(parse("""<?xml version="1.0"?><a/>""", Node)) == Document
     end
 
-    @testset "rejects a document with markup but no root element (§2.1)" begin
-        # §2.1: a well-formed document has exactly one root. Prolog-only markup (a comment,
-        # XML/PI declaration, or DOCTYPE) with no root is not well-formed (libxml2: "no root").
+    @testset "rejects a document with no root element (§2.1)" begin
+        # §2.1: a well-formed document has exactly one root. A document that holds only a
+        # comment, a declaration or a DOCTYPE is not well-formed (libxml2: "no root").
         @test_throws ErrorException parse("<!-- comment -->", Node)
         @test_throws ErrorException parse("<!DOCTYPE x>", Node)
         @test_throws ErrorException parse("""<?xml version="1.0"?>""", Node)
         @test_throws ErrorException parse("<?pi go?>", Node)
-        # empty ("") and whitespace-only input are both accepted, but differ: "" → an empty
-        # Document; "   " → a Document whose only child is whitespace Text. :lenient opts out.
-        @test nodetype(parse("", Node)) == Document
-        @test isempty(children(parse("", Node)))
-        @test nodetype(parse("   ", Node)) == Document
-        @test nodetype(only(children(parse("   ", Node)))) == Text
-        @test nodetype(parse("<!-- comment -->", Node; wellformed=:lenient)) == Document
+        # Neither is an empty input, nor one made of white space or of a byte order mark
+        # (the W3C cases not-wf-sa-050 and o-p39fail3 are empty files).
+        no_root(f) = try
+            f(); false
+        catch err
+            err isa ErrorException && err.msg == "not well-formed: no root element"
+        end
+        accepted = [(xml, T, level) for xml in ("", "   ", "\n", "\ufeff")
+                    for T in (Node, Node{SubString{String}}, FlatNode)
+                    for level in (:structural, :strict)
+                    if !no_root(() -> parse(xml, T; wellformed = level))]
+        @test accepted == []
+        @test_throws "no root element" parse("", Node)
+        @test_throws "no root element" read(IOBuffer(""), Node)
+        # :lenient reads them: "" gives an empty Document, "   " a Document whose only child
+        # is a whitespace Text. Cursor and LazyNode check no structure, and read them too.
+        @test isempty(children(parse("", Node; wellformed = :lenient)))
+        @test isempty(children(parse("", FlatNode; wellformed = :lenient)))
+        @test nodetype(only(children(parse("   ", Node; wellformed = :lenient)))) == Text
+        @test nodetype(parse("<!-- comment -->", Node; wellformed = :lenient)) == Document
+        @test XML.next!(XML.Cursor("")) === nothing
+        @test isempty(children(parse("", LazyNode)))
     end
 
     @testset "rejects misplaced or duplicate DOCTYPE (§2.1 prolog)" begin
@@ -3554,13 +3569,13 @@ end
         @test_throws "unterminated tag" parse("<a ", Node)
 
         # Every proper prefix of a document that ends on its root is refused, wherever the
-        # cut falls. The empty prefix is left aside.
+        # cut falls, the empty prefix included.
         rich = "<?xml version=\"1.0\"?>\n<!DOCTYPE r [<!ENTITY e \"z\">]>\n<!-- c --><?p q?>" *
                "<r a=\"1\" b='2'><x:y>t &amp; &e;<![CDATA[z]]></x:y><e/><f></f></r>"
         refused(f) = try f(); false catch err; err isa Union{ArgumentError, ErrorException} end
         @testset "every proper prefix of $(repr(first(doc, 16)))" for doc in
                 ("<a>1</a>", "<a><b>1</b></a>", rich)
-            accepted = [(T, level, doc[1:k]) for k in 1:ncodeunits(doc)-1 for T in (Node, FlatNode)
+            accepted = [(T, level, doc[1:k]) for k in 0:ncodeunits(doc)-1 for T in (Node, FlatNode)
                         for level in (:structural, :strict)
                         if !refused(() -> parse(doc[1:k], T; wellformed = level))]
             @test accepted == []

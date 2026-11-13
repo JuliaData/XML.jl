@@ -1105,11 +1105,9 @@ end
 #==============================================================================#
 @testset "Error Cases" begin
     @testset "errors/empty: empty document" begin
-        # libxml2 test/errors/empty.xml
-        # XML.jl is lenient: returns an empty Document for empty input
-        doc = parse("", Node)
-        @test nodetype(doc) == Document
-        @test length(children(doc)) == 0
+        # libxml2 test/errors/empty.xml: an empty document has no root element
+        @test_throws "no root element" parse("", Node)
+        @test isempty(children(parse("", Node; wellformed = :lenient)))
     end
 
     @testset "errors/extra-content: content after root element" begin
