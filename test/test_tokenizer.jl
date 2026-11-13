@@ -351,21 +351,60 @@ end
     @test_throws ArgumentError collect(tokenize("<?pi no end"))
 end
 
-@testset "unterminated open tag emits partial token" begin
-    # Tokenizer emits what it can; the tag is never closed but no error since EOF is reached
-    xml = "<div"
-    toks = collect(tokenize(xml))
-    @test length(toks) == 1
-    @test toks[1].kind == TokenKinds.OPEN_TAG
-    @test tag_name(toks[1], xml) == "div"
+@testset "error: unterminated open tag" begin
+    # The input ends inside a start tag: after its name, after an attribute, or after a `=`.
+    @test_throws ArgumentError collect(tokenize("<div"))
+    @test_throws "unterminated tag" collect(tokenize("<div"))
+    @test_throws "unterminated tag" collect(tokenize("<div a=\"1\""))
+    @test_throws "expected attribute value" collect(tokenize("<div a="))
+    @test_throws "unterminated tag" collect(tokenize("<div "))       # the same with white space
 end
 
-@testset "unterminated close tag emits partial token" begin
-    xml = "</div"
-    toks = collect(tokenize(xml))
-    @test length(toks) == 1
-    @test toks[1].kind == TokenKinds.CLOSE_TAG
-    @test tag_name(toks[1], xml) == "div"
+@testset "error: unterminated close tag" begin
+    @test_throws ArgumentError collect(tokenize("</div"))
+    @test_throws "unterminated close tag" collect(tokenize("</div"))
+    @test_throws "unterminated close tag" collect(tokenize("</div "))    # the same with white space
+end
+
+@testset "error: unterminated XML declaration" begin
+    @test_throws "unterminated tag" collect(tokenize("<?xml"))
+    @test_throws "unterminated tag" collect(tokenize("<?xml version=\"1.0\""))
+    @test_throws "expected attribute value" collect(tokenize("<?xml version="))
+end
+
+@testset "the input ends only between two tokens" begin
+    # Every prefix of a document either raises an ArgumentError, or gives a token stream
+    # that ends outside markup: on a text, or on the token that closes a construct.
+    K = TokenKinds
+    closing = (K.TEXT, K.TAG_CLOSE, K.SELF_CLOSE, K.CDATA_CLOSE, K.COMMENT_CLOSE, K.PI_CLOSE,
+               K.XML_DECL_CLOSE, K.DOCTYPE_CLOSE)
+    doc = "<?xml version=\"1.0\"?>\n<!DOCTYPE r [<!ENTITY e \"z\">]>\n<!-- c --><?p q?>" *
+          "<r a=\"1\" b='2'><x:y>t &amp; u<![CDATA[z]]></x:y><e/></r>\n"
+    # The kinds of the tokens of `x`, or the message of the ArgumentError it raises.
+    stream(x) = try
+        [t.kind for t in tokenize(x)]
+    catch err
+        err isa ArgumentError || rethrow()
+        err.msg
+    end
+    bytes = Vector{UInt8}(doc)
+    cut = String[]          # the prefixes whose stream ends inside markup
+    differ = String[]       # the prefixes that a view does not read as a `String` does
+    n_whole = 0
+    for k in 0:ncodeunits(doc)
+        p = doc[1:k]
+        s = stream(p)
+        # Behind a view, the memory goes on with the bytes that complete the construct: a
+        # read past the end of the input would find them.
+        stream(SubString(doc, 1, k)) == s || push!(differ, p)
+        stream(StringView(view(bytes, 1:k))) == s || push!(differ, p)
+        s isa String && continue
+        n_whole += 1
+        isempty(s) || last(s) in closing || push!(cut, p)
+    end
+    @test cut == String[]
+    @test differ == String[]
+    @test n_whole == 23     # the empty prefix, the whole document, and 21 cuts between tokens
 end
 
 @testset "error: unterminated attribute value" begin

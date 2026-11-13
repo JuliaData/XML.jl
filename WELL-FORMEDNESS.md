@@ -30,7 +30,7 @@ XML 1.0 defines two [classes of processors](https://www.w3.org/TR/xml/#proc-type
 
 | level | rejects |
 |---|---|
-| every level, `:lenient` included | mismatched or unclosed tags<br>an attribute written twice<br>an entity that refers to itself<br>entities nested more than 40 levels deep<br>declarations that cost more than their bounds (see [below](#what-the-declarations-may-cost))<br>replacement text that is not balanced |
+| every level, `:lenient` included | mismatched or unclosed tags<br>a tag, a comment, a CDATA section, a processing instruction or a declaration that the end of the document cuts off, such as `<a>1</a`<br>an attribute written twice<br>an entity that refers to itself<br>entities nested more than 40 levels deep<br>declarations that cost more than their bounds (see [below](#what-the-declarations-may-cost))<br>replacement text that is not balanced |
 | `:structural`, the default | several root elements or none<br>text outside the root<br>an element name that starts with a digit, `-` or `.`<br>`<` in an attribute value<br>a misplaced XML declaration or DOCTYPE |
 | `:strict` | `--` in a comment<br>an element name, attribute name or processing-instruction target outside the Name rule, such as `<doc 12="34"/>`<br>a processing-instruction target written `xml` in any case, or that neither white space nor `?>` follows, such as `<?a#b x?>`<br>an XML declaration without `version`, with an unknown or misplaced pseudo-attribute or no white space before one, or with a value its rule does not allow, such as `version="2.0"`<br>two attributes of a tag with no white space between them, such as `<r a="1"b="2"/>`<br>a character outside the allowed range<br>a reference to an undeclared entity where that rule applies (see [below](#undeclared-entities)), to an unparsed entity, or to an external entity from an attribute value<br>an `&` that starts no reference, or a character reference written `&#X`<br>a parameter-entity reference inside a declaration<br>a default value that holds `<`<br>an ATTLIST declaration its reader cannot follow (see [below](#declarations-of-the-internal-subset)) |
 
@@ -75,7 +75,7 @@ Any other value throws an `ArgumentError`. The DOCTYPE that `:refuse` refuses is
 
 ## Streaming readers
 
-`Cursor` and `LazyNode` take no `wellformed` keyword and check nothing else: they accept mismatched tags and even a truncated document. When a document must be checked, read it with `Node` or `FlatNode`.
+`Cursor` and `LazyNode` take no `wellformed` keyword and check nothing else: they accept mismatched tags, and a document that stops before its last end tags, such as `<a><b>1`. Like `Node` and `FlatNode`, they refuse a tag, a comment, a CDATA section, a processing instruction or a declaration that the end of the document cuts off. When a document must be checked, read it with `Node` or `FlatNode`.
 
 ## Undeclared entities
 
