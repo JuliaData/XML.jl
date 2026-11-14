@@ -191,8 +191,8 @@ Base.:(==)(a::LateName, b::LateName) = (a.ranks.comparisons += 1; a.id == b.id)
         # `isvalid(Char, cp)` accepts NUL and the non-characters, so the decoder emits them;
         # rejecting them is `:strict`'s reference check, which runs before decoding.
         @test unescape("&#0;") == "\0"
-        @test unescape("&#xFFFE;") == "￾"
-        @test unescape("&#xFFFF;") == "￿"
+        @test unescape("&#xFFFE;") == "\ufffe"
+        @test unescape("&#xFFFF;") == "\uffff"
     end
 
     @testset "multibyte text around references" begin
@@ -512,11 +512,11 @@ end
         # The scan judges an ASCII byte in place and decodes only a byte at or above 0x80. Tab, line
         # feed and carriage return are the only legal bytes below 0x20; DEL (0x7F) is legal; the raw
         # forms of the surrogate block and of U+FFFE/U+FFFF are rejected like their references.
-        for s in ("a\tb\nc\rd", "\x7f", "é漢😀", "�퟿", "\U10FFFF")
+        for s in ("a\tb\nc\rd", "\x7f", "é漢😀", "\ufffd\ud7ff", "\U10FFFF")
             @test nodetype(parse("<root>$s</root>", Node; wellformed=:strict)) == Document
         end
         for (s, cp) in (("\x01", "0001"), ("\x0b", "000B"), ("\x0c", "000C"), ("\x1f", "001F"),
-                        ("￾", "FFFE"), ("￿", "FFFF"), ("\xed\xa0\x80", "D800"), ("\xed\xbf\xbf", "DFFF"))
+                        ("\ufffe", "FFFE"), ("\uffff", "FFFF"), ("\xed\xa0\x80", "D800"), ("\xed\xbf\xbf", "DFFF"))
             @test_throws "character U+$cp is outside the legal XML range" parse("<root>$s</root>", Node; wellformed=:strict)
         end
         # A malformed sequence is not a character: the decode raises `Base.InvalidCharError`. So is
@@ -577,7 +577,7 @@ end
         @test findfirst(!agree, seqs) === nothing
         @test findfirst(s -> !agree(within(s)), seqs) === nothing
         placed = String[]
-        cases = ("é", "漢", "😀", "￾", "￿", "�", "\xed\xa0\x80", "\xc0\x80", "\xe0\x80\x80", "\xf0\x80\x80\x80",
+        cases = ("é", "漢", "😀", "\ufffe", "\uffff", "\ufffd", "\xed\xa0\x80", "\xc0\x80", "\xe0\x80\x80", "\xf0\x80\x80\x80",
                  "\xf4\x90\x80\x80", "\xf5\x80\x80\x80", "\xe2\x82", "\xef\xbf\xbe", "\xf4\x8f\xbf\xbf", "\x01", "\x1f", "\x7f")
         for s in Iterators.flatten((seqs[1:20], cases)), pad in Iterators.flatten((0:17, 62:66, 126:130, 254:258)), tail in ("", "b\x01c")
             push!(placed, repeat("a", pad) * s * tail)
@@ -1036,12 +1036,12 @@ end
                     "<!DOCTYPE a [<!ENTITY e \"x\">]><a>&e;</a>",
                     "<!DOCTYPE a [<!ATTLIST a k CDATA \"v\">]><a/>",
                     "<?xml version=\"1.0\"?>\n<!DOCTYPE a>\n<a/>",
-                    "<!-- c --><?p q?><!DOCTYPE a><a/>", "﻿<!DOCTYPE a><a/>",
+                    "<!-- c --><?p q?><!DOCTYPE a><a/>", "\ufeff<!DOCTYPE a><a/>",
                     # after a comment or an instruction whose end is easy to find too early
                     "<!--><a>--><!DOCTYPE a><a/>", "<!---><a>--><!DOCTYPE a><a/>",
                     "<?><a>?><!DOCTYPE a><a/>")
         plain = ("<a>t</a>", "<?xml version=\"1.0\"?>\n<!-- c --><a b=\"1\">x<![CDATA[y]]>&amp;</a>",
-                 "<a>l1\r\nl2</a>", "﻿<a/>")
+                 "<a>l1\r\nl2</a>", "\ufeff<a/>")
         # One that `:apply` refuses for what it declares: an entity that refers to itself.
         selfref = "<!DOCTYPE a [<!ENTITY e \"&e;\">]><a/>"
         @testset "$name" for (name, entry) in entries
@@ -1923,7 +1923,7 @@ end
         # an encoding signature makes `_drop_bom` hand the reader a view, which the expansion
         # rebuilds as a view of the same type
         mktemp() do path, io
-            write(io, "﻿" * doc)
+            write(io, "\ufeff" * doc)
             close(io)
             open(path) do f
                 sv = StringView(Mmap.mmap(f))
@@ -2964,7 +2964,7 @@ end
         # A leading U+FEFF as a *character* in an in-memory string is an encoding signature,
         # not content — every reader must drop it, not surface it as a leading Text node, so
         # Node / LazyNode / Cursor agree on the same string.
-        let bom = "﻿<r>x</r>"
+        let bom = "\ufeff<r>x</r>"
             @test nodetype(parse(bom, Node)[1])     == Element
             @test tag(parse(bom, Node)[1])          == "r"
             @test nodetype(parse(bom, LazyNode)[1]) == Element
@@ -6610,3 +6610,24 @@ end
 @testset "test_cursor" begin include("test_cursor.jl") end
 @testset "test_flatnode" begin include("test_flatnode.jl") end
 @testset "test_node_identity" begin include("test_node_identity.jl") end
+
+# Outside ASCII, the .jl files of the package hold only printable characters, and no space.
+# A character that a reader cannot see or tell from another, such as a byte order mark, a
+# no-break space or U+FFFF, is written as an escape, by its code point. So is U+FFFD, which
+# many tools show in place of bytes that they cannot decode, and so is a character that the
+# Unicode tables of the running Julia do not know yet.
+@testset "source files write hidden characters as escapes" begin
+    hidden(c) = !isascii(c) && (!isprint(c) || isspace(c) || c == '\ufffd')
+    root = pkgdir(XML)
+    found = Tuple{String, Int, Char}[]
+    for sub in ("src", "ext", "test"), (dir, _, files) in walkdir(joinpath(root, sub))
+        for f in files
+            endswith(f, ".jl") || continue
+            path = joinpath(dir, f)
+            for (n, line) in enumerate(eachline(path)), c in line
+                hidden(c) && push!(found, (relpath(path, root), n, c))
+            end
+        end
+    end
+    @test found == []
+end
