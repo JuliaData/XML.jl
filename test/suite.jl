@@ -3522,6 +3522,79 @@ end
         @test nodetype(parse("<r><!----></r>", Node)) == Document
     end
 
+    @testset "input that ends inside a tag" begin
+        # A start tag, an end tag or an XML declaration that the end of the input cuts off
+        # is refused by every reader, at every level, with the tokenizer's error. The third
+        # document is the W3C case sun/not-wf/element01, "EOF in middle of incomplete ETAG".
+        cut = ["<a>1</a", "<a><b>1</b></a", "<root>\n    Incomplete end tag.\n</root",
+               "<a", "<a x=\"1\"", "<a x=", "<r><a", "<?xml", "<?xml version=\"1.0\""]
+        readers = [(T, level) for T in (Node, Node{SubString{String}}, FlatNode)
+                              for level in (:lenient, :structural, :strict)]
+        raises(f) = try f(); false catch err; err isa ArgumentError end
+        function lazy_walk(n)
+            tag(n); value(n); attributes(n)
+            foreach(lazy_walk, children(n))
+        end
+        function cursor_walk(xml)
+            c = XML.Cursor(xml)
+            while XML.next!(c) !== nothing
+                tag(c); value(c); attributes(c)
+            end
+        end
+        @testset "$(repr(xml))" for xml in cut
+            @test [r for r in readers if !raises(() -> parse(xml, r[1]; wellformed = r[2]))] == []
+            @test raises(() -> lazy_walk(parse(xml, LazyNode)))
+            @test raises(() -> cursor_walk(xml))
+        end
+        @test_throws "unterminated close tag" parse("<a>1</a", Node)
+        @test_throws "unterminated tag" parse("<a", Node)
+        @test_throws "unterminated tag" parse("<?xml version=\"1.0\"", Node)
+        # White space before the end of the input changes nothing.
+        @test_throws "unterminated close tag" parse("<a>1</a ", Node)
+        @test_throws "unterminated tag" parse("<a ", Node)
+
+        # Every proper prefix of a document that ends on its root is refused, wherever the
+        # cut falls. The empty prefix is left aside.
+        rich = "<?xml version=\"1.0\"?>\n<!DOCTYPE r [<!ENTITY e \"z\">]>\n<!-- c --><?p q?>" *
+               "<r a=\"1\" b='2'><x:y>t &amp; &e;<![CDATA[z]]></x:y><e/><f></f></r>"
+        refused(f) = try f(); false catch err; err isa Union{ArgumentError, ErrorException} end
+        @testset "every proper prefix of $(repr(first(doc, 16)))" for doc in
+                ("<a>1</a>", "<a><b>1</b></a>", rich)
+            accepted = [(T, level, doc[1:k]) for k in 1:ncodeunits(doc)-1 for T in (Node, FlatNode)
+                        for level in (:structural, :strict)
+                        if !refused(() -> parse(doc[1:k], T; wellformed = level))]
+            @test accepted == []
+        end
+
+        # A streaming reader keeps the type of its source. Behind a view, the memory goes on
+        # with the bytes that complete the construct: a cut document is read or refused as
+        # its copy is, and any other exception than the tokenizer's fails the test.
+        outcome(f) = try f(); :read catch err; err isa ArgumentError ? :refused : rethrow() end
+        bytes = Vector{UInt8}(rich)
+        differ = Tuple{String, String}[]
+        for k in 0:ncodeunits(rich)
+            plain = rich[1:k]
+            by_cursor = outcome(() -> cursor_walk(plain))
+            by_lazy = outcome(() -> lazy_walk(parse(plain, LazyNode)))
+            views = ("SubString" => SubString(rich, 1, k),
+                     "StringView" => StringView(view(bytes, 1:k)))
+            for (name, x) in views
+                outcome(() -> cursor_walk(x)) == by_cursor || push!(differ, (name, plain))
+                outcome(() -> lazy_walk(parse(x, LazyNode))) == by_lazy ||
+                    push!(differ, (name, plain))
+            end
+        end
+        @test differ == Tuple{String, String}[]
+
+        # A complete document is read as before, and so is one that stops before its last
+        # end tags when a streaming reader reads it.
+        @test nodetype(parse("<a>1</a>", Node)) == Document
+        whole = "<?xml version=\"1.0\"?><a/>\n<!-- c -->\n"
+        @test nodetype(parse(whole, Node; wellformed = :strict)) == Document
+        @test (cursor_walk("<a><b>1"); true)
+        @test (lazy_walk(parse("<a><b>1", LazyNode)); true)
+    end
+
     @testset "unterminated quoted string in a DOCTYPE uses the tokenizer error convention" begin
         # skip_quoted raises through err(msg, pos) like every other tokenizer error: an
         # ArgumentError carrying position context, not a bare ErrorException.

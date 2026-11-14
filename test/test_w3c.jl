@@ -140,7 +140,7 @@ notwf_tests = filter(t -> t.type == "not-wf", xml10_tests)
         # names that only the character classes of the editions before the fifth reject
         # (appendix B), and namespace errors. Assert a no-regression floor on the count it
         # does reject, and raise it as coverage grows.
-        @test n_pass >= 679
+        @test n_pass >= 680
         n_fail > 0 && @info "W3C not-wf: $n_fail not yet rejected (mostly DTD syntax, earlier-edition names, namespaces)" examples=first(failures, 20)
         @info "W3C not-well-formed: $n_pass / $(n_pass + n_fail) rejected"
     end

@@ -243,15 +243,14 @@ function Base.iterate(t::Tokenizer, st::TokenizerState=_init_state(t))
     if has_pending(st)
         return (pending, TokenizerState(pos, mode, no_token(data)))
     end
-    # EOF ends the token stream cleanly in M_DEFAULT (top level) and in the tag modes, where it
-    # leaves a partial token the parser rejects as an unclosed tag. But EOF mid content-body — a
-    # "<!--", "<![CDATA[", "<?pi", or "<!DOCTYPE" whose open token consumed through end-of-input —
-    # is an unterminated construct: fall through to the body reader so it raises the precise
-    # "unterminated ..." error instead of silently ending (which left the Node parser accepting the
-    # truncated input, and made the lazy readers' value() index `nothing`).
-    if iseof(data, pos)
-        (mode == M_COMMENT || mode == M_CDATA || mode == M_PI || mode == M_DOCTYPE) || return nothing
-    end
+    # The input may end only outside markup, between two tokens (M_DEFAULT). In any other
+    # mode the end of the input cuts a construct off: a tag, an XML declaration, a comment,
+    # a CDATA section, a processing instruction or a DOCTYPE. The reader of that mode then
+    # raises its error. Ending the stream there instead let `Node` and `FlatNode` close an
+    # element on an end tag without its `>`, made `Node` read a cut XML declaration as an
+    # empty document, and gave the lazy readers a tag with no end, or a `value` that
+    # indexed `nothing`.
+    iseof(data, pos) && mode == M_DEFAULT && return nothing
 
     if mode == M_DEFAULT
         peek(data, pos) == UInt8('<') ? read_markup(data, pos) : read_text(data, pos)

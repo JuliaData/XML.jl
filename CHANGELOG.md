@@ -5,6 +5,14 @@ All notable changes to XML.jl will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+With the changes below, the same call can give another result than with v0.4.9.
+
+- **Every reader refuses a document that ends inside a tag** ([#250](https://github.com/JuliaData/XML.jl/issues/250)). The end of a document could cut a tag off without an error. `Node` and `FlatNode` read `<a>1</a`, an end tag without its `>`, as `<a>1</a>`, at every level. `Node` read an XML declaration cut off before its `?>` as an empty document. `Cursor` and `LazyNode` read a start tag cut off the same way as an element. The four readers now raise an `ArgumentError`, as they already did when white space came before the end, in `<a>1</a ` for example. `Cursor` and `LazyNode` still read a document that stops before its last end tags, such as `<a><b>1`. For a direct caller of the tokenizer, iterating `XML.XMLTokenizer.tokenize("<div")` now raises too, as it did for a comment or an attribute value cut off. It gave one token.
+
 ## [0.4.9] - 2026-11-12
 
 ### Added
