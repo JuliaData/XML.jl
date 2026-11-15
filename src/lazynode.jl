@@ -545,8 +545,12 @@ function write(n::LazyNode; normalize::Bool=false, indentsize::Int=2, pretty::Bo
 end
 
 # The `Node` tree that `normalize = true` writes. A document is read at the default level,
-# and so is an element, which is its own root. A node of another kind holds no element
-# and cannot be a document: it is read as content (XML 1.0 §4.3.2), which asks for no root.
+# and so is an element, which is its own root. A node of another kind holds no element and
+# cannot be a document: it is read without the checks on the shape of a document. XML 1.0
+# has no rule for such a node taken alone. The nearest is the rule of a parsed entity
+# (§4.3.2), whose text matches `content` ([43]) and needs no root: a text, a comment, a
+# CDATA section or a processing instruction does. An XML declaration or a DOCTYPE does
+# not: it is a piece of the prolog (§2.8).
 _normalized(n::LazyNode) = (n.nodetype === Document || n.nodetype === Element) ?
     parse(String(sourcetext(n)), Node) :
     parse(String(sourcetext(n)), Node; wellformed = :lenient)
