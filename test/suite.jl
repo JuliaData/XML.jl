@@ -2918,6 +2918,43 @@ end
 #                 WRITE TO FILE / READ FROM FILE                               #
 #==============================================================================#
 @testset "File I/O" begin
+    @testset "write a LazyNode with normalize = true" begin
+        # The text of the node is read again as a `Node` tree, then written. A document
+        # keeps the checks of the default level: one without a root element is refused.
+        @test XML.write(parse("<r>\n\n<a/></r>", LazyNode); normalize = true) == "<r>\n  <a/>\n</r>"
+        @test_throws "no root element" XML.write(parse("", LazyNode); normalize = true)
+        @test_throws "no root element" XML.write(parse("  \n", LazyNode); normalize = true)
+        @test_throws "multiple root elements" XML.write(parse("<a/><b/>", LazyNode); normalize = true)
+        # An element is its own root, and keeps these checks too: a name that the default
+        # level refuses is refused in it.
+        odd = parse("<a><1x/></a>", LazyNode)[1]
+        @test_throws "invalid element name" XML.write(odd; normalize = true)
+        @test_throws "invalid element name" XML.write(odd[1]; normalize = true)
+        # A node of another kind holds no element and cannot be a document: it is read
+        # without the checks on the shape of a document, whatever its source type.
+        src = "<?xml version=\"1.0\"?>\n<!DOCTYPE a>\n" *
+              "<a> <b x=\"1\"/><!-- c -->t &amp; u<![CDATA[d]]><?p q?></a>"
+        expected = ["<?xml version=\"1.0\"?>", "", "<!DOCTYPE a>", "",  # before the root
+                    "", "<b x=\"1\"/>", "<!-- c -->", "t &amp; u", "<![CDATA[d]]>", "<?p q?>"]
+        for source in (src, SubString("zz" * src * "zz", 3, 2 + ncodeunits(src)),
+                       StringView(Vector{UInt8}(src)))
+            doc = parse(source, LazyNode)
+            a = doc[end]
+            nodes = vcat(children(doc)[1:end-1], children(a))
+            @test [XML.write(n; normalize = true) for n in nodes] == expected
+            @test XML.write(a; normalize = true, pretty = false) == sourcetext(a)
+        end
+        # The methods that write to a stream or to a file read the node the same way.
+        comment = parse("<a><!-- c --></a>", LazyNode)[1][1]
+        io = IOBuffer()
+        XML.write(io, comment; normalize = true)
+        @test String(take!(io)) == "<!-- c -->"
+        f = tempname() * ".xml"
+        XML.write(f, comment; normalize = true)
+        @test read(f, String) == "<!-- c -->"
+        rm(f)
+    end
+
     @testset "write and read back" begin
         doc = Document(
             Declaration(; version="1.0"),

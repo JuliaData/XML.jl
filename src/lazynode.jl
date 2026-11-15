@@ -535,14 +535,25 @@ With `normalize=true` the node is parsed into a `Node` tree and re-serialized, w
 collapses incidental source whitespace and pretty-prints with `indentsize`-space
 indentation. With `pretty=false` as well, no white space is added or dropped between the
 nodes, as for a `Node`. `indentsize` and `pretty` have no effect with `normalize=false`.
+
+A document or an element is parsed at the default level, `:structural`: an element is its
+own root. A node of another kind, such as a comment or a text, holds no element: it is
+parsed without the checks on the shape of a document, and written.
 """
 function write(n::LazyNode; normalize::Bool=false, indentsize::Int=2, pretty::Bool=true)
-    normalize ? write(parse(String(sourcetext(n)), Node); indentsize, pretty) : String(sourcetext(n))
+    normalize ? write(_normalized(n); indentsize, pretty) : String(sourcetext(n))
 end
+
+# The `Node` tree that `normalize = true` writes. A document is read at the default level,
+# and so is an element, which is its own root. A node of another kind holds no element
+# and cannot be a document: it is read as content (XML 1.0 §4.3.2), which asks for no root.
+_normalized(n::LazyNode) = (n.nodetype === Document || n.nodetype === Element) ?
+    parse(String(sourcetext(n)), Node) :
+    parse(String(sourcetext(n)), Node; wellformed = :lenient)
 
 function write(io::IO, n::LazyNode; normalize::Bool=false, indentsize::Int=2, pretty::Bool=true)
     if normalize
-        write(io, parse(String(sourcetext(n)), Node); indentsize, pretty)
+        write(io, _normalized(n); indentsize, pretty)
     else
         Base.write(io, sourcetext(n))
     end
