@@ -55,7 +55,7 @@ _resolve_charrefs(v::AbstractString) = occursin('&', v) ? replace(v, _CHARREF_RE
 @inline function _has_doctype(s::AbstractString)
     n = ncodeunits(s)
     i = 1
-    startswith(s, '﻿') && (i = nextind(s, 1))
+    startswith(s, '\ufeff') && (i = nextind(s, 1))
     @inbounds while i <= n
         b = codeunit(s, i)
         if b == UInt8(' ') || b == UInt8('\n') || b == UInt8('\t') || b == UInt8('\r')

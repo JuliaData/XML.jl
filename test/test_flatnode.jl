@@ -258,7 +258,7 @@ end
 end
 
 @testset "BOM handling" begin
-    bom = "﻿<r>x</r>"
+    bom = "\ufeff<r>x</r>"
     @test parse(bom, FlatNode) == parse(bom, Node)
     utf8_bom = vcat([0xEF, 0xBB, 0xBF], Vector{UInt8}("<r>x</r>"))
     @test simple_value(only(eachelement(read(IOBuffer(utf8_bom), FlatNode)))) == "x"
