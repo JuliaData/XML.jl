@@ -5,7 +5,7 @@ All notable changes to XML.jl will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.10] - 2026-11-18
 
 ### Changed
 
@@ -550,6 +550,7 @@ First release since XML.jl moved to [JuliaData](https://github.com/JuliaData/XML
 
 - Initial release.
 
+[0.4.10]: https://github.com/JuliaData/XML.jl/compare/v0.4.9...v0.4.10
 [0.4.9]: https://github.com/JuliaData/XML.jl/compare/v0.4.8...v0.4.9
 [0.4.8]: https://github.com/JuliaData/XML.jl/compare/v0.4.7...v0.4.8
 [0.4.7]: https://github.com/JuliaData/XML.jl/compare/v0.4.6...v0.4.7
