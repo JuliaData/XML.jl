@@ -3605,6 +3605,70 @@ end
         @test_throws "unterminated close tag" parse("<a>1</a ", Node)
         @test_throws "unterminated tag" parse("<a ", Node)
 
+        # An end tag is refused as soon as it is read when the input ends after `</`, after
+        # its name, or after the white space that follows it. A call that stops at the end
+        # of an element raises too: it never asks for the `>`. Behind a view, the byte that
+        # follows the source completes the tag.
+        cut_end = ["<a>1</a", "<a>1</a ", "<a>1</a\n", "<a>1</a\t\r\n ", "<a>1</",
+                   "<r><a>1</a", "<a><![CDATA[1]]></a"]
+        cut_raises(f) = try f(); false catch err
+            err isa ArgumentError && occursin("unterminated close tag", err.msg)
+        end
+        function cursor_on_a(xml)
+            c = XML.Cursor(xml)
+            while XML.next!(c) !== nothing
+                nodetype(c) === Element && tag(c) == "a" && return c
+            end
+        end
+        lazy_a(n) = nodetype(n) === Element && tag(n) == "a" ? n :
+                    lazy_a(first(XML.eachchildnode(n)))
+        lazy_a(xml::AbstractString) = lazy_a(parse(xml, LazyNode))
+        calls = ["is_simple(::Cursor)" => xml -> is_simple(cursor_on_a(xml)),
+                 "simple_value(::Cursor)" => xml -> simple_value(cursor_on_a(xml)),
+                 "is_simple(::LazyNode)" => xml -> is_simple(lazy_a(xml)),
+                 "simple_value(::LazyNode)" => xml -> simple_value(lazy_a(xml)),
+                 "children(::LazyNode)" => xml -> children(lazy_a(xml)),
+                 "eachchildnode(::LazyNode)" =>
+                     xml -> collect(XML.eachchildnode(lazy_a(xml))),
+                 "getindex(::LazyNode, 1)" => xml -> lazy_a(xml)[1],
+                 "only(::LazyNode)" => xml -> only(lazy_a(xml)),
+                 "length(::LazyNode)" => xml -> length(lazy_a(xml)),
+                 "string_value(::LazyNode)" => xml -> string_value(lazy_a(xml))]
+        sources = ["String" => identity,
+                   "SubString" => xml -> SubString(xml * ">", 1, lastindex(xml)),
+                   "StringView" => xml -> StringView(view(Vector{UInt8}(xml * ">"),
+                                                          1:ncodeunits(xml)))]
+        @testset "$name on an end tag cut off" for (name, call) in calls
+            @test [(source, xml) for xml in cut_end for (source, as) in sources
+                   if !cut_raises(() -> call(as(xml)))] == []
+        end
+        # An end tag that is whole is read as before, white space before its `>` included.
+        whole_end = ["<a>1</a>", "<a>1</a >", "<a>1</a\n>", "<r><a>1</a></r>"]
+        @test [simple_value(cursor_on_a(xml)) for xml in whole_end] == ["1", "1", "1", "1"]
+        @test [length(children(lazy_a(xml))) for xml in whole_end] == [1, 1, 1, 1]
+
+        # At the level of the document, where a cut end tag closes nothing, the children of
+        # a `LazyNode` ended on that tag without an error. They raise too.
+        @test [xml for xml in ("<a/></a", "<a>1</a></a")
+               if !cut_raises(() -> children(parse(xml, LazyNode)))] == []
+        # `Node` and `FlatNode` report the cut, whatever the end tag would have closed: a
+        # name cut short, another name than that of the open element, or no open element.
+        closes_nothing = ["<sheet>1</shee", "<a>1</b", "<a>1</b ", "<a>1</", "<a/></a",
+                          "<a>1</a></a"]
+        @testset "the cut is reported in $(repr(xml))" for xml in closes_nothing
+            @test [r for r in readers
+                   if !cut_raises(() -> parse(xml, r[1]; wellformed = r[2]))] == []
+        end
+        # `skip_element!` and `sourcetext` are as before on such a document: the first ends
+        # the walk without an error, the second raises its own.
+        @test (c = cursor_on_a("<a>1</a"); XML.skip_element!(c); XML.next!(c) === nothing)
+        @test_throws "Could not find closing tag" XML.sourcetext(lazy_a("<a>1</a"))
+        # So is a start tag that the end of the input cuts off: it gives its element and its
+        # name, and the error comes from the call that reads further.
+        @test (c = XML.Cursor("<a x=\"1\""); XML.next!(c); tag(c)) == "a"
+        @test_throws "unterminated tag" (c = XML.Cursor("<a x=\"1\""); XML.next!(c);
+                                         attributes(c))
+
         # Every proper prefix of a document that ends on its root is refused, wherever the
         # cut falls, the empty prefix included.
         rich = "<?xml version=\"1.0\"?>\n<!DOCTYPE r [<!ENTITY e \"z\">]>\n<!-- c --><?p q?>" *
