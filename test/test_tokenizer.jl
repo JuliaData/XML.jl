@@ -364,6 +364,13 @@ end
     @test_throws ArgumentError collect(tokenize("</div"))
     @test_throws "unterminated close tag" collect(tokenize("</div"))
     @test_throws "unterminated close tag" collect(tokenize("</div "))    # the same with white space
+    # When the input ends after `</`, a name or white space, the end tag is refused and no
+    # token is given for it: a reader that stops at the end of an element cannot take the
+    # element as ended.
+    @test_throws "unterminated close tag" first(tokenize("</div"))
+    @test_throws "unterminated close tag" first(tokenize("</div \t\r\n"))
+    @test_throws "unterminated close tag" first(tokenize("</"))
+    @test kinds("</div >") == [TokenKinds.CLOSE_TAG, TokenKinds.TAG_CLOSE]
 end
 
 @testset "error: unterminated XML declaration" begin

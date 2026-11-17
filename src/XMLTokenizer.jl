@@ -415,18 +415,33 @@ function read_open_tag_start(data::AbstractString, pos::Int, start::Int)
     (tok, TokenizerState(pos, M_TAG, no_token(data)))
 end
 
-# Read '</name' and enter close-tag mode
-function read_close_tag_start(data::AbstractString, pos::Int, start::Int)
+# Read '</name' and enter close-tag mode. `@inline`: the compiler does not always inline it
+# into `read_markup` by itself, and each end tag then costs a call.
+@inline function read_close_tag_start(data::AbstractString, pos::Int, start::Int)
     @inbounds while !iseof(data, pos) && is_name_byte(peek(data, pos))
         pos += 1
     end
+    # The input may end here, after `</`, a name or white space. The end tag is then
+    # refused, and no token is given for it. A reader that stops at this token takes the
+    # element as ended, and never asks for the `>`.
+    (!iseof(data, pos) && peek(data, pos) == UInt8('>')) || refuse_cut_close_tag(data, pos)
     tok = make_token(TokenKinds.CLOSE_TAG, false, data, start, pos)
     (tok, TokenizerState(pos, M_CLOSE_TAG, no_token(data)))
+end
+
+# What follows the name of an end tag is not `>`: white space may come first, and the input
+# must not end there. Kept out of line: an end tag written `</name>` never comes here.
+@noinline function refuse_cut_close_tag(data::AbstractString, pos::Int)
+    stop = skip_whitespace(data, pos)
+    iseof(data, stop) && err("unterminated close tag", stop)
+    nothing
 end
 
 # Consume the '>' that closes a '</name>' tag
 function read_close_tag_end(data::AbstractString, pos::Int)
     pos = skip_whitespace(data, pos)
+    # `read_close_tag_start` refuses an input that ends here. The test stays: `peek` reads
+    # without a bounds check.
     iseof(data, pos) && err("unterminated close tag", pos)
     peek(data, pos) == UInt8('>') || err("expected '>'", pos)
     tok = make_token(TokenKinds.TAG_CLOSE, false, data, pos, pos + 1)
