@@ -1055,7 +1055,7 @@ end
 
 # Whether a replacement text is balanced content (§4.3.2): every element it opens is closed
 # within it, it closes none it did not open, and it ends outside any tag. A tag cut at its end
-# either stops the tokenizer at the cut, or raises its `ArgumentError`: both are a no.
+# makes the tokenizer raise its `ArgumentError`, which is a no.
 function _is_balanced(s::AbstractString)
     level = 0
     start_tag = false                                # inside a start tag

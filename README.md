@@ -61,7 +61,7 @@ Rules of thumb:
 
 `FlatNode` and `LazyNode` retain the source string as long as any handle lives. Measured numbers: see [Performance by access pattern](#performance-by-access-pattern).
 
-`Node` and `FlatNode` check that the document is well-formed, to the level the `wellformed` keyword sets; `Cursor` and `LazyNode` check only the rules on entities. See [Well-formedness and validation checks](#well-formedness-and-validation-checks).
+`Node` and `FlatNode` check that the document is well-formed, to the level the `wellformed` keyword sets; `Cursor` and `LazyNode` check only the rules on entities. They also raise on a tag, a comment, a CDATA section, a processing instruction or a declaration that the end of the document cuts off, but only when a call reads that far. See [Well-formedness and validation checks](#well-formedness-and-validation-checks).
 
 <br>
 
@@ -166,7 +166,7 @@ parse(str, Node)         # or LazyNode, FlatNode, Cursor
 > [!WARNING]
 > XML.jl is not a [validating processor](https://www.w3.org/TR/xml/#proc-types): it never checks a document against its DTD.
 
-`Node` and `FlatNode` check that a document is well-formed, at three levels set by their `wellformed` keyword: `:lenient`, `:structural`, the default, and `:strict`. `Cursor` and `LazyNode` do not take it: they check only the rules on entities, and accept mismatched tags.
+`Node` and `FlatNode` check that a document is well-formed, at three levels set by their `wellformed` keyword: `:lenient`, `:structural`, the default, and `:strict`. `Cursor` and `LazyNode` do not take it: they check only the rules on entities, and accept mismatched tags. They raise on a tag, a comment, a CDATA section, a processing instruction or a declaration that the end of the document cuts off, but only when a call reads that far.
 
 ```julia
 parse("<a/><b/>", Node)                         # ERROR: not well-formed: multiple root elements (found 2)

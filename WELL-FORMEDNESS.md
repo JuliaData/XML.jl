@@ -75,7 +75,19 @@ Any other value throws an `ArgumentError`. The DOCTYPE that `:refuse` refuses is
 
 ## Streaming readers
 
-`Cursor` and `LazyNode` take no `wellformed` keyword and check nothing else: they accept mismatched tags, an empty document, and a document that stops before its last end tags, such as `<a><b>1`. Like `Node` and `FlatNode`, they refuse a tag, a comment, a CDATA section, a processing instruction or a declaration that the end of the document cuts off. When a document must be checked, read it with `Node` or `FlatNode`.
+`Cursor` and `LazyNode` take no `wellformed` keyword and check nothing else: they accept mismatched tags, an empty document, and a document that stops before its last end tags, such as `<a><b>1`.
+
+Like `Node` and `FlatNode`, they refuse a tag, a comment, a CDATA section, a processing instruction or a declaration that the end of the document cuts off, but only when a call reads that far. Take `<r><a>1</a><b x="1"`, which ends inside the start tag of `<b>`:
+
+- A walk that stops at `<a>` raises nothing, nor does a `LazyNode` whose calls never read `<b>`.
+- `next!` still gives `<b>`, and `tag` its name: a start tag is read in steps, and the error comes from the call that reads the rest of the tag, such as `attributes` or the next `next!`.
+- `skip_element!` on `<r>` raises nothing: it checks nothing of what it steps over, and the walk ends there.
+
+On `<a>1</a`, which ends before the `>` of its end tag, `simple_value` and `children` raise as a full walk does: that end tag is refused as soon as it is read.
+
+The error can also come from the call that builds the reader. `Cursor(data)` and `parse(data, LazyNode)` read the DOCTYPE that they apply. When it declares the value of a general entity, a default value for an attribute, or an attribute type other than `CDATA`, they also go over the rest of the document at once, to apply these declarations. They can raise there.
+
+When a document must be checked, read it with `Node` or `FlatNode`.
 
 ## Undeclared entities
 

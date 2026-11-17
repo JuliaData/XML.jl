@@ -37,10 +37,12 @@ or a `StringView` over a view of `v` written with a step, such as `view(v, i:2:j
 a `String`, or pass `String(s)`. A document that its DOCTYPE does not change is read from any
 string type.
 
-`LazyNode` takes no `wellformed` keyword: it checks only the rules on entities and accepts
-mismatched tags, so read a document that must be checked with [`Node`](@ref) or
-[`FlatNode`](@ref). `parse` and `read` take the `doctype` keyword of [`Node`](@ref): with
-`doctype = :refuse`, a document that has a DOCTYPE is refused.
+`LazyNode` takes no `wellformed` keyword: it checks only the rules on entities. It raises on
+a tag, a comment, a CDATA section, a processing instruction or a declaration that the end of
+the document cuts off, but only when a call reads that far. It accepts mismatched tags, so
+read a document that must be checked with [`Node`](@ref) or [`FlatNode`](@ref). `parse` and
+`read` take the `doctype` keyword of [`Node`](@ref): with `doctype = :refuse`, a document
+that has a DOCTYPE is refused.
 
 # Performance — which reader to use
 
