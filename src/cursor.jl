@@ -47,10 +47,12 @@ change from a copy with these changes made and its line ends in LF, of the same 
 The copy can be made for a `String`, a `SubString{String}`, or a `StringView` over a byte
 vector `v` or over a slice `view(v, i:j)` of it; on any other string type, such a document
 raises an `ArgumentError` (see [`LazyNode`](@ref)). The cursor takes no `wellformed`
-keyword: it checks only the rules on entities and accepts mismatched tags, so read a document
-that must be checked with [`Node`](@ref) or [`FlatNode`](@ref). It takes the `doctype` keyword
-of [`Node`](@ref): `Cursor(data; doctype = :refuse)`, like `parse` and `read`, refuses a
-document that has a DOCTYPE.
+keyword: it checks only the rules on entities. It raises on a tag, a comment, a CDATA
+section, a processing instruction or a declaration that the end of the document cuts off,
+but only when a call reads that far (see [`next!`](@ref)). It accepts mismatched tags, so
+read a document that must be checked with [`Node`](@ref) or [`FlatNode`](@ref). It takes
+the `doctype` keyword of [`Node`](@ref): `Cursor(data; doctype = :refuse)`, like `parse` and
+`read`, refuses a document that has a DOCTYPE.
 
 The cursor is a single mutable object reused across the whole walk. See the
 aliasing-contract note on [`next!`](@ref).
@@ -75,6 +77,15 @@ end
     Cursor{S}(st, _CURSOR_XT.no_token(d), Document, 0, 0, false, false, normalized)
 end
 Base.parse(::Type{Cursor}, xml::AbstractString; doctype::Symbol = :apply) = Cursor(xml; doctype)
+
+const _CURSOR_STARTPOS_MSG = """
+    `Cursor(data, startpos)` is deprecated and will be removed in XML.jl v0.5.
+    It is the only entry that exposes a byte offset into the source, and nothing in the
+    package or in any registered dependent calls it. To walk a subtree, take a snapshot and
+    cross back through it:
+        snapshot = LazyNode(cursor)
+        subtree  = Cursor(snapshot)
+    To read a document, `Cursor(data)`."""
 
 """
     Cursor(data::AbstractString, startpos::Integer)
@@ -104,15 +115,6 @@ image (§4.4.2). Each further transformation at the document entry would have to
 examined the same way, and nothing in the package or in any registered dependent calls it —
 which is why it goes.
 """
-const _CURSOR_STARTPOS_MSG = """
-    `Cursor(data, startpos)` is deprecated and will be removed in XML.jl v0.5.
-    It is the only entry that exposes a byte offset into the source, and nothing in the
-    package or in any registered dependent calls it. To walk a subtree, take a snapshot and
-    cross back through it:
-        snapshot = LazyNode(cursor)
-        subtree  = Cursor(snapshot)
-    To read a document, `Cursor(data)`."""
-
 function Cursor(data::S, startpos::Integer) where {S <: AbstractString}
     Base.depwarn(_CURSOR_STARTPOS_MSG, :Cursor)
     # §2.11 — line ends normalized value by value, as Cursor(data)
@@ -150,6 +152,12 @@ Cursor(node::LazyNode) =
 
 Advance the cursor to the next node in document order (depth-first), mutating
 it in place. Returns the cursor, or `nothing` at end of stream.
+
+Raises an `ArgumentError` when it reads a comment, a CDATA section, a processing
+instruction, a declaration or an end tag that the end of the document cuts off. A start tag
+is read in steps: `next!` gives the element once it has read the name, and the error comes
+from the call that reads the rest of the tag, such as [`attributes`](@ref) or the next
+`next!`.
 
 **Aliasing contract**: the cursor is ONE mutable object — any reference to it
 always reflects its *current* position. Reading fields synchronously (inside
@@ -562,6 +570,10 @@ byte-level scan (no internal tokens emitted), so the next [`next!`](@ref) yields
 element's following sibling (or the parent boundary). For structural walks (e.g. layer
 discovery) that classify a node but don't need its contents — far cheaper than letting
 `for_each_child!`/`next!` tokenize the skipped subtree. No-op on non-`Element` nodes.
+
+The scan checks nothing of what it steps over. If the document ends before the element
+does, the walk ends there without an error, even when the end of the document cuts a tag
+off.
 """
 function skip_element!(c::Cursor)
     c.nodetype === Element || return c

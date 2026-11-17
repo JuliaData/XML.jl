@@ -3669,6 +3669,34 @@ end
         @test_throws "unterminated tag" (c = XML.Cursor("<a x=\"1\""); XML.next!(c);
                                          attributes(c))
 
+        # The example of WELL-FORMEDNESS.md, "Streaming readers": `Cursor` and `LazyNode`
+        # raise only when a call reads as far as the tag that is cut off.
+        cut_start = "<r><a>1</a><b x=\"1\""
+        function after(k, xml = cut_start)
+            c = XML.Cursor(xml)
+            foreach(_ -> XML.next!(c), 1:k)
+            c
+        end
+        lazy_r = first(XML.eachchildnode(parse(cut_start, LazyNode)))
+        @test tag(after(2)) == "a"                            # a walk that stops at <a>
+        @test tag(first(XML.eachchildnode(lazy_r))) == "a"    # calls that never read <b>
+        @test tag(after(4)) == "b"                            # the element and its name
+        @test_throws "unterminated tag" attributes(after(4))
+        @test_throws "unterminated tag" XML.next!(after(4))
+        @test_throws "unterminated tag" children(lazy_r)
+        @test (c = after(1); XML.skip_element!(c); XML.next!(c) === nothing)
+        # A DOCTYPE that declares something to apply makes the reader go over the whole
+        # document when it is built: on this document, the error then comes from that call.
+        applied = ["<!DOCTYPE r [<!ENTITY e \"x\">]>",
+                   "<!DOCTYPE r [<!ATTLIST a k CDATA \"v\">]>",
+                   "<!DOCTYPE r [<!ATTLIST a k NMTOKEN #IMPLIED>]>"]
+        @testset "built on $prolog" for prolog in applied
+            @test_throws "unterminated tag" XML.Cursor(prolog * cut_start)
+            @test_throws "unterminated tag" parse(prolog * cut_start, LazyNode)
+        end
+        # A DOCTYPE that declares nothing to apply changes nothing: the walk stops at <a>.
+        @test tag(after(3, "<!DOCTYPE r>" * cut_start)) == "a"
+
         # Every proper prefix of a document that ends on its root is refused, wherever the
         # cut falls, the empty prefix included.
         rich = "<?xml version=\"1.0\"?>\n<!DOCTYPE r [<!ENTITY e \"z\">]>\n<!-- c --><?p q?>" *

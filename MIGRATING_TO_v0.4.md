@@ -174,6 +174,8 @@ Review these even if your code compiles unchanged:
    `wellformed` level; `parse(x, LazyNode)` and `Cursor(x)` take no `wellformed` keyword and accept
    mismatched tags. Parse through `Node` or `FlatNode` if you need well-formedness checking.
 
+   From **v0.4.10**, they also raise on a tag or an XML declaration that the end of the document cuts off, as they did on a comment, a CDATA section or a processing instruction. They raise only when a call reads that far.
+
 10. **No memory-mapping.** `read` no longer memory-maps the input file. The README shows the manual
    recipe, a `StringView` over `Mmap`, for files too large for the heap.
 
