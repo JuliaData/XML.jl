@@ -397,11 +397,11 @@ end
 # A loop's state is a `TokenizerState`, and a state means the same position in the cursor's own
 # token stream and in a fresh tokenizer over the same data. When the cursor's stream stands
 # exactly where the loop is, as it does for the first loop over an element whose attributes
-# the cursor has not read, the step reads from that stream, and the next `next!` goes on after
-# the attributes. Otherwise the step reads from a tokenizer of its own and leaves the cursor
-# alone, so every loop gives all the pairs, from the first, whatever the cursor has done in
-# the meantime. The token that ends the tag, `>` or `/>`, is never taken from the stream: the
-# step restores the state (isbits), so `next!` reads it and keeps its depth bookkeeping.
+# the cursor has not read, the step moves that stream on with the loop, and the next `next!`
+# goes on after the attributes. Otherwise the step leaves the cursor alone, so every loop
+# gives all the pairs, from the first, whatever the cursor has done in the meantime. The `>`
+# or `/>` that ends the tag is never taken from the stream: `next!` reads it and keeps its
+# depth bookkeeping.
 struct CursorAttrIterator{S <: AbstractString}
     c::Cursor{S}
     start::TokenizerState   # just past the opening token; M_DEFAULT: nothing to read
@@ -454,7 +454,32 @@ end
 @inline _cursor_attr_pair(name::Token, value::Token, data) =
     _as_substring(raw(name, data)) => _as_substring(_cursor_decode_attr(value, data))
 
+# One attribute of a start tag is read from the bytes, by the two steps that
+# `_fold_attributes` runs. An XML declaration, whose tag ends with `?>`, is read through the
+# tokens.
 @inline function Base.iterate(it::CursorAttrIterator, st::TokenizerState = it.start)
+    st.mode === _CURSOR_XT.M_TAG || return _attr_step_tokens(it, st)
+    c = it.c
+    data = _data(c)
+    n = ncodeunits(data)
+    a, z, vs = _CURSOR_XT._attr_name_span(data, st.pos, n)
+    a == 0 && return nothing                # the `>` or `/>` that ends the tag, left for next!
+    # Where the cursor's stream stands at this loop's position, it moves on with the loop:
+    # past the name, then past the value, as it does when the tokens are read from it. A
+    # value that is refused thus leaves the stream where the tokens leave it.
+    stands = c.st.state === st
+    stands && (c.st.state = TokenizerState(vs, _CURSOR_XT.M_TAG_VALUE, _CURSOR_XT.no_token(data)))
+    close_idx, clean = _CURSOR_XT._attr_value_end(data, vs, n)
+    after = TokenizerState(close_idx + 1, _CURSOR_XT.M_TAG, _CURSOR_XT.no_token(data))
+    stands && (c.st.state = after)
+    v = _CURSOR_XT._span_view(data, vs + 1, close_idx)
+    value = clean ? _as_substring(v) : _as_substring(_decode_attr_view(v))
+    return (_as_substring(_CURSOR_XT._span_view(data, a, z)) => value), after
+end
+
+# The same step through the tokens, for an XML declaration. It reads a start tag too: a test
+# of the suite runs it on start tags, against the step above.
+@inline function _attr_step_tokens(it::CursorAttrIterator, st::TokenizerState)
     (st.mode === _CURSOR_XT.M_TAG || st.mode === _CURSOR_XT.M_XML_DECL) || return nothing
     c = it.c
     data = _data(c)

@@ -672,6 +672,49 @@ end
     return (close_idx === nothing ? 0 : close_idx), false
 end
 
+# The grammar of a start tag is written once, in two steps: the name of an attribute, then
+# its value. `_fold_attributes` runs them over a whole tag. A reader that gives one
+# attribute at a time, as `eachattribute!` does, runs them itself.
+
+# The name of the next attribute of a start tag, read from `pos`, a position where the
+# tokenizer would be in `M_TAG`: `(name_start, name_stop, value_start)`. The name is the
+# bytes `name_start:name_stop-1`, and `value_start` is where the value must start, past the
+# `=` and the white space around it. Where the tag ends instead, `name_start` is 0 and
+# `name_stop` is the index of its `>`. It raises the errors of `read_in_tag`, at the same
+# positions.
+@inline function _attr_name_span(data::AbstractString, pos::Int, n::Int)
+    @inbounds begin
+        pos = skip_whitespace(data, pos)
+        pos > n && err("unterminated tag", pos)
+        b = codeunit(data, pos)
+        b == UInt8('>') && return 0, pos, 0
+        if b == UInt8('/') && pos < n && codeunit(data, pos + 1) == UInt8('>')
+            return 0, pos + 1, 0
+        end
+        name_start = pos
+        while pos <= n && is_name_byte(codeunit(data, pos))
+            pos += 1
+        end
+        name_start == pos && err("expected attribute name or tag close", pos)
+        name_stop = pos
+        pos = skip_whitespace(data, pos)
+        (pos <= n && codeunit(data, pos) == UInt8('=')) || err("expected '=' after attribute name", pos)
+        return name_start, name_stop, skip_whitespace(data, pos + 1)
+    end
+end
+
+# The closing quote of the value of an attribute, which must start at `pos` with its opening
+# quote, and whether the value needs no decoding (see `_quote_end`). It raises the errors of
+# `read_attr_value`, at the same positions.
+@inline function _attr_value_end(data::AbstractString, pos::Int, n::Int)
+    pos > n && err("expected attribute value", pos)
+    q = @inbounds codeunit(data, pos)
+    (q == UInt8('"') || q == UInt8('\'')) || err("expected quoted attribute value", pos)
+    close_idx, clean = _quote_end(data, q, pos + 1, n)
+    close_idx == 0 && err("unterminated attribute value", pos)
+    return close_idx, clean
+end
+
 # The attributes of a start tag, read from `pos`, a position where the tokenizer would be in
 # `M_TAG`. For each attribute, `acc = f(acc, name_start, name_stop, value_start, value_stop,
 # clean)`, where `f` returns the new `acc` and whether to stop there. The name is the bytes
@@ -681,26 +724,10 @@ end
 # inside the tag, it raises the error of the reader that the tokenizer would then be in.
 @inline function _fold_attributes(f::F, acc, data::AbstractString, pos::Int, n::Int) where {F}
     @inbounds while true
-        pos = skip_whitespace(data, pos)
-        pos > n && err("unterminated tag", pos)
-        b = codeunit(data, pos)
-        b == UInt8('>') && return pos, acc
-        (b == UInt8('/') && pos < n && codeunit(data, pos + 1) == UInt8('>')) && return pos + 1, acc
-        name_start = pos
-        while pos <= n && is_name_byte(codeunit(data, pos))
-            pos += 1
-        end
-        name_start == pos && err("expected attribute name or tag close", pos)
-        name_stop = pos
-        pos = skip_whitespace(data, pos)
-        (pos <= n && codeunit(data, pos) == UInt8('=')) || err("expected '=' after attribute name", pos)
-        pos = skip_whitespace(data, pos + 1)
-        pos > n && err("expected attribute value", pos)
-        q = codeunit(data, pos)
-        (q == UInt8('"') || q == UInt8('\'')) || err("expected quoted attribute value", pos)
-        close_idx, clean = _quote_end(data, q, pos + 1, n)
-        close_idx == 0 && err("unterminated attribute value", pos)
-        acc, stop = f(acc, name_start, name_stop, pos, close_idx + 1, clean)
+        name_start, name_stop, value_start = _attr_name_span(data, pos, n)
+        name_start == 0 && return name_stop, acc
+        close_idx, clean = _attr_value_end(data, value_start, n)
+        acc, stop = f(acc, name_start, name_stop, value_start, close_idx + 1, clean)
         stop && return close_idx, acc
         pos = close_idx + 1
     end

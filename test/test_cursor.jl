@@ -181,6 +181,23 @@ using XML: Cursor, next!, for_each_child!, @for_each_child!, skip_element!, eof,
         @test isempty(collect(eachattribute!(c)))
         c = Cursor(SubString("..<r a=\"1\" b=\"&lt;\"/>", 3)); next!(c)
         @test collect(eachattribute!(c)) == ["a" => "1", "b" => "<"]
+
+        # A tag that next! refuses raises the same error in the loop, once the pairs that
+        # stand before the defect are given, and the walk still refuses it.
+        err_of(f) = try f(); "no error" catch e; sprint(showerror, e) end
+        for (bad, before) in ("<a b><c/></a>" => 0, "<a b=c/>" => 0, "<a x=\"1\" b=\"1" => 1,
+                              "<a x=\"1\" y='2' \"z\"/>" => 2, "<a b=\"1\" c/>" => 1,
+                              "<a x=\"1\" b = " => 1, "<a b" => 0, "<a" => 0)
+            c1 = Cursor(bad); next!(c1)
+            walked = err_of(() -> next!(c1))
+            @test startswith(walked, "ArgumentError")
+            c2 = Cursor(bad); next!(c2)
+            given = Pair{SubString{String}, SubString{String}}[]
+            @test err_of(() -> foreach(p -> push!(given, p), eachattribute!(c2))) == walked
+            @test length(given) == before
+            @test err_of(() -> collect(eachattribute!(c2))) == walked     # read again from the `<`
+            @test err_of(() -> next!(c2)) == walked
+        end
     end
 
     @testset "value of CData / Comment / PI / DTD / Text-with-entities" begin
@@ -594,10 +611,12 @@ using XML: Cursor, next!, for_each_child!, @for_each_child!, skip_element!, eof,
         @test occursin("expected '>'", err_of(() -> XML.simple_value!(c)))
     end
 
-    # `next!`, `get` and `is_simple_value` read a text, a tag and a simple element from the
-    # bytes. The package keeps the readings through the tokens: `_next_token!`,
-    # `_get_from_tokens`, `_is_simple_value_tokens`. Both must give the same nodes, the same
-    # values and the same errors at the same positions, on every document.
+    # `next!`, `get`, `is_simple_value` and `eachattribute!` read a text, a tag and a simple
+    # element from the bytes. The package keeps the readings through the tokens:
+    # `_next_token!`, `_get_from_tokens`, `_is_simple_value_tokens`, `_attr_step_tokens`.
+    # Both must give the same nodes, the same values and the same errors at the same
+    # positions, on every document. A loop over `eachattribute!` must also leave the
+    # cursor's stream where the tokens leave it: after each step, and where it raises.
     @testset "the readings from the bytes give what the token stream gives" begin
         @isdefined(ensure_w3c_suite) || include("w3c_suite.jl")
         ensure_w3c_suite()
@@ -632,6 +651,42 @@ using XML: Cursor, next!, for_each_child!, @for_each_child!, skip_element!, eof,
             end
             obs, err
         end
+        # A walk that reads the attributes of each element by `eachattribute!`: twice, where
+        # the cursor stands and then again from the `<`, or once and only the first of them.
+        # Nothing else reads the tag before it. The state of the cursor's stream is noted
+        # after each step, and where the loop raises; `next!` is then called once more.
+        function observe_attributes(s, step, attr_step, whole)
+            obs = Any[]
+            err = ""
+            reading = false
+            c = nothing
+            try
+                c = Cursor(s)
+                while step(c) !== nothing
+                    push!(obs, (nodetype(c), depth(c), tag(c), c.st.state))
+                    nodetype(c) === Element || continue
+                    reading = true
+                    for _ in 1:(whole ? 2 : 1)
+                        it = eachattribute!(c)
+                        st = it.start
+                        while true
+                            r = attr_step(it, st)
+                            push!(obs, c.st.state)
+                            r === nothing && break
+                            push!(obs, r[1])
+                            whole || break
+                            st = r[2]
+                        end
+                    end
+                    reading = false
+                end
+            catch e
+                err = string(reading ? "in the attributes: " : "", sprint(showerror, e))
+                reading && push!(obs, c.st.state,
+                                 try next!(c); "no error" catch e2; sprint(showerror, e2) end)
+            end
+            obs, err
+        end
         docs = String[]
         for (dir, _, files) in walkdir(joinpath(W3C_DIR, "xmlconf")), f in files
             endswith(f, ".xml") && push!(docs, String(read(joinpath(dir, f))))
@@ -644,15 +699,25 @@ using XML: Cursor, next!, for_each_child!, @for_each_child!, skip_element!, eof,
         end
         refused = 0
         differing = String[]
+        refused_in_attributes = 0
+        differing_attributes = String[]
         for s in docs
             key = key_of(s)
             bytes = observe(s, key, next!, get, is_simple_value)
             tokens = observe(s, key, token_step, XML._get_from_tokens, XML._is_simple_value_tokens)
             isempty(tokens[2]) || (refused += 1)
             bytes == tokens || push!(differing, first(s, 80))
+            for whole in (true, false)
+                bytes = observe_attributes(s, next!, iterate, whole)
+                tokens = observe_attributes(s, token_step, XML._attr_step_tokens, whole)
+                startswith(tokens[2], "in the attributes: ") && (refused_in_attributes += 1)
+                bytes == tokens || push!(differing_attributes, first(s, 80))
+            end
         end
         @test refused > 1000              # the errors are compared too
         @test differing == String[]
+        @test refused_in_attributes > 300     # so are the errors that a loop raises
+        @test differing_attributes == String[]
     end
 
     # Calls on the same element compose: whatever two of them do, the walk goes on in the
