@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Three `Cursor` calls on trial: `XML.attribute!`, `XML.simple_value!` and `XML.is_tag`** ([#263](https://github.com/JuliaData/XML.jl/issues/263)). They are not exported, and their names and behavior may change. `XML.attribute!(c, "r", "t", "s")` gives the values of the attributes named, in one pass over the tag, with `nothing` for a name that the tag does not hold. `XML.simple_value!(c)` gives the text of a simple element and leaves the cursor after it. `XML.is_tag(c, name)` compares the name of the current element without building a string.
+
+### Changed
+
+- **`Cursor` reads a text, a tag and a simple element from their bytes** ([#263](https://github.com/JuliaData/XML.jl/issues/263)). `next!`, `get`, `haskey`, `c[key]`, `is_simple`, `is_simple_value` and `simple_value` no longer read one token per name, per attribute and per `>`. They give the same nodes, the same values and the same errors. On a sheet of 100,000 cells of the shape `<c r="A1" s="3"><v>42.5</v></c>`, a walk by `next!` alone is 4.7× faster, and a reading by two `get` and `is_simple_value` is 4.6× faster (Apple M5, Julia 1.13.4, `benchmarks/cursor_cells.jl`; x86-64 is not measured). `eachattribute!`, `attributes` and `keys` still read the tokens: the same reading by `eachattribute!` is 1.7× faster.
+
 ### Fixed
 
 - **`skip_element!` does nothing on an element that the cursor has left already.** Called twice on the same element, it closed the element twice, and every node that followed was given one level too high.

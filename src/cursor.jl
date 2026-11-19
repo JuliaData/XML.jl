@@ -170,6 +170,80 @@ snapshot it (e.g. `LazyNode(c)`).
         return c
     end
     c.done && return nothing
+    data = _data(c)
+    n = ncodeunits(data)
+    # A text, the name of a start tag, the rest of a start tag and an end tag are read here,
+    # from the bytes. They give the nodes and the errors of the token stream, without
+    # its tokens. Anything else goes to `_next_token!`: a comment, a CDATA section, a
+    # processing instruction, a declaration, the end of the stream.
+    @inbounds while true
+        s = c.st.state
+        _CURSOR_XT.has_pending(s) && return _next_token!(c)
+        pos = s.pos
+        if s.mode === _CURSOR_XT.M_DEFAULT
+            pos > n && return _next_token!(c)
+            if codeunit(data, pos) != UInt8('<')            # a text, as `read_text`
+                lt = _findchar(data, UInt8('<'), pos)
+                stop = lt === nothing ? n + 1 : lt
+                amp = _hasbyte(data, UInt8('&'), pos, stop)
+                c.token = _CURSOR_XT.make_token(_CURSOR_XT.TokenKinds.TEXT, amp, data, pos, stop)
+                c.nodetype = Text
+                c.depth = c.enclosing + 1
+                c.st.state = _CURSOR_XT.TokenizerState(stop, _CURSOR_XT.M_DEFAULT, _CURSOR_XT.no_token(data))
+                return c
+            end
+            pos + 1 > n && return _next_token!(c)        # a last `<`: the tokenizer raises
+            b = codeunit(data, pos + 1)
+            if b == UInt8('/')
+                _read_end_tag!(c, data, pos, n)
+            elseif b == UInt8('!') || b == UInt8('?')
+                return _next_token!(c)
+            else                                             # a start tag: its name
+                j = pos + 1
+                while j <= n && _CURSOR_XT.is_name_byte(codeunit(data, j))
+                    j += 1
+                end
+                c.token = _CURSOR_XT.make_token(_CURSOR_XT.TokenKinds.OPEN_TAG, false, data, pos, j)
+                c.nodetype = Element
+                c.depth = c.enclosing + 1
+                c.enclosing += 1
+                c.st.state = _CURSOR_XT.TokenizerState(j, _CURSOR_XT.M_TAG, _CURSOR_XT.no_token(data))
+                return c
+            end
+        elseif s.mode === _CURSOR_XT.M_TAG               # the rest of a start tag, checked
+            e = _CURSOR_XT._tag_scan_checked(data, pos, n)
+            (e > pos && codeunit(data, e - 1) == UInt8('/')) && (c.enclosing -= 1)
+            c.st.state = _CURSOR_XT.TokenizerState(e + 1, _CURSOR_XT.M_DEFAULT, _CURSOR_XT.no_token(data))
+        else
+            return _next_token!(c)
+        end
+    end
+end
+
+# An end tag read whole from `pos`, the index of its `<`, as the token stream reads it. The
+# document must not end before the `>`: the tag is then refused before the cursor changes.
+# When something other than `>` follows the name, the tag is taken, then refused, and the
+# stream stays inside it, as with the tokens.
+@inline function _read_end_tag!(c::Cursor, data::AbstractString, pos::Int, n::Int)
+    j = pos + 2
+    @inbounds while j <= n && _CURSOR_XT.is_name_byte(codeunit(data, j))
+        j += 1
+    end
+    p = _CURSOR_XT.skip_whitespace(data, j)
+    p > n && _CURSOR_XT.err("unterminated close tag", p)
+    c.enclosing -= 1
+    if @inbounds(codeunit(data, p)) != UInt8('>')
+        c.st.state = _CURSOR_XT.TokenizerState(j, _CURSOR_XT.M_CLOSE_TAG, _CURSOR_XT.no_token(data))
+        _CURSOR_XT.err("expected '>'", p)
+    end
+    c.st.state = _CURSOR_XT.TokenizerState(p + 1, _CURSOR_XT.M_DEFAULT, _CURSOR_XT.no_token(data))
+    return nothing
+end
+
+# The next node, read from the token stream: what `next!` does not read from the bytes.
+# `@inline`, as `next!`: out of line, it would make a cursor that stays inside a function
+# escape, and that cursor would then be allocated.
+@inline function _next_token!(c::Cursor)
     K = _CURSOR_XT.TokenKinds
     while true
         r = iterate(c.st)                       # mutates c.st.state in place
@@ -281,8 +355,8 @@ function attributes(c::Cursor)
     isempty(attrs) ? nothing : Attributes(attrs)
 end
 
-# Single-attribute read with no `Attributes` allocation.
-@inline function Base.get(c::Cursor, key::AbstractString, default)
+# One attribute read through the tokens: for an XML declaration, whose tag ends with `?>`.
+@inline function _get_from_tokens(c::Cursor, key::AbstractString, default)
     c.nodetype in (Element, Declaration) || return default
     it = _rescan(c); iterate(it)
     for tok in it
@@ -406,12 +480,9 @@ end
 end
 
 #-----------------------------------------------------------------------------# simple elements
-# Cursor mirror of `is_simple_value(::LazyNode)`: combined predicate+accessor that
-# returns the lone Text/CData value of the current element (or `nothing` if it has
-# attributes / isn't a single-text element). Non-destructive — reads via `_rescan`,
-# so the cursor position is unchanged (caller still advances with `for_each_child!` /
-# `skip_element!`). Lets hot paths read e.g. an XLSX `<v>` value with no LazyNode snapshot.
-@inline function is_simple_value(c::Cursor)
+# A simple element read through the tokens, by `_rescan`: every shape, every error.
+# `@inline`, as its caller: the union that it returns stays splittable where it is used.
+@inline function _is_simple_value_tokens(c::Cursor)
     c.nodetype === Element || return nothing
     it = _rescan(c)
     iterate(it)                                 # skip OPEN_TAG
@@ -459,6 +530,242 @@ The textual content of the cursor's current element when it is simple (see
     v = is_simple_value(c)
     v === nothing && error("`simple_value` is only defined for simple nodes.")
     v
+end
+
+#-----------------------------------------------------------------------------# in one pass
+# Do the bytes `a:z-1` of `data` spell `name`?
+@inline function _name_is(data::AbstractString, a::Int, z::Int, name::AbstractString)
+    n = ncodeunits(name)
+    z - a == n || return false
+    @inbounds for k in 1:n
+        codeunit(data, a + k - 1) == codeunit(name, k) || return false
+    end
+    return true
+end
+
+"""
+    is_tag(c::Cursor, name) -> Bool
+
+Whether the cursor's current node is an element named `name`. It compares the bytes of the
+name in the document and builds no string: in a loop over many elements, it costs less than
+`tag(c) == name`.
+
+!!! warning "Experimental"
+    This function is on trial: its name and its behavior may change.
+"""
+@inline function is_tag(c::Cursor, name::AbstractString)
+    c.nodetype === Element || return false
+    data = _data(c)
+    a = _CURSOR_XT._data_start(c.token, data) + 1
+    z = _CURSOR_XT._data_stop(c.token, data) + 1
+    return _name_is(data, a, z, name)
+end
+
+# What `attribute!` keeps of a tag: for each name asked for, the span of its value with its
+# quotes, and whether the value needs no decoding; `(0, 0, false)` until the name is seen.
+# The first attribute of a name wins, as for `get`. Tuples are walked by recursion: a
+# closure over them would box the values that the call returns.
+struct _NameMatcher{S <: AbstractString, T <: Tuple}
+    data::S
+    names::T
+end
+@inline (m::_NameMatcher)(found::Tuple, a::Int, z::Int, vs::Int, ve::Int, clean::Bool) =
+    (_note_names(found, m.names, m.data, a, z, vs, ve, clean), false)
+
+@inline _no_spans(::Tuple{}) = ()
+@inline _no_spans(names::Tuple) = ((0, 0, false), _no_spans(Base.tail(names))...)
+
+@inline _note_names(::Tuple{}, ::Tuple{}, data, a, z, vs, ve, clean) = ()
+@inline function _note_names(found::Tuple, names::Tuple, data, a, z, vs, ve, clean)
+    f = found[1]
+    hit = f[1] == 0 && _name_is(data, a, z, names[1])
+    return ((hit ? (vs, ve, clean) : f),
+            _note_names(Base.tail(found), Base.tail(names), data, a, z, vs, ve, clean)...)
+end
+
+# The decoded value of an attribute, from the view `v` of what stands between its quotes:
+# what `_cursor_decode_attr` gives from the token of that value.
+@inline function _decode_attr_view(v)
+    w = _normalize_attr_ws(v)
+    return _hasbyte(w, UInt8('&')) ? unescape(w) : w
+end
+
+# The value whose span is `f`, or `nothing`. One variable holds the view, decoded or not, so
+# that the value has one origin: two would box it where they meet `nothing`.
+@inline function _attribute_value(data::AbstractString, f::Tuple{Int, Int, Bool})
+    f[1] == 0 && return nothing
+    v = _CURSOR_XT._span_view(data, f[1] + 1, f[2] - 1)
+    f[3] || (v = _decode_attr_view(v))
+    return v
+end
+@inline _attribute_values(data::AbstractString, ::Tuple{}) = ()
+@inline _attribute_values(data::AbstractString, found::Tuple) =
+    (_attribute_value(data, found[1]), _attribute_values(data, Base.tail(found))...)
+
+"""
+    attribute!(c::Cursor, names...) -> Tuple
+
+The values of the attributes `names` of the cursor's current element, in the order asked for,
+with `nothing` for a name that the tag does not hold. Each value is the one that
+`get(c, name, nothing)` gives. The tag is read once, whatever the number of names:
+
+```julia
+c = Cursor("<row><c r=\\"B7\\" s=\\"3\\"><v>42.5</v></c></row>")
+next!(c); next!(c)                           # on <c>
+r, t, s = XML.attribute!(c, "r", "t", "s")   # "B7", nothing, "3"
+```
+
+On an element whose attributes the cursor has not read yet, the tag is read where the cursor
+stands, and the next [`next!`](@ref) goes on after it instead of reading it again. Any later
+call reads the tag again from its `<`, as [`attributes`](@ref) does.
+
+The tag is checked as `next!` checks it: a tag that `next!` refuses raises the same error
+here. On a node that is not an element, every value is `nothing`: an XML declaration is read
+with `get`.
+
+!!! warning "Experimental"
+    This function is on trial: its name and its behavior may change.
+"""
+@inline function attribute!(c::Cursor, names::Vararg{AbstractString, N}) where {N}
+    data = _data(c)
+    found = _no_spans(names)
+    if c.nodetype === Element
+        n = ncodeunits(data)
+        s = c.st.state
+        after_name = _CURSOR_XT._data_stop(c.token, data) + 1
+        stands = s.mode === _CURSOR_XT.M_TAG && !_CURSOR_XT.has_pending(s) && s.pos == after_name
+        e, found = _CURSOR_XT._fold_attributes(_NameMatcher(data, names), found, data, after_name, n)
+        if stands              # the pass has read the tag for the cursor too
+            (e > after_name && @inbounds(codeunit(data, e - 1)) == UInt8('/')) && (c.enclosing -= 1)
+            c.st.state = _CURSOR_XT.TokenizerState(e + 1, _CURSOR_XT.M_DEFAULT,
+                                                   _CURSOR_XT.no_token(data))
+        end
+    end
+    # One place builds the tuple, for every node: two would box its values where they meet.
+    return _attribute_values(data, found)
+end
+
+"""
+    simple_value!(c::Cursor)
+
+The text of the cursor's current element when it is simple (see [`is_simple`](@ref)), and the
+cursor is left after the element: the next [`next!`](@ref) gives the node that follows it.
+When the element is not simple, it returns `nothing` and the cursor does not move.
+
+An element that holds only a text and has no attribute is read in one pass. The end tag is
+read as `next!` reads it, and raises the same errors.
+
+```julia
+c = Cursor("<c><v>42.5</v><f>A1</f></c>")
+next!(c); next!(c)       # on <v>
+XML.simple_value!(c)     # "42.5"
+next!(c)                 # on <f>
+```
+
+!!! warning "Experimental"
+    This function is on trial: its name and its behavior may change.
+"""
+@inline function simple_value!(c::Cursor)
+    c.nodetype === Element || return nothing
+    data = _data(c)
+    n = ncodeunits(data)
+    s = c.st.state
+    after_name = _CURSOR_XT._data_stop(c.token, data) + 1
+    if s.mode === _CURSOR_XT.M_TAG && !_CURSOR_XT.has_pending(s) && s.pos == after_name
+        p = _CURSOR_XT.skip_whitespace(data, after_name)
+        if p <= n && @inbounds(codeunit(data, p)) == UInt8('>')   # no attribute, not `<a/>`
+            t0 = p + 1
+            lt = _findchar(data, UInt8('<'), t0)
+            if lt !== nothing && lt > t0 && lt < n && @inbounds(codeunit(data, lt + 1)) == UInt8('/')
+                amp = _hasbyte(data, UInt8('&'), t0, lt)
+                tok = _CURSOR_XT.make_token(_CURSOR_XT.TokenKinds.TEXT, amp, data, t0, lt)
+                v = _cursor_decode(tok, data, c.normalized)
+                _read_end_tag!(c, data, lt, n)
+                c.held = false
+                return v
+            end
+        end
+    end
+    # Any other shape: `is_simple_value` decides. A simple element is then crossed by its
+    # text or CDATA node and by its end tag, which `is_simple_value` saw right after it.
+    v = is_simple_value(c)
+    v === nothing && return nothing
+    tok = c.token
+    d = c.depth
+    c.held = false
+    next!(c)
+    _read_end_tag!(c, data, c.st.state.pos, n)
+    c.token = tok
+    c.nodetype = Element
+    c.depth = d
+    return v
+end
+
+#-----------------------------------------------------------------------------# from bytes
+# `get` and `is_simple_value` read an element from its bytes, as `next!` does, and give what
+# their readings through the tokens give: `_get_from_tokens`, `_is_simple_value_tokens`.
+
+# What `get` keeps: the value span of the first attribute named `key`, where it stops.
+struct _FirstMatch{S <: AbstractString, K <: AbstractString}
+    data::S
+    key::K
+end
+@inline (m::_FirstMatch)(found::Tuple{Int, Int, Bool}, a::Int, z::Int, vs::Int, ve::Int, clean::Bool) =
+    _name_is(m.data, a, z, m.key) ? ((vs, ve, clean), true) : (found, false)
+
+# Single-attribute read with no `Attributes` allocation. The tag is read up to the
+# attribute, with the checks of `next!`, and no further: what follows is not looked at.
+# One variable, `v`, holds the value whatever the node, and meets `default` once, at the
+# end: a value with several origins would be boxed where they meet.
+@inline function Base.get(c::Cursor, key::AbstractString, default)
+    data = _data(c)
+    v = _CURSOR_XT._span_view(data, 1, 1)          # an empty view, while nothing is found
+    if c.nodetype === Element
+        after_name = _CURSOR_XT._data_stop(c.token, data) + 1
+        _, found = _CURSOR_XT._fold_attributes(_FirstMatch(data, key), (0, 0, false), data,
+                                               after_name, ncodeunits(data))
+        ok = found[1] != 0
+        if ok
+            v = _CURSOR_XT._span_view(data, found[1] + 1, found[2] - 1)
+            found[3] || (v = _decode_attr_view(v))
+        end
+    else
+        r = _get_from_tokens(c, key, nothing)
+        ok = r !== nothing
+        ok && (v = r)
+    end
+    return ok ? v : default
+end
+
+# Cursor mirror of `is_simple_value(::LazyNode)`: combined predicate+accessor that returns
+# the lone Text/CData value of the current element (or `nothing` if it has attributes /
+# isn't a single-text element). Non-destructive: the cursor position is unchanged (caller
+# still advances with `for_each_child!` / `skip_element!`). Lets hot paths read e.g. an
+# XLSX `<v>` value with no LazyNode snapshot.
+# One shape is read from the bytes: a start tag without attribute, a text, and an end tag
+# that the document does not cut off. It raises nothing: any other shape, and every error,
+# goes to `_is_simple_value_tokens`.
+@inline function is_simple_value(c::Cursor)
+    c.nodetype === Element || return nothing
+    data = _data(c)
+    n = ncodeunits(data)
+    p = _CURSOR_XT.skip_whitespace(data, _CURSOR_XT._data_stop(c.token, data) + 1)
+    @inbounds if p < n && codeunit(data, p) == UInt8('>') && codeunit(data, p + 1) != UInt8('<')
+        t0 = p + 1
+        lt = _findchar(data, UInt8('<'), t0)
+        if lt !== nothing && lt < n && codeunit(data, lt + 1) == UInt8('/')
+            j = lt + 2
+            while j <= n && _CURSOR_XT.is_name_byte(codeunit(data, j))
+                j += 1
+            end
+            if _CURSOR_XT.skip_whitespace(data, j) <= n
+                amp = _hasbyte(data, UInt8('&'), t0, lt)
+                tok = _CURSOR_XT.make_token(_CURSOR_XT.TokenKinds.TEXT, amp, data, t0, lt)
+                return _cursor_decode(tok, data, c.normalized)
+            end
+        end
+    end
+    return _is_simple_value_tokens(c)
 end
 
 #-----------------------------------------------------------------------------# snapshot (bridge to DOM)

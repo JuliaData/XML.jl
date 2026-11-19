@@ -31,6 +31,14 @@ measure_value(x)     = @allocated _use(value(x))
 measure_simple(x)    = @allocated _use(simple_value(x))
 measure_is_simple(x) = @allocated _use(is_simple_value(x))
 measure_simple_test(x) = @allocated is_simple(x)
+function measure_attribute(c)
+    @allocated begin
+        r, s = XML.attribute!(c, "r", "s")
+        _use(r) + _use(s)
+    end
+end
+measure_is_tag(c)      = @allocated XML.is_tag(c, "c")
+measure_simple_bang(c) = @allocated _use(XML.simple_value!(c))
 measure_sourcetext(x) = @allocated _use(sourcetext(x))
 measure_sourcespan(x) = @allocated length(sourcespan(x))
 measure_string_value(x) = @allocations _use(string_value(x))
@@ -235,6 +243,18 @@ end
             @test measure_is_simple(sfl) == 0
             @test measure_is_simple(scu) == 0
             @test measure_is_simple(snd) == 0
+        end
+
+        @testset "attribute!, simple_value! and is_tag on a cursor" begin
+            ca = parse(Cursor, attr_xml); next!(ca)
+            measure_attribute(ca); measure_is_tag(ca)
+            @test measure_attribute(ca) == 0
+            @test measure_is_tag(ca) == 0
+            # `simple_value!` moves the cursor: one compiles the call, another is measured
+            s1 = parse(Cursor, simple_xml); next!(s1)
+            s2 = parse(Cursor, simple_xml); next!(s2)
+            measure_simple_bang(s1)
+            @test measure_simple_bang(s2) == 0
         end
 
         @testset "eachattribute streams without allocating" begin
