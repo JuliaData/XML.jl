@@ -43,6 +43,10 @@ function _collect_tests!(tests, node, base_dir)
                 output = haskey(attrs, "OUTPUT") ? joinpath(base_dir, attrs["OUTPUT"]) : "",
                 version = get(attrs, "VERSION", "1.0"),
                 recommendation = get(attrs, "RECOMMENDATION", ""),
+                # testcases.dtd: "Tests which apply only to certain editions of XML list
+                # those editions in the EDITION attribute. An absent EDITION implies that
+                # the test applies to all editions."
+                edition = get(attrs, "EDITION", ""),
             ))
         elseif XML.tag(child) == "TESTCASES"
             # TESTCASES may have xml:base to adjust paths
@@ -97,6 +101,118 @@ notwf_tests = filter(t -> t.type == "not-wf", xml10_tests)
 
 @info "W3C tests: $(length(valid_tests)) valid/invalid, $(length(notwf_tests)) not-wf (from $(length(all_tests)) total)"
 
+#==============================================================================#
+#         What each reader refuses among the not-well-formed documents         #
+#==============================================================================#
+# `w3c_notwf.tsv` records, for each not-well-formed case of the suite, the least strict
+# reader that refuses it:
+#
+#   stream      every reader, `Cursor` and `LazyNode` included
+#   cursor      `Node` and `FlatNode` at every level, and `Cursor`; a `LazyNode` reads it
+#   lenient     `Node` and `FlatNode` at every level; `Cursor` and `LazyNode` read it
+#   structural  `Node` and `FlatNode` from `:structural` up
+#   strict      `Node` and `FlatNode` at `:strict` only
+#   none        no reader
+#
+# One word says it for every reader: the levels are nested, `FlatNode` refuses what `Node`
+# refuses, and `:lenient` refuses what a streaming reader refuses. The testset below checks
+# each reader against the record, so that a change of any of them shows case by case.
+#
+# After a deliberate change, run the tests once with `XML_W3C_WRITE_RECORD=true` in the
+# environment: the record is written again from what `Cursor`, `LazyNode` and `Node` do,
+# and its diff shows which cases have moved.
+const NOTWF_RECORD = joinpath(@__DIR__, "w3c_notwf.tsv")
+const NOTWF_REFUSED_BY = Dict(
+    "stream"     => (:cursor, :lazy, :lenient, :structural, :strict),
+    "cursor"     => (:cursor, :lenient, :structural, :strict),
+    "lenient"    => (:lenient, :structural, :strict),
+    "structural" => (:structural, :strict),
+    "strict"     => (:strict,),
+    "none"       => (),
+)
+
+# A `LazyNode` document read to its end: every name, every attribute, every value.
+function walk_lazy(n)
+    nt = nodetype(n)
+    if nt === Document
+        foreach(walk_lazy, XML.children(n))
+    elseif nt === XML.Element
+        XML.tag(n)
+        attrs = XML.attributes(n)
+        attrs === nothing || foreach(identity, attrs)
+        foreach(walk_lazy, XML.children(n))
+    else
+        XML.value(n)
+    end
+    return nothing
+end
+
+# A `Cursor` driven to the end of the document, reading every name, attribute and value.
+function walk_cursor(uri)
+    c = read(uri, Cursor)
+    while next!(c) !== nothing
+        if nodetype(c) === XML.Element
+            XML.tag(c)
+            foreach(identity, eachattribute!(c))
+        else
+            XML.value(c)
+        end
+    end
+    return nothing
+end
+
+const NOTWF_READERS = (
+    ("Cursor", :cursor, walk_cursor),
+    ("LazyNode", :lazy, uri -> walk_lazy(read(uri, LazyNode))),
+    ("Node :lenient", :lenient, uri -> read(uri, Node; wellformed = :lenient)),
+    ("FlatNode :lenient", :lenient, uri -> read(uri, FlatNode; wellformed = :lenient)),
+    ("Node :structural", :structural, uri -> read(uri, Node; wellformed = :structural)),
+    ("FlatNode :structural", :structural, uri -> read(uri, FlatNode; wellformed = :structural)),
+    ("Node :strict", :strict, uri -> read(uri, Node; wellformed = :strict)),
+    ("FlatNode :strict", :strict, uri -> read(uri, FlatNode; wellformed = :strict)),
+)
+
+# A reader refuses a document when it raises one of the two errors that XML.jl raises on a
+# malformed document. Any other exception is a defect of the reader, and is thrown again.
+function refuses(readit, uri)
+    try
+        readit(uri)
+        return false
+    catch e
+        e isa Union{ArgumentError, ErrorException} || rethrow()
+        return true
+    end
+end
+
+# A case that `:strict` does not refuse is a known gap when the suite lists it for the fifth
+# edition, whose names `:strict` follows, and when it does not test the Namespaces
+# recommendation, which XML.jl does not check.
+is_known_gap(t) = (isempty(t.edition) || "5" in split(t.edition)) && !startswith(t.recommendation, "NS")
+
+function read_notwf_record()
+    record = Dict{String, String}()
+    for line in Iterators.drop(eachline(NOTWF_RECORD), 1)      # the first line names the columns
+        id, word = split(line, '\t')
+        record[id] = word
+    end
+    return record
+end
+
+# The record written from what the readers do: `Node` stands for `FlatNode`, which the
+# testset then checks against it.
+function write_notwf_record(cases)
+    readers = Dict(key => readit for (name, key, readit) in NOTWF_READERS if !startswith(name, "FlatNode"))
+    open(NOTWF_RECORD, "w") do io
+        println(io, "id\trefused_from")
+        for t in cases
+            refusing = Tuple(key for key in NOTWF_REFUSED_BY["stream"] if refuses(readers[key], t.uri))
+            word = findfirst(==(refusing), NOTWF_REFUSED_BY)
+            word === nothing && error("$(t.id) is refused by $refusing, which no word of the record says")
+            println(io, t.id, '\t', word)
+        end
+    end
+end
+
 @testset "W3C Conformance" begin
     @testset "Well-formed documents should parse" begin
         n_pass = 0
@@ -120,29 +236,41 @@ notwf_tests = filter(t -> t.type == "not-wf", xml10_tests)
         @info "W3C well-formed: $n_pass / $(n_pass + n_fail) passed"
     end
 
-    @testset "Not-well-formed documents should fail to parse" begin
-        n_pass = 0
-        n_fail = 0
-        failures = String[]
-        for test in notwf_tests
-            isfile(test.uri) || continue
-            try
-                read(test.uri, Node; wellformed = :strict)
-                n_fail += 1
-                push!(failures, test.id)
-            catch
-                n_pass += 1
+    @testset "Not-well-formed documents: what each reader refuses, case by case" begin
+        cases = filter(t -> isfile(t.uri), notwf_tests)
+        # Scope pin: the xmlts20130923 suite carries 1257 not-well-formed cases reachable at
+        # ENTITIES="none" / XML 1.0. A lower count means the collector or a filter
+        # regressed.
+        @test length(cases) == 1257
+        get(ENV, "XML_W3C_WRITE_RECORD", "") == "true" && write_notwf_record(cases)
+        record = read_notwf_record()
+        @test sort!(collect(keys(record))) == sort!([t.id for t in cases])   # one line per case
+        counts = String[]
+        @testset "$name" for (name, key, readit) in NOTWF_READERS
+            n_refused = 0
+            n_gaps = 0
+            moved = String[]
+            for t in cases
+                expected = key in NOTWF_REFUSED_BY[get(record, t.id, "none")]
+                refused = refuses(readit, t.uri)
+                n_refused += refused
+                if key === :strict && !expected && is_known_gap(t)
+                    # `:strict` checks the syntax of the DTD only in part: most known gaps
+                    # are errors inside the DTD. A gap that is closed shows as an unexpected
+                    # pass, and the record must then be written again.
+                    @test_broken refused
+                    n_gaps += 1
+                else
+                    refused == expected ||
+                        push!(moved, string(t.id, refused ? ": now refused" : ": no longer refused"))
+                    @test refused == expected
+                end
             end
+            isempty(moved) ||
+                @warn "W3C not-wf: $name no longer does what w3c_notwf.tsv records" moved=first(moved, 20)
+            push!(counts, string(name, " ", n_refused, n_gaps > 0 ? " ($n_gaps known gaps)" : ""))
         end
-        # XML.jl is non-validating and this suite runs at :strict, which does not reject
-        # all 1257 in-scope not-wf cases of the pinned xmlts20130923 suite. Most of the
-        # others are errors inside the DTD, whose syntax :strict checks only in part,
-        # names that only the character classes of the editions before the fifth reject
-        # (appendix B), and namespace errors. Assert a no-regression floor on the count it
-        # does reject, and raise it as coverage grows.
-        @test n_pass >= 682
-        n_fail > 0 && @info "W3C not-wf: $n_fail not yet rejected (mostly DTD syntax, earlier-edition names, namespaces)" examples=first(failures, 20)
-        @info "W3C not-well-formed: $n_pass / $(n_pass + n_fail) rejected"
+        @info "W3C not-well-formed, refused out of $(length(cases)): " * join(counts, ", ")
     end
 end
 
