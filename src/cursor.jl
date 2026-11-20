@@ -569,7 +569,8 @@ With `c` positioned on an `Element`, advance past that element's entire subtree 
 byte-level scan (no internal tokens emitted), so the next [`next!`](@ref) yields the
 element's following sibling (or the parent boundary). For structural walks (e.g. layer
 discovery) that classify a node but don't need its contents — far cheaper than letting
-`for_each_child!`/`next!` tokenize the skipped subtree. No-op on non-`Element` nodes.
+`for_each_child!`/`next!` tokenize the skipped subtree. No-op on non-`Element` nodes, and on
+an element that the cursor has left already: after a second `skip_element!`, for instance.
 
 The scan checks nothing of what it steps over. If the document ends before the element
 does, the walk ends there without an error, even when the end of the document cuts a tag
@@ -577,6 +578,10 @@ off.
 """
 function skip_element!(c::Cursor)
     c.nodetype === Element || return c
+    # While the element is open, the stream stands at its depth. It stands one level up once
+    # the cursor has left the element, as after an earlier `skip_element!`. Nothing is then
+    # left to skip, and closing the element once more would lower every depth that follows.
+    c.enclosing < c.depth && return c
     data = _data(c)
     after = _CURSOR_XT._element_end(data, _CURSOR_XT._data_start(c.token, data))
     if after == 0 || after > ncodeunits(data)   # the document ends first, or right after it

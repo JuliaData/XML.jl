@@ -380,6 +380,14 @@ using XML: Cursor, next!, for_each_child!, @for_each_child!, skip_element!, eof,
             @test kids_plain(doc) == exp
             @test kids_skip(doc) == exp
         end
+
+        # On an element that the cursor has left already, skip_element! does nothing: a
+        # second call does not close the element once more.
+        c = Cursor("<r><a><x/></a><b/><d/></r>"); next!(c); next!(c)           # on <a>
+        skip_element!(c); skip_element!(c)
+        next!(c); @test (tag(c), depth(c)) == ("b", 2)
+        skip_element!(c); skip_element!(c)                                     # `<b/>` closes itself
+        next!(c); @test (tag(c), depth(c)) == ("d", 2)
     end
 
     @testset "is_simple_value(::Cursor) — agrees with LazyNode, non-destructive" begin
@@ -469,5 +477,57 @@ using XML: Cursor, next!, for_each_child!, @for_each_child!, skip_element!, eof,
         nobom = joinpath(dir, "utf16_nobom.xml")
         write(nobom, collect(reinterpret(UInt8, u16)))
         @test_throws "UTF-16 without a BOM" read(nobom, Cursor)
+    end
+
+    # Calls on the same element compose: whatever two of them do, the walk goes on in the
+    # order of the document, inside the element or after it, at the depths of the document.
+    @testset "two calls on the same element leave the walk in order" begin
+        docs = (
+            """<r><c a="1" b="2"/><d k="v">t<e/>u</d><f>one</f><g x="1">two</g>""" *
+                """<h><i/><j>x</j></h><k/><l></l>z</r>""",
+            """<s><row r="1"><c r="A1" s="1"/><c r="B1"><v>2</v></c></row>""" *
+                """<row r="2"><c r="A2"><v>3</v></c></row></s>""",
+            "<a><b><![CDATA[x]]></b><c><!--n--></c><d>a&amp;b</d><e/></a>",
+        )
+        calls = (
+            "eachattribute!" => c -> foreach(identity, eachattribute!(c)),
+            "first(eachattribute!)" => c -> iterate(eachattribute!(c)),
+            "get" => c -> get(c, "a", nothing),
+            "attributes" => attributes,
+            "keys" => keys,
+            "is_simple_value" => is_simple_value,
+            "skip_element!" => skip_element!,
+            "for_each_child!" => c -> for_each_child!(ch -> nothing, c),
+            "nothing" => c -> nothing,
+        )
+        node(c) = (nodetype(c), tag(c), depth(c))
+        out_of_order = String[]
+        for doc in docs
+            ref = Any[]
+            c = Cursor(doc)
+            while next!(c) !== nothing
+                push!(ref, node(c))
+            end
+            for i in eachindex(ref), (fname, f) in calls, (gname, g) in calls
+                ref[i][1] === Element || continue
+                stop = i                           # the last node of the subtree of the element
+                while stop < length(ref) && ref[stop + 1][3] > ref[i][3]
+                    stop += 1
+                end
+                c = Cursor(doc)
+                foreach(_ -> next!(c), 1:i)
+                f(c); g(c)
+                rest = Any[]
+                while next!(c) !== nothing
+                    push!(rest, node(c))
+                end
+                # After `for_each_child!` the cursor is past the element, and the second
+                # call acts on the node that follows: the walk may then resume further on.
+                from = fname == "for_each_child!" ? (stop:length(ref)) : (i, stop)
+                any(k -> rest == ref[k + 1:end], from) ||
+                    push!(out_of_order, "$fname then $gname on <$(ref[i][2])> of $(first(doc, 12))")
+            end
+        end
+        @test out_of_order == String[]
     end
 end
