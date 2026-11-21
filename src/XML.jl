@@ -10,6 +10,7 @@ export
     sourcetext, sourcespan, splicetext,
     depth, siblings, issamenode,
     Cursor, next!, for_each_child!, @for_each_child!, skip_element!, eachattribute!, eof,
+    is_tag, attribute!, simple_value!,
     for_each_child, @for_each_child,    # deprecated, to be removed in v0.5
     xpath,
     h

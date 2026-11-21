@@ -1,4 +1,4 @@
-using Test, XML
+using Test, XML, StringViews
 using XML: Cursor, next!, for_each_child!, @for_each_child!, skip_element!, eof, nodetype,
            tag, value, attributes, depth, children, Element, Text, CData, Comment,
            ProcessingInstruction, Declaration, DTD, LazyNode, is_simple_value, is_simple,
@@ -181,6 +181,23 @@ using XML: Cursor, next!, for_each_child!, @for_each_child!, skip_element!, eof,
         @test isempty(collect(eachattribute!(c)))
         c = Cursor(SubString("..<r a=\"1\" b=\"&lt;\"/>", 3)); next!(c)
         @test collect(eachattribute!(c)) == ["a" => "1", "b" => "<"]
+
+        # A tag that next! refuses raises the same error in the loop, once the pairs that
+        # stand before the defect are given, and the walk still refuses it.
+        err_of(f) = try f(); "no error" catch e; sprint(showerror, e) end
+        for (bad, before) in ("<a b><c/></a>" => 0, "<a b=c/>" => 0, "<a x=\"1\" b=\"1" => 1,
+                              "<a x=\"1\" y='2' \"z\"/>" => 2, "<a b=\"1\" c/>" => 1,
+                              "<a x=\"1\" b = " => 1, "<a b" => 0, "<a" => 0)
+            c1 = Cursor(bad); next!(c1)
+            walked = err_of(() -> next!(c1))
+            @test startswith(walked, "ArgumentError")
+            c2 = Cursor(bad); next!(c2)
+            given = Pair{SubString{String}, SubString{String}}[]
+            @test err_of(() -> foreach(p -> push!(given, p), eachattribute!(c2))) == walked
+            @test length(given) == before
+            @test err_of(() -> collect(eachattribute!(c2))) == walked     # read again from the `<`
+            @test err_of(() -> next!(c2)) == walked
+        end
     end
 
     @testset "value of CData / Comment / PI / DTD / Text-with-entities" begin
@@ -479,6 +496,252 @@ using XML: Cursor, next!, for_each_child!, @for_each_child!, skip_element!, eof,
         @test_throws "UTF-16 without a BOM" read(nobom, Cursor)
     end
 
+    @testset "is_tag compares the name of the current element" begin
+        c = Cursor("""<r><ns:a x="1"/>t<é/><?pi d?></r>""")
+        next!(c)                                   # <r>
+        @test is_tag(c, "r")
+        @test !is_tag(c, "rr") && !is_tag(c, "") && !is_tag(c, "R")
+        next!(c)                                   # <ns:a>
+        @test is_tag(c, "ns:a") && !is_tag(c, "a")
+        @test is_tag(c, SubString("xns:a", 2))
+        next!(c)                                   # the text
+        @test !is_tag(c, "t")
+        next!(c)                                   # <é/>
+        @test is_tag(c, "é") && !is_tag(c, "e")
+        next!(c)                                   # the processing instruction
+        @test tag(c) == "pi" && !is_tag(c, "pi")
+    end
+
+    @testset "attribute! reads named attributes in one pass" begin
+        xml = """<row><c r="B7" s = '3' u="a&amp;b" w="x\ty"><v>42.5</v></c><d r="1" r="2"/><e/></row>"""
+        c = Cursor(xml); next!(c); next!(c)        # on <c>
+        @test attribute!(c, "r", "t", "s") == ("B7", nothing, "3")
+        @test nodetype(c) === Element && tag(c) == "c" && depth(c) == 2
+        # a second call reads the tag again, and the values are those of `get`
+        @test attribute!(c, "u", "w", "zz") == ("a&b", "x y", nothing)
+        @test attribute!(c, "u", "w") == (get(c, "u", nothing), get(c, "w", nothing))
+        @test attribute!(c) == ()
+        # the walk goes on after the tag
+        next!(c); @test tag(c) == "v" && depth(c) == 3
+        next!(c); @test nodetype(c) === Text
+        next!(c); @test tag(c) == "d" && depth(c) == 2
+        @test attribute!(c, "r") == ("1",)     # the first of two attributes of one name
+        next!(c); @test tag(c) == "e" && depth(c) == 2      # `<d …/>` has closed itself
+        @test attribute!(c, "r") == (nothing,)
+        @test next!(c) === nothing
+
+        # after `eachattribute!` has read part of the tag
+        c = Cursor("""<a x="1" y="2" z="3"><b/></a>"""); next!(c)
+        @test first(eachattribute!(c)) == ("x" => "1")
+        @test attribute!(c, "z", "x") == ("3", "1")
+        next!(c); @test tag(c) == "b"
+
+        # skip_element! after attribute! has read a tag that closes itself: the element is
+        # behind the cursor already, and the walk goes on at the same depth
+        c = Cursor("""<r><c a="1"/><d a="2"><e/></d><f/></r>"""); next!(c); next!(c)   # on <c/>
+        @test attribute!(c, "a") == ("1",)
+        skip_element!(c)
+        next!(c); @test (tag(c), depth(c)) == ("d", 2)
+        @test attribute!(c, "a") == ("2",)          # `<d>` is still open after its tag
+        skip_element!(c)
+        next!(c); @test (tag(c), depth(c)) == ("f", 2)
+        @test next!(c) === nothing
+
+        # not an element: `nothing` for each name
+        c = Cursor("""<?xml version="1.0"?><a/>"""); next!(c)
+        @test nodetype(c) === Declaration
+        @test attribute!(c, "version") == (nothing,)
+        @test get(c, "version", nothing) == "1.0"
+
+        # a tag that `next!` refuses raises the same error, and the walk still refuses it
+        err_of(f) = try f(); "no error" catch e; sprint(showerror, e) end
+        for bad in ("<a b><c/></a>", "<a b=c/>", "<a b=\"1", "<a \"x\"/>", "<a b=\"1\" c/>", "<a b", "<a")
+            c1 = Cursor(bad); next!(c1)
+            c2 = Cursor(bad); next!(c2)
+            walked = err_of(() -> next!(c1))
+            @test startswith(walked, "ArgumentError")
+            @test err_of(() -> attribute!(c2, "b")) == walked
+            @test err_of(() -> next!(c2)) == walked
+        end
+
+        # other string types give the values of `get`
+        doc = """<a k="v" m="x&lt;y"/>"""
+        for src in (SubString("<z/>" * doc, 5), StringView(Vector{UInt8}(doc)))
+            c = Cursor(src); next!(c)
+            @test attribute!(c, "k", "m", "n") == ("v", "x<y", nothing)
+            @test attribute!(c, "k", "m") == (get(c, "k", nothing), get(c, "m", nothing))
+        end
+    end
+
+    @testset "simple_value! reads a simple element and leaves the cursor after it" begin
+        xml = "<r><a>one</a><b>x &amp; y</b><c><![CDATA[<d>]]></c><e k=\"1\">t</e><f><g/></f><h></h><i/>z</r>"
+        c = Cursor(xml); next!(c); next!(c)                 # on <a>
+        @test simple_value!(c) == "one"
+        @test nodetype(c) === Element && tag(c) == "a" && depth(c) == 2
+        next!(c); @test tag(c) == "b" && depth(c) == 2
+        @test simple_value!(c) == "x & y"
+        next!(c); @test tag(c) == "c"
+        @test simple_value!(c) == "<d>"               # a CDATA section
+        @test nodetype(c) === Element && tag(c) == "c" && depth(c) == 2
+        # not simple: `nothing`, and the cursor has not moved
+        next!(c); @test tag(c) == "e"
+        @test simple_value!(c) === nothing            # an attribute
+        next!(c); @test nodetype(c) === Text && value(c) == "t" && depth(c) == 3
+        next!(c); @test tag(c) == "f" && depth(c) == 2
+        @test simple_value!(c) === nothing            # a child element
+        next!(c); @test tag(c) == "g" && depth(c) == 3
+        next!(c); @test tag(c) == "h" && depth(c) == 2
+        @test simple_value!(c) === nothing            # no text
+        next!(c); @test tag(c) == "i" && depth(c) == 2
+        @test simple_value!(c) === nothing            # `<i/>`
+        next!(c); @test nodetype(c) === Text && value(c) == "z" && depth(c) == 2
+        @test simple_value!(c) === nothing            # not an element
+        @test next!(c) === nothing
+
+        # after `attribute!` has read the start tag of an element without attribute
+        c = Cursor("<r><a>one</a><b/></r>"); next!(c); next!(c)
+        @test attribute!(c, "k") == (nothing,)
+        @test simple_value!(c) == "one"
+        next!(c); @test tag(c) == "b" && depth(c) == 2
+
+        # On an element that the cursor has left already, simple_value! gives the text again
+        # and does not move: after itself and after skip_element!. skip_element! then has
+        # nothing more to skip.
+        for leave! in (simple_value!, skip_element!)
+            c = Cursor("<r><a>one</a><b/><d/></r>"); next!(c); next!(c)
+            leave!(c)
+            @test simple_value!(c) == "one"
+            skip_element!(c)
+            next!(c); @test (tag(c), depth(c)) == ("b", 2)
+        end
+
+        # other string types
+        for src in (SubString("<z/><r><a>x &lt; y</a><b/></r>", 5), StringView(Vector{UInt8}("<r><a>x &lt; y</a><b/></r>")))
+            c = Cursor(src); next!(c); next!(c)
+            @test simple_value!(c) == "x < y"
+            next!(c); @test tag(c) == "b" && depth(c) == 2
+        end
+
+        # the end tag is read as `next!` reads it
+        err_of(f) = try f(); "no error" catch e; sprint(showerror, e) end
+        c = Cursor("<r><a>one</a x></r>"); next!(c); next!(c)
+        @test is_simple_value(c) == "one"             # it stops at the name of the end tag
+        @test occursin("expected '>'", err_of(() -> simple_value!(c)))
+        c = Cursor("<r><a>one</a"); next!(c); next!(c)
+        @test occursin("unterminated close tag", err_of(() -> simple_value!(c)))
+        c = Cursor("<r><a><![CDATA[x]]></a y>"); next!(c); next!(c)
+        @test occursin("expected '>'", err_of(() -> simple_value!(c)))
+    end
+
+    # `next!`, `get`, `is_simple_value` and `eachattribute!` read a text, a tag and a simple
+    # element from the bytes. The package keeps the readings through the tokens:
+    # `_next_token!`, `_get_from_tokens`, `_is_simple_value_tokens`, `_attr_step_tokens`.
+    # Both must give the same nodes, the same values and the same errors at the same
+    # positions, on every document. A loop over `eachattribute!` must also leave the
+    # cursor's stream where the tokens leave it: after each step, and where it raises.
+    @testset "the readings from the bytes give what the token stream gives" begin
+        @isdefined(ensure_w3c_suite) || include("w3c_suite.jl")
+        ensure_w3c_suite()
+        token_step(c) = c.done ? nothing : XML._next_token!(c)
+        function key_of(s)
+            m = try
+                match(r"[ \t\r\n]([A-Za-z_:][A-Za-z0-9_:.-]*)[ \t\r\n]*=", s)
+            catch
+                nothing
+            end
+            m === nothing ? "id" : String(m.captures[1])
+        end
+        function observe(s, key, step, getf, simplef)
+            obs = String[]
+            err = ""
+            try
+                c = Cursor(s)
+                while step(c) !== nothing
+                    nt = nodetype(c)
+                    line = string(nt, '|', depth(c), '|', something(tag(c), ""), '|')
+                    if nt === Element
+                        line *= string(something(getf(c, key, nothing), "∅"), '|',
+                                       something(getf(c, "zz", nothing), "∅"), '|',
+                                       something(simplef(c), "∅"))
+                    else
+                        line *= something(value(c), "∅")
+                    end
+                    push!(obs, line)
+                end
+            catch e
+                err = sprint(showerror, e)
+            end
+            obs, err
+        end
+        # A walk that reads the attributes of each element by `eachattribute!`: twice, where
+        # the cursor stands and then again from the `<`, or once and only the first of them.
+        # Nothing else reads the tag before it. The state of the cursor's stream is noted
+        # after each step, and where the loop raises; `next!` is then called once more.
+        function observe_attributes(s, step, attr_step, whole)
+            obs = Any[]
+            err = ""
+            reading = false
+            c = nothing
+            try
+                c = Cursor(s)
+                while step(c) !== nothing
+                    push!(obs, (nodetype(c), depth(c), tag(c), c.st.state))
+                    nodetype(c) === Element || continue
+                    reading = true
+                    for _ in 1:(whole ? 2 : 1)
+                        it = eachattribute!(c)
+                        st = it.start
+                        while true
+                            r = attr_step(it, st)
+                            push!(obs, c.st.state)
+                            r === nothing && break
+                            push!(obs, r[1])
+                            whole || break
+                            st = r[2]
+                        end
+                    end
+                    reading = false
+                end
+            catch e
+                err = string(reading ? "in the attributes: " : "", sprint(showerror, e))
+                reading && push!(obs, c.st.state,
+                                 try next!(c); "no error" catch e2; sprint(showerror, e2) end)
+            end
+            obs, err
+        end
+        docs = String[]
+        for (dir, _, files) in walkdir(joinpath(W3C_DIR, "xmlconf")), f in files
+            endswith(f, ".xml") && push!(docs, String(read(joinpath(dir, f))))
+        end
+        @test length(docs) > 3000
+        # every prefix of some small documents: the end of the input inside each construct
+        small = filter(s -> 40 <= ncodeunits(s) <= 300, docs)[1:40]
+        for s in small, k in 1:ncodeunits(s)
+            push!(docs, String(codeunits(s)[1:k]))
+        end
+        refused = 0
+        differing = String[]
+        refused_in_attributes = 0
+        differing_attributes = String[]
+        for s in docs
+            key = key_of(s)
+            bytes = observe(s, key, next!, get, is_simple_value)
+            tokens = observe(s, key, token_step, XML._get_from_tokens, XML._is_simple_value_tokens)
+            isempty(tokens[2]) || (refused += 1)
+            bytes == tokens || push!(differing, first(s, 80))
+            for whole in (true, false)
+                bytes = observe_attributes(s, next!, iterate, whole)
+                tokens = observe_attributes(s, token_step, XML._attr_step_tokens, whole)
+                startswith(tokens[2], "in the attributes: ") && (refused_in_attributes += 1)
+                bytes == tokens || push!(differing_attributes, first(s, 80))
+            end
+        end
+        @test refused > 1000              # the errors are compared too
+        @test differing == String[]
+        @test refused_in_attributes > 300     # so are the errors that a loop raises
+        @test differing_attributes == String[]
+    end
+
     # Calls on the same element compose: whatever two of them do, the walk goes on in the
     # order of the document, inside the element or after it, at the depths of the document.
     @testset "two calls on the same element leave the walk in order" begin
@@ -496,6 +759,8 @@ using XML: Cursor, next!, for_each_child!, @for_each_child!, skip_element!, eof,
             "attributes" => attributes,
             "keys" => keys,
             "is_simple_value" => is_simple_value,
+            "attribute!" => c -> attribute!(c, "a", "r"),
+            "simple_value!" => simple_value!,
             "skip_element!" => skip_element!,
             "for_each_child!" => c -> for_each_child!(ch -> nothing, c),
             "nothing" => c -> nothing,

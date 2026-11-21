@@ -646,6 +646,98 @@ end
     return n + 1
 end
 
+#-----------------------------------------------------------------------# Tags in one pass
+# A reader that does not need the tokens of a start tag reads it in one pass over its bytes:
+# the grammar of `read_in_tag` and `read_attr_value`, with the same errors at the same
+# positions, but no token is made. A test of the suite compares the two readings on the W3C
+# documents, so that they cannot drift apart.
+
+# The closing quote `q` of an attribute value that starts at `pos`, and whether the value is
+# known to need no decoding: it holds no `&`, tab or line end. Only a value of at most 16
+# bytes is examined that way. A longer one has its quote searched for by `_findchar`, since
+# a byte loop over a long value costs more than that search; it is then decoded as usual.
+# The index is 0 when the document ends first.
+@inline function _quote_end(data::AbstractString, q::UInt8, pos::Int, n::Int)
+    stop = min(n, pos + 15)
+    special = false
+    i = pos
+    @inbounds while i <= stop
+        b = codeunit(data, i)
+        b == q && return i, !special
+        special |= (b == UInt8('&')) | (b == UInt8('\t')) | (b == UInt8('\n')) | (b == UInt8('\r'))
+        i += 1
+    end
+    # From `pos`, which starts a character: `i` may stand inside one.
+    close_idx = _findchar(data, q, pos)
+    return (close_idx === nothing ? 0 : close_idx), false
+end
+
+# The grammar of a start tag is written once, in two steps: the name of an attribute, then
+# its value. `_fold_attributes` runs them over a whole tag. A reader that gives one
+# attribute at a time, as `eachattribute!` does, runs them itself.
+
+# The name of the next attribute of a start tag, read from `pos`, a position where the
+# tokenizer would be in `M_TAG`: `(name_start, name_stop, value_start)`. The name is the
+# bytes `name_start:name_stop-1`, and `value_start` is where the value must start, past the
+# `=` and the white space around it. Where the tag ends instead, `name_start` is 0 and
+# `name_stop` is the index of its `>`. It raises the errors of `read_in_tag`, at the same
+# positions.
+@inline function _attr_name_span(data::AbstractString, pos::Int, n::Int)
+    @inbounds begin
+        pos = skip_whitespace(data, pos)
+        pos > n && err("unterminated tag", pos)
+        b = codeunit(data, pos)
+        b == UInt8('>') && return 0, pos, 0
+        if b == UInt8('/') && pos < n && codeunit(data, pos + 1) == UInt8('>')
+            return 0, pos + 1, 0
+        end
+        name_start = pos
+        while pos <= n && is_name_byte(codeunit(data, pos))
+            pos += 1
+        end
+        name_start == pos && err("expected attribute name or tag close", pos)
+        name_stop = pos
+        pos = skip_whitespace(data, pos)
+        (pos <= n && codeunit(data, pos) == UInt8('=')) || err("expected '=' after attribute name", pos)
+        return name_start, name_stop, skip_whitespace(data, pos + 1)
+    end
+end
+
+# The closing quote of the value of an attribute, which must start at `pos` with its opening
+# quote, and whether the value needs no decoding (see `_quote_end`). It raises the errors of
+# `read_attr_value`, at the same positions.
+@inline function _attr_value_end(data::AbstractString, pos::Int, n::Int)
+    pos > n && err("expected attribute value", pos)
+    q = @inbounds codeunit(data, pos)
+    (q == UInt8('"') || q == UInt8('\'')) || err("expected quoted attribute value", pos)
+    close_idx, clean = _quote_end(data, q, pos + 1, n)
+    close_idx == 0 && err("unterminated attribute value", pos)
+    return close_idx, clean
+end
+
+# The attributes of a start tag, read from `pos`, a position where the tokenizer would be in
+# `M_TAG`. For each attribute, `acc = f(acc, name_start, name_stop, value_start, value_stop,
+# clean)`, where `f` returns the new `acc` and whether to stop there. The name is the bytes
+# `name_start:name_stop-1`, the value with its quotes the bytes `value_start:value_stop-1`,
+# and `clean` says that the value needs no decoding. Returns the index of the `>` that ends
+# the tag, or of the closing quote where `f` stopped, and `acc`. Where the document ends
+# inside the tag, it raises the error of the reader that the tokenizer would then be in.
+@inline function _fold_attributes(f::F, acc, data::AbstractString, pos::Int, n::Int) where {F}
+    @inbounds while true
+        name_start, name_stop, value_start = _attr_name_span(data, pos, n)
+        name_start == 0 && return name_stop, acc
+        close_idx, clean = _attr_value_end(data, value_start, n)
+        acc, stop = f(acc, name_start, name_stop, value_start, close_idx + 1, clean)
+        stop && return close_idx, acc
+        pos = close_idx + 1
+    end
+end
+
+# The `>` that ends a start tag read from `pos`: the tag is checked, nothing of it is kept.
+@inline _keep_nothing(acc, name_start, name_stop, value_start, value_stop, clean) = (acc, false)
+@inline _tag_scan_checked(data::AbstractString, pos::Int, n::Int) =
+    _fold_attributes(_keep_nothing, nothing, data, pos, n)[1]
+
 # Find the end of a comment, a CDATA section or a processing instruction whose text starts at
 # `j`: the first `>` that the bytes `before` precede, all of them within the text. A close thus
 # cannot reuse the bytes of its own opening. Returns the index just past that `>`, or 0 if the
