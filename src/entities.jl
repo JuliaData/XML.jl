@@ -704,9 +704,13 @@ recognized" — so a reference whose replacement text carries markup produces ST
 text node holding `<`: the parser reads the rewritten document and builds the nodes itself.
 
 Only content, start tags and attribute values are rewritten. A reference inside a comment, a
-CDATA section, a processing instruction or the internal subset is not a reference (§4.4.2
+CDATA section, a processing instruction or the internal subset is not a reference (§4.4
 recognises them in content and in attribute values), so those spans are copied as they
-stand, with only their line ends normalized (see below).
+stand, with only their line ends normalized (see below). Nor is a text outside the root
+element content: a reference written there is left as it stands, which `Node` and `FlatNode`
+refuse from `:structural` on. The pseudo-attributes of the XML declaration are read as
+attribute values: a reference written there is still included, although their rules allow
+none.
 
 A document that declares nothing costs one probe of its prolog and is returned as it stands, and
 so is one whose walk changes nothing. A rewritten document comes back as the type the reader
@@ -975,9 +979,11 @@ function _rewrite_walk!(out::Union{Nothing, IOBuffer}, s::AbstractString, d::_De
     current = nothing                                # the declared attributes of the open start tag
     written = Bool[]                                 # which of them the tag writes
     reduce_value = false                             # the next value is of a type other than CDATA
+    level = 0                                        # the elements of `s` that are open
     for tok in XMLTokenizer.tokenize(s, 1)
         k = tok.kind
         if k === XMLTokenizer.TokenKinds.OPEN_TAG
+            level += 1
             attrs === nothing && continue
             current = get(attrs, XMLTokenizer.tag_name(tok, s), nothing)
             current === nothing && continue
@@ -1010,6 +1016,7 @@ function _rewrite_walk!(out::Union{Nothing, IOBuffer}, s::AbstractString, d::_De
             pos = start + tok.ncodeunits
             continue
         elseif k === XMLTokenizer.TokenKinds.TAG_CLOSE || k === XMLTokenizer.TokenKinds.SELF_CLOSE
+            k === XMLTokenizer.TokenKinds.SELF_CLOSE && (level -= 1)   # it ends a start tag
             current === nothing && continue
             start = tok.offset - base + 1
             for i in eachindex(current)
@@ -1023,9 +1030,19 @@ function _rewrite_walk!(out::Union{Nothing, IOBuffer}, s::AbstractString, d::_De
             end
             current = nothing
             continue
+        elseif k === XMLTokenizer.TokenKinds.CLOSE_TAG
+            # An end tag that closes nothing leaves the count at zero, so that the element
+            # after it is not taken to stand outside every element.
+            level > 0 && (level -= 1)
+            continue
         end
         ents === nothing && continue
         (k === XMLTokenizer.TokenKinds.TEXT || k === XMLTokenizer.TokenKinds.ATTR_VALUE) || continue
+        # A text of the document that stands outside the root element is not content, and a
+        # reference written there is not included: §4.4 includes one "anywhere after the
+        # start-tag and before the end-tag of an element", or in an attribute value. It is
+        # copied as it stands, for the readers that check the document to refuse it.
+        k === XMLTokenizer.TokenKinds.TEXT && !fragment && level == 0 && continue
         span = XMLTokenizer.raw(tok, s)
         if !(tok.has_entities && _references_declared(span, ents))
             # nothing to include; in a replacement text a value is still rewritten for its

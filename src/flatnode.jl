@@ -147,6 +147,7 @@ function _flat_parse(xml::String, lastcr::Int, ::Val{W}) where {W}
         if k === K.TEXT
             rawtext = raw(token, xml)
             W === :strict && _check_chars_strict(rawtext)
+            W !== :lenient && length(pstack) == 1 && _check_outside_root(rawtext)
             W === :strict && token.has_entities && _check_refs_strict(rawtext, strict, false)
             off, len = _frng(rawtext)
             voff, vlen, cr = _flat_value(rawtext, off, len, lastcr)
@@ -268,6 +269,7 @@ function _flat_parse(xml::String, lastcr::Int, ::Val{W}) where {W}
         elseif k === K.CDATA_CONTENT
             cdata = raw(token, xml)
             W === :strict && _check_chars_strict(cdata)
+            W !== :lenient && length(pstack) == 1 && _cdata_outside_root()
             off, len, cr = _flat_value(cdata, _frng(cdata)..., lastcr)
             cr && (len = -len)
             idx = Int32(length(recs) + 1)
