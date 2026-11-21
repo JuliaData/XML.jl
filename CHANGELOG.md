@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- **Three `Cursor` calls on trial: `XML.attribute!`, `XML.simple_value!` and `XML.is_tag`** ([#263](https://github.com/JuliaData/XML.jl/issues/263)). They are not exported, and their names and behavior may change. `XML.attribute!(c, "r", "t", "s")` gives the values of the attributes named, in one pass over the tag, with `nothing` for a name that the tag does not hold. `XML.simple_value!(c)` gives the text of a simple element and leaves the cursor after it. `XML.is_tag(c, name)` compares the name of the current element without building a string.
+- **Three `Cursor` calls read a tag in one pass: `attribute!`, `simple_value!` and `is_tag`** ([#263](https://github.com/JuliaData/XML.jl/issues/263)). `attribute!(c, "r", "t", "s")` gives the values of the attributes named, in one pass over the tag, with `nothing` for a name that the tag does not hold. `simple_value!(c)` gives the text of a simple element and leaves the cursor after it. `is_tag(c, name)` compares the name of the current element without building a string.
 
 ### Changed
 

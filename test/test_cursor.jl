@@ -499,50 +499,50 @@ using XML: Cursor, next!, for_each_child!, @for_each_child!, skip_element!, eof,
     @testset "is_tag compares the name of the current element" begin
         c = Cursor("""<r><ns:a x="1"/>t<é/><?pi d?></r>""")
         next!(c)                                   # <r>
-        @test XML.is_tag(c, "r")
-        @test !XML.is_tag(c, "rr") && !XML.is_tag(c, "") && !XML.is_tag(c, "R")
+        @test is_tag(c, "r")
+        @test !is_tag(c, "rr") && !is_tag(c, "") && !is_tag(c, "R")
         next!(c)                                   # <ns:a>
-        @test XML.is_tag(c, "ns:a") && !XML.is_tag(c, "a")
-        @test XML.is_tag(c, SubString("xns:a", 2))
+        @test is_tag(c, "ns:a") && !is_tag(c, "a")
+        @test is_tag(c, SubString("xns:a", 2))
         next!(c)                                   # the text
-        @test !XML.is_tag(c, "t")
+        @test !is_tag(c, "t")
         next!(c)                                   # <é/>
-        @test XML.is_tag(c, "é") && !XML.is_tag(c, "e")
+        @test is_tag(c, "é") && !is_tag(c, "e")
         next!(c)                                   # the processing instruction
-        @test tag(c) == "pi" && !XML.is_tag(c, "pi")
+        @test tag(c) == "pi" && !is_tag(c, "pi")
     end
 
     @testset "attribute! reads named attributes in one pass" begin
         xml = """<row><c r="B7" s = '3' u="a&amp;b" w="x\ty"><v>42.5</v></c><d r="1" r="2"/><e/></row>"""
         c = Cursor(xml); next!(c); next!(c)        # on <c>
-        @test XML.attribute!(c, "r", "t", "s") == ("B7", nothing, "3")
+        @test attribute!(c, "r", "t", "s") == ("B7", nothing, "3")
         @test nodetype(c) === Element && tag(c) == "c" && depth(c) == 2
         # a second call reads the tag again, and the values are those of `get`
-        @test XML.attribute!(c, "u", "w", "zz") == ("a&b", "x y", nothing)
-        @test XML.attribute!(c, "u", "w") == (get(c, "u", nothing), get(c, "w", nothing))
-        @test XML.attribute!(c) == ()
+        @test attribute!(c, "u", "w", "zz") == ("a&b", "x y", nothing)
+        @test attribute!(c, "u", "w") == (get(c, "u", nothing), get(c, "w", nothing))
+        @test attribute!(c) == ()
         # the walk goes on after the tag
         next!(c); @test tag(c) == "v" && depth(c) == 3
         next!(c); @test nodetype(c) === Text
         next!(c); @test tag(c) == "d" && depth(c) == 2
-        @test XML.attribute!(c, "r") == ("1",)     # the first of two attributes of one name
+        @test attribute!(c, "r") == ("1",)     # the first of two attributes of one name
         next!(c); @test tag(c) == "e" && depth(c) == 2      # `<d …/>` has closed itself
-        @test XML.attribute!(c, "r") == (nothing,)
+        @test attribute!(c, "r") == (nothing,)
         @test next!(c) === nothing
 
         # after `eachattribute!` has read part of the tag
         c = Cursor("""<a x="1" y="2" z="3"><b/></a>"""); next!(c)
         @test first(eachattribute!(c)) == ("x" => "1")
-        @test XML.attribute!(c, "z", "x") == ("3", "1")
+        @test attribute!(c, "z", "x") == ("3", "1")
         next!(c); @test tag(c) == "b"
 
         # skip_element! after attribute! has read a tag that closes itself: the element is
         # behind the cursor already, and the walk goes on at the same depth
         c = Cursor("""<r><c a="1"/><d a="2"><e/></d><f/></r>"""); next!(c); next!(c)   # on <c/>
-        @test XML.attribute!(c, "a") == ("1",)
+        @test attribute!(c, "a") == ("1",)
         skip_element!(c)
         next!(c); @test (tag(c), depth(c)) == ("d", 2)
-        @test XML.attribute!(c, "a") == ("2",)          # `<d>` is still open after its tag
+        @test attribute!(c, "a") == ("2",)          # `<d>` is still open after its tag
         skip_element!(c)
         next!(c); @test (tag(c), depth(c)) == ("f", 2)
         @test next!(c) === nothing
@@ -550,7 +550,7 @@ using XML: Cursor, next!, for_each_child!, @for_each_child!, skip_element!, eof,
         # not an element: `nothing` for each name
         c = Cursor("""<?xml version="1.0"?><a/>"""); next!(c)
         @test nodetype(c) === Declaration
-        @test XML.attribute!(c, "version") == (nothing,)
+        @test attribute!(c, "version") == (nothing,)
         @test get(c, "version", nothing) == "1.0"
 
         # a tag that `next!` refuses raises the same error, and the walk still refuses it
@@ -560,7 +560,7 @@ using XML: Cursor, next!, for_each_child!, @for_each_child!, skip_element!, eof,
             c2 = Cursor(bad); next!(c2)
             walked = err_of(() -> next!(c1))
             @test startswith(walked, "ArgumentError")
-            @test err_of(() -> XML.attribute!(c2, "b")) == walked
+            @test err_of(() -> attribute!(c2, "b")) == walked
             @test err_of(() -> next!(c2)) == walked
         end
 
@@ -568,49 +568,49 @@ using XML: Cursor, next!, for_each_child!, @for_each_child!, skip_element!, eof,
         doc = """<a k="v" m="x&lt;y"/>"""
         for src in (SubString("<z/>" * doc, 5), StringView(Vector{UInt8}(doc)))
             c = Cursor(src); next!(c)
-            @test XML.attribute!(c, "k", "m", "n") == ("v", "x<y", nothing)
-            @test XML.attribute!(c, "k", "m") == (get(c, "k", nothing), get(c, "m", nothing))
+            @test attribute!(c, "k", "m", "n") == ("v", "x<y", nothing)
+            @test attribute!(c, "k", "m") == (get(c, "k", nothing), get(c, "m", nothing))
         end
     end
 
     @testset "simple_value! reads a simple element and leaves the cursor after it" begin
         xml = "<r><a>one</a><b>x &amp; y</b><c><![CDATA[<d>]]></c><e k=\"1\">t</e><f><g/></f><h></h><i/>z</r>"
         c = Cursor(xml); next!(c); next!(c)                 # on <a>
-        @test XML.simple_value!(c) == "one"
+        @test simple_value!(c) == "one"
         @test nodetype(c) === Element && tag(c) == "a" && depth(c) == 2
         next!(c); @test tag(c) == "b" && depth(c) == 2
-        @test XML.simple_value!(c) == "x & y"
+        @test simple_value!(c) == "x & y"
         next!(c); @test tag(c) == "c"
-        @test XML.simple_value!(c) == "<d>"               # a CDATA section
+        @test simple_value!(c) == "<d>"               # a CDATA section
         @test nodetype(c) === Element && tag(c) == "c" && depth(c) == 2
         # not simple: `nothing`, and the cursor has not moved
         next!(c); @test tag(c) == "e"
-        @test XML.simple_value!(c) === nothing            # an attribute
+        @test simple_value!(c) === nothing            # an attribute
         next!(c); @test nodetype(c) === Text && value(c) == "t" && depth(c) == 3
         next!(c); @test tag(c) == "f" && depth(c) == 2
-        @test XML.simple_value!(c) === nothing            # a child element
+        @test simple_value!(c) === nothing            # a child element
         next!(c); @test tag(c) == "g" && depth(c) == 3
         next!(c); @test tag(c) == "h" && depth(c) == 2
-        @test XML.simple_value!(c) === nothing            # no text
+        @test simple_value!(c) === nothing            # no text
         next!(c); @test tag(c) == "i" && depth(c) == 2
-        @test XML.simple_value!(c) === nothing            # `<i/>`
+        @test simple_value!(c) === nothing            # `<i/>`
         next!(c); @test nodetype(c) === Text && value(c) == "z" && depth(c) == 2
-        @test XML.simple_value!(c) === nothing            # not an element
+        @test simple_value!(c) === nothing            # not an element
         @test next!(c) === nothing
 
         # after `attribute!` has read the start tag of an element without attribute
         c = Cursor("<r><a>one</a><b/></r>"); next!(c); next!(c)
-        @test XML.attribute!(c, "k") == (nothing,)
-        @test XML.simple_value!(c) == "one"
+        @test attribute!(c, "k") == (nothing,)
+        @test simple_value!(c) == "one"
         next!(c); @test tag(c) == "b" && depth(c) == 2
 
         # On an element that the cursor has left already, simple_value! gives the text again
         # and does not move: after itself and after skip_element!. skip_element! then has
         # nothing more to skip.
-        for leave! in (XML.simple_value!, skip_element!)
+        for leave! in (simple_value!, skip_element!)
             c = Cursor("<r><a>one</a><b/><d/></r>"); next!(c); next!(c)
             leave!(c)
-            @test XML.simple_value!(c) == "one"
+            @test simple_value!(c) == "one"
             skip_element!(c)
             next!(c); @test (tag(c), depth(c)) == ("b", 2)
         end
@@ -618,7 +618,7 @@ using XML: Cursor, next!, for_each_child!, @for_each_child!, skip_element!, eof,
         # other string types
         for src in (SubString("<z/><r><a>x &lt; y</a><b/></r>", 5), StringView(Vector{UInt8}("<r><a>x &lt; y</a><b/></r>")))
             c = Cursor(src); next!(c); next!(c)
-            @test XML.simple_value!(c) == "x < y"
+            @test simple_value!(c) == "x < y"
             next!(c); @test tag(c) == "b" && depth(c) == 2
         end
 
@@ -626,11 +626,11 @@ using XML: Cursor, next!, for_each_child!, @for_each_child!, skip_element!, eof,
         err_of(f) = try f(); "no error" catch e; sprint(showerror, e) end
         c = Cursor("<r><a>one</a x></r>"); next!(c); next!(c)
         @test is_simple_value(c) == "one"             # it stops at the name of the end tag
-        @test occursin("expected '>'", err_of(() -> XML.simple_value!(c)))
+        @test occursin("expected '>'", err_of(() -> simple_value!(c)))
         c = Cursor("<r><a>one</a"); next!(c); next!(c)
-        @test occursin("unterminated close tag", err_of(() -> XML.simple_value!(c)))
+        @test occursin("unterminated close tag", err_of(() -> simple_value!(c)))
         c = Cursor("<r><a><![CDATA[x]]></a y>"); next!(c); next!(c)
-        @test occursin("expected '>'", err_of(() -> XML.simple_value!(c)))
+        @test occursin("expected '>'", err_of(() -> simple_value!(c)))
     end
 
     # `next!`, `get`, `is_simple_value` and `eachattribute!` read a text, a tag and a simple
@@ -759,8 +759,8 @@ using XML: Cursor, next!, for_each_child!, @for_each_child!, skip_element!, eof,
             "attributes" => attributes,
             "keys" => keys,
             "is_simple_value" => is_simple_value,
-            "attribute!" => c -> XML.attribute!(c, "a", "r"),
-            "simple_value!" => XML.simple_value!,
+            "attribute!" => c -> attribute!(c, "a", "r"),
+            "simple_value!" => simple_value!,
             "skip_element!" => skip_element!,
             "for_each_child!" => c -> for_each_child!(ch -> nothing, c),
             "nothing" => c -> nothing,

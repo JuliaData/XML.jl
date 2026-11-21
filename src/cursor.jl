@@ -39,7 +39,9 @@ A forward, in-place [`StAX`-style] pull cursor over the XML `data`. Advance it
 with [`next!`](@ref); read the current position with [`nodetype`](@ref),
 [`tag`](@ref), [`value`](@ref), [`attributes`](@ref), [`depth`](@ref),
 [`is_simple`](@ref), [`simple_value`](@ref); [`eachattribute!`](@ref) reads the attributes of an
-element once, where the cursor stands. (`parse(Cursor, data)` also works.) The `read` forms
+element once, where the cursor stands. [`is_tag`](@ref), [`attribute!`](@ref) and
+[`simple_value!`](@ref) read a name, named attributes and the text of a simple element in
+one pass. (`parse(Cursor, data)` also works.) The `read` forms
 apply the same byte-level BOM normalization as the tree readers: UTF-8 BOM strip, UTF-16 LE/BE
 transcoding.
 Like [`LazyNode`](@ref), the cursor reads a document that the declarations of its DOCTYPE
@@ -575,8 +577,8 @@ Whether the cursor's current node is an element named `name`. It compares the by
 name in the document and builds no string: in a loop over many elements, it costs less than
 `tag(c) == name`.
 
-!!! warning "Experimental"
-    This function is on trial: its name and its behavior may change.
+The name is compared whole, with its prefix: on `<x:c>`, `is_tag(c, "x:c")` is `true` and
+`is_tag(c, "c")` is `false`.
 """
 @inline function is_tag(c::Cursor, name::AbstractString)
     c.nodetype === Element || return false
@@ -637,7 +639,7 @@ with `nothing` for a name that the tag does not hold. Each value is the one that
 ```julia
 c = Cursor("<row><c r=\\"B7\\" s=\\"3\\"><v>42.5</v></c></row>")
 next!(c); next!(c)                           # on <c>
-r, t, s = XML.attribute!(c, "r", "t", "s")   # "B7", nothing, "3"
+r, t, s = attribute!(c, "r", "t", "s")       # "B7", nothing, "3"
 ```
 
 On an element whose attributes the cursor has not read yet, the tag is read where the cursor
@@ -647,9 +649,6 @@ call reads the tag again from its `<`, as [`attributes`](@ref) does.
 The tag is checked as `next!` checks it: a tag that `next!` refuses raises the same error
 here. On a node that is not an element, every value is `nothing`: an XML declaration is read
 with `get`.
-
-!!! warning "Experimental"
-    This function is on trial: its name and its behavior may change.
 """
 @inline function attribute!(c::Cursor, names::Vararg{AbstractString, N}) where {N}
     data = _data(c)
@@ -684,12 +683,9 @@ read as `next!` reads it, and raises the same errors.
 ```julia
 c = Cursor("<c><v>42.5</v><f>A1</f></c>")
 next!(c); next!(c)       # on <v>
-XML.simple_value!(c)     # "42.5"
+simple_value!(c)         # "42.5"
 next!(c)                 # on <f>
 ```
-
-!!! warning "Experimental"
-    This function is on trial: its name and its behavior may change.
 """
 @inline function simple_value!(c::Cursor)
     c.nodetype === Element || return nothing

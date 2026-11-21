@@ -33,12 +33,12 @@ measure_is_simple(x) = @allocated _use(is_simple_value(x))
 measure_simple_test(x) = @allocated is_simple(x)
 function measure_attribute(c)
     @allocated begin
-        r, s = XML.attribute!(c, "r", "s")
+        r, s = attribute!(c, "r", "s")
         _use(r) + _use(s)
     end
 end
-measure_is_tag(c)      = @allocated XML.is_tag(c, "c")
-measure_simple_bang(c) = @allocated _use(XML.simple_value!(c))
+measure_is_tag(c)      = @allocated is_tag(c, "c")
+measure_simple_bang(c) = @allocated _use(simple_value!(c))
 measure_sourcetext(x) = @allocated _use(sourcetext(x))
 measure_sourcespan(x) = @allocated length(sourcespan(x))
 measure_string_value(x) = @allocations _use(string_value(x))

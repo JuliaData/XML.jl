@@ -1,11 +1,11 @@
 # The cost of reading one worksheet cell with a `Cursor`, reading by reading: `next!` alone,
-# two readings made of the calls of v0.4.10, one made of the calls on trial (`XML.is_tag`,
-# `XML.attribute!`, `XML.simple_value!`), and a byte scan written for this one shape, which
-# checks nothing and decodes nothing. The sheet is made here: 100,000 cells of the shape
-# `<c r="A1" s="3"><v>42.5</v></c>`, 20 to a row.
+# two readings made of the calls of v0.4.10, one made of the calls that read a tag in one
+# pass (`XML.is_tag`, `XML.attribute!`, `XML.simple_value!`), and a byte scan written for
+# this one shape, which checks nothing and decodes nothing. The sheet is made here: 100,000
+# cells of the shape `<c r="A1" s="3"><v>42.5</v></c>`, 20 to a row.
 #
 # Run it in one fresh process per version of XML.jl, from an environment that holds XML.jl
-# and BenchmarkTools. On a version without the calls on trial, their reading is left out.
+# and BenchmarkTools. On a version without these calls, their reading is left out.
 #
 #     julia --project=benchmarks benchmarks/cursor_cells.jl
 using XML, BenchmarkTools
@@ -67,8 +67,8 @@ function walk_get(s)
     return acc
 end
 
-# The calls on trial: the name by `is_tag`, `r` and `s` by `attribute!`, the text of
-# `<v>` by `simple_value!`.
+# The calls that read a tag in one pass: the name by `is_tag`, `r` and `s` by `attribute!`,
+# the text of `<v>` by `simple_value!`.
 const ON_TRIAL = isdefined(XML, :attribute!)
 if ON_TRIAL
     @eval function walk_trial(s)
