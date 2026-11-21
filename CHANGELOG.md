@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **`Cursor` reads a text, a tag and a simple element from their bytes** ([#263](https://github.com/JuliaData/XML.jl/issues/263)). `next!`, `eachattribute!`, `get`, `haskey`, `c[key]`, `is_simple`, `is_simple_value` and `simple_value` no longer read one token per name, per attribute and per `>`. They give the same nodes, the same values and the same errors. On a sheet of 100,000 cells of the shape `<c r="A1" s="3"><v>42.5</v></c>`, a walk by `next!` alone is 4.7× faster. A reading by two `get` and `is_simple_value` is 4.7× faster, and the same reading by `eachattribute!` is 3.5× faster. These ratios are measured on an Apple M5 under Julia 1.13.4, by `benchmarks/cursor_cells.jl`; x86-64 is not measured. `attributes` and `keys` still read the tokens, and so does `eachattribute!` on an XML declaration.
+- **`Cursor` reads a text, a tag and a simple element from their bytes** ([#263](https://github.com/JuliaData/XML.jl/issues/263)). `next!`, `eachattribute!`, `get`, `haskey`, `c[key]`, `is_simple`, `is_simple_value` and `simple_value` no longer read one token per name, per attribute and per `>`. They give the same nodes, the same values and the same errors. On a sheet of 100,000 cells of the shape `<c r="A1" s="3"><v>42.5</v></c>`, a walk by `next!` alone is 4.7× faster. A reading by two `get` and `is_simple_value` is 4.6× faster, and the same reading by `eachattribute!` is 3.5× faster. These ratios are measured on an Apple M5 under Julia 1.13.4, by `benchmarks/cursor_cells.jl`; x86-64 is not measured. `attributes` and `keys` still read the tokens, and so does `eachattribute!` on an XML declaration.
 
 ### Fixed
 

@@ -536,6 +536,17 @@ using XML: Cursor, next!, for_each_child!, @for_each_child!, skip_element!, eof,
         @test XML.attribute!(c, "z", "x") == ("3", "1")
         next!(c); @test tag(c) == "b"
 
+        # skip_element! after attribute! has read a tag that closes itself: the element is
+        # behind the cursor already, and the walk goes on at the same depth
+        c = Cursor("""<r><c a="1"/><d a="2"><e/></d><f/></r>"""); next!(c); next!(c)   # on <c/>
+        @test XML.attribute!(c, "a") == ("1",)
+        skip_element!(c)
+        next!(c); @test (tag(c), depth(c)) == ("d", 2)
+        @test XML.attribute!(c, "a") == ("2",)          # `<d>` is still open after its tag
+        skip_element!(c)
+        next!(c); @test (tag(c), depth(c)) == ("f", 2)
+        @test next!(c) === nothing
+
         # not an element: `nothing` for each name
         c = Cursor("""<?xml version="1.0"?><a/>"""); next!(c)
         @test nodetype(c) === Declaration
@@ -592,6 +603,17 @@ using XML: Cursor, next!, for_each_child!, @for_each_child!, skip_element!, eof,
         @test XML.attribute!(c, "k") == (nothing,)
         @test XML.simple_value!(c) == "one"
         next!(c); @test tag(c) == "b" && depth(c) == 2
+
+        # On an element that the cursor has left already, simple_value! gives the text again
+        # and does not move: after itself and after skip_element!. skip_element! then has
+        # nothing more to skip.
+        for leave! in (XML.simple_value!, skip_element!)
+            c = Cursor("<r><a>one</a><b/><d/></r>"); next!(c); next!(c)
+            leave!(c)
+            @test XML.simple_value!(c) == "one"
+            skip_element!(c)
+            next!(c); @test (tag(c), depth(c)) == ("b", 2)
+        end
 
         # other string types
         for src in (SubString("<z/><r><a>x &lt; y</a><b/></r>", 5), StringView(Vector{UInt8}("<r><a>x &lt; y</a><b/></r>")))
@@ -737,6 +759,8 @@ using XML: Cursor, next!, for_each_child!, @for_each_child!, skip_element!, eof,
             "attributes" => attributes,
             "keys" => keys,
             "is_simple_value" => is_simple_value,
+            "attribute!" => c -> XML.attribute!(c, "a", "r"),
+            "simple_value!" => XML.simple_value!,
             "skip_element!" => skip_element!,
             "for_each_child!" => c -> for_each_child!(ch -> nothing, c),
             "nothing" => c -> nothing,

@@ -676,6 +676,7 @@ end
 The text of the cursor's current element when it is simple (see [`is_simple`](@ref)), and the
 cursor is left after the element: the next [`next!`](@ref) gives the node that follows it.
 When the element is not simple, it returns `nothing` and the cursor does not move.
+When the cursor has left the element already, it returns the text and does not move.
 
 An element that holds only a text and has no attribute is read in one pass. The end tag is
 read as `next!` reads it, and raises the same errors.
@@ -715,6 +716,9 @@ next!(c)                 # on <f>
     # text or CDATA node and by its end tag, which `is_simple_value` saw right after it.
     v = is_simple_value(c)
     v === nothing && return nothing
+    # The cursor has left the element already, after an earlier `simple_value!` or a
+    # `skip_element!`: the text is all there is to give, and nothing is left to cross.
+    c.enclosing < c.depth && return v
     tok = c.token
     d = c.depth
     c.held = false
@@ -911,8 +915,9 @@ off.
 function skip_element!(c::Cursor)
     c.nodetype === Element || return c
     # While the element is open, the stream stands at its depth. It stands one level up once
-    # the cursor has left the element, as after an earlier `skip_element!`. Nothing is then
-    # left to skip, and closing the element once more would lower every depth that follows.
+    # the cursor has left the element: after an earlier `skip_element!`, after `attribute!`
+    # on a tag that closes itself, or after `simple_value!`. Nothing is then left to skip,
+    # and closing the element once more would lower every depth that follows.
     c.enclosing < c.depth && return c
     data = _data(c)
     after = _CURSOR_XT._element_end(data, _CURSOR_XT._data_start(c.token, data))
