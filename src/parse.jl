@@ -229,9 +229,11 @@ end
 
 # Document-shape well-formedness (`:structural`/`:strict`): exactly one root element, so an
 # input that holds none is rejected, whether it is empty, made of white space, or made of a
-# comment, a declaration or a DOCTYPE alone; any top-level Text must be whitespace only; and
-# a DOCTYPE must be a single declaration in the prolog (before the root). (`:lenient` skips
-# this — gated + DCE'd.)
+# comment, a declaration or a DOCTYPE alone; and a DOCTYPE must be a single declaration in
+# the prolog (before the root). Outside the root element, a CDATA section and a text other
+# than white space are refused earlier, as the document is read (`_check_outside_root`,
+# `_cdata_outside_root`).
+# (`:lenient` skips this — gated + DCE'd.)
 function _check_document_wellformed(children)
     nroots = 0
     ndtds = 0
@@ -239,8 +241,6 @@ function _check_document_wellformed(children)
         nt = nodetype(c)
         if nt === Element
             nroots += 1
-        elseif nt === Text
-            isempty(strip(value(c))) || error("not well-formed: non-whitespace text at the top level")
         elseif nt === DTD
             ndtds += 1
             nroots > 0 && error("not well-formed: DOCTYPE must precede the root element")
@@ -254,6 +254,45 @@ function _check_document_wellformed(children)
     ndtds > 1 && error("not well-formed: multiple DOCTYPE declarations (found $ndtds)")
     nroots == 0 && error("not well-formed: no root element")
 end
+
+# Outside the root element, a document holds the XML declaration, the DOCTYPE, comments,
+# processing instructions and white space, and nothing else (XML 1.0 §2.1, §2.8):
+#   [1]  document ::= prolog element Misc*
+#   [22] prolog   ::= XMLDecl? Misc* (doctypedecl Misc*)?
+#   [27] Misc     ::= Comment | PI | S
+# A text found there is judged as it is written, byte by byte: white space is one of the
+# four characters of [3] `S` (§2.3), which `isspace` goes beyond, and a reference is
+# refused whatever it stands for, `&#32;` included.
+function _check_outside_root(text::AbstractString)
+    cu = codeunits(text)
+    @inbounds for i in eachindex(cu)
+        XMLTokenizer.is_whitespace(cu[i]) || _text_outside_root(text, i)
+    end
+    return nothing
+end
+
+# `i` is the index of the first byte that is not white space. The bytes before it are
+# ASCII, so it starts a character, well formed or not. A `&` is shown with what follows
+# it, up to its `;` when one is near. Any other character is shown with its code, since
+# it may not print, and with the rule when Unicode counts it as white space, as it does
+# U+00A0. U+2028 and U+2029 are named apart: `isspace` counts them under Julia
+# 1.14.0-beta1, and not under Julia 1.13.
+@noinline function _text_outside_root(text::AbstractString, i::Int)
+    if codeunit(text, i) != UInt8('&')
+        c = text[i]
+        blank = isspace(c) || Char(0x2028) <= c <= Char(0x2029)
+        error("not well-formed: non-whitespace text at the top level: ", repr(c), " (",
+              _xpath_code(c), ")",
+              blank ? "; only the space, tab, CR and LF are XML white space" : "")
+    end
+    shown = first(SubString(text, i), 12)
+    stop = findfirst(';', shown)
+    stop === nothing || (shown = SubString(shown, 1, stop))
+    error("not well-formed: \"&\" outside the root element: \"", shown, "\" (XML 1.0 §2.8)")
+end
+
+@noinline _cdata_outside_root() =
+    error("not well-formed: CDATA section outside the root element (XML 1.0 §2.8)")
 
 # XML §2.2 Char production — the code points a character reference may legally denote. Stricter
 # than Julia's `isvalid(Char, cp)`, which accepts #x0 and other C0 controls that XML forbids.
@@ -392,11 +431,13 @@ end
 # decimal form carrying a letter is rejected too, and so is the form `&#X`, which the decoder
 # reads but the rule CharRef does not allow (XML 1.0 §4.1). A named reference that is not
 # predefined is checked against what the DTD declares: `_apply_declarations` has already
-# replaced every reference to an internal entity, so a name arriving here is external, unparsed,
-# or has no declaration behind it (XML 1.0 §4.1, the "Entity Declared" well-formedness
-# constraint), which is refused only when `names` holds. A `&` that starts neither form — one
-# followed by no name, or by a name or a digit run without its `;` — is refused too: a literal
-# `&` may only start a reference (XML 1.0 §2.4).
+# replaced every reference to an internal entity that an element or an attribute value
+# holds, and a text outside the root element that holds a `&`, where it replaces none, is
+# refused before this check (`_check_outside_root`). So a name arriving here is external,
+# unparsed, or has no declaration behind it (XML 1.0 §4.1, the "Entity Declared"
+# well-formedness constraint), which is refused only when `names` holds. A `&` that starts
+# neither form — one followed by no name, or by a name or a digit run without its `;` — is
+# refused too: a literal `&` may only start a reference (XML 1.0 §2.4).
 _check_refs_strict(s::AbstractString, names::Bool) = _check_refs(s, names, nothing, nothing, false)
 
 # What the check knows of the DTD (`_strict_context`): whether "Entity Declared" binds, and the
@@ -589,6 +630,7 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
         if k === TokenKinds.TEXT
             rawtext = raw(token, xml)
             W === :strict && _check_chars_strict(rawtext)
+            W !== :lenient && isempty(child_marks) && _check_outside_root(rawtext)
             W === :strict && token.has_entities && _check_refs_strict(rawtext, strict, false)
             v = _text_value(S, rawtext, token.has_entities, convert_text)
             push!(scratch_children, Node{S}(Text, nothing, nothing, v, nothing))
@@ -684,6 +726,7 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
         elseif k === TokenKinds.CDATA_CONTENT
             cdata = raw(token, xml)
             W === :strict && _check_chars_strict(cdata)
+            W !== :lenient && isempty(child_marks) && _cdata_outside_root()
             push!(scratch_children, Node{S}(CData, nothing, nothing, _to(S, cdata), nothing))
 
         elseif k === TokenKinds.DOCTYPE_CONTENT

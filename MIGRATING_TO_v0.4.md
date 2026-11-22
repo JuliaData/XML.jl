@@ -118,9 +118,10 @@ Review these even if your code compiles unchanged:
    and keeping the last value of a repeated attribute.
 
 5. **Stricter parsing by default.** `parse`/`read` default to `wellformed = :structural`, which
-   rejects: multiple root elements; a document with **no** root element; non-whitespace text outside
-   the root; an element name that is empty or starts with a digit, `-` or `.`; a literal `<` in an
-   attribute value; and a misplaced, duplicate, or nested DOCTYPE or XML declaration.
+   rejects: multiple root elements; a document with **no** root element; non-whitespace text
+   outside the root, a reference such as `&#32;` included, or a CDATA section there; an element
+   name that is empty or starts with a digit, `-` or `.`; a literal `<` in an attribute value;
+   and a misplaced, duplicate, or nested DOCTYPE or XML declaration.
 
    ```julia
    parse(str, Node)                          # :structural (default)
@@ -142,9 +143,12 @@ Review these even if your code compiles unchanged:
 
    From **v0.4.10**, an empty input is rejected too, and so is one made of white space or of a byte order mark. `wellformed = :lenient` reads it as before.
 
+   Up to **v0.4.10**, a CDATA section, a reference that stands for white space, such as `&#32;`, and a no-break space were accepted outside the root. `wellformed = :lenient` still reads them.
+
 6. **Declarations of the internal subset are applied** (from **v0.4.7**). General entities are
-   expanded where they are referenced, attribute defaults are supplied, and the values of
-   attributes declared with a type other than CDATA are normalized (XML 1.0 §4.4.2, §3.3.2,
+   expanded where the content of an element or an attribute value refers to them, attribute
+   defaults are supplied, and the values of
+   attributes declared with a type other than CDATA are normalized (XML 1.0 §4.4, §3.3.2,
    §3.3.3). With `<!DOCTYPE r [<!ENTITY e "zz">]><r>&e;</r>`, the text of `r` is `"zz"`, where
    0.3.x and v0.4.6 returned `"&e;"`. Every reader, at every level, rejects an entity that refers
    to itself, entities nested more than 40 levels deep, declarations that cost more than their
@@ -221,9 +225,6 @@ so it is the slowest choice for repeated walks.
   occurrences in the tree; use FlatNode for positional navigation.`). Trees whose repeated nodes
   differ in content are unaffected, and `FlatNode` has no such ambiguity, since it navigates by
   position.
-- **Top-level CDATA is not rejected.** A CDATA section in the prolog or epilog — outside the root
-  element — is accepted even at `:strict`, although XML 1.0 (`Misc` excludes `CDATA`) makes it
-  ill-formed. CDATA *inside* an element is of course valid. A stricter check may be added later.
 
 ## See also
 

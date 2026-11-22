@@ -300,6 +300,107 @@ end
         @test nodetype(parse("""<?xml version="1.0"?><a/>""", Node)) == Document
     end
 
+    @testset "outside the root: no CDATA section, no reference, no text but white space (§2.1, §2.8)" begin
+        # [1] document ::= prolog element Misc*, [22] prolog ::= XMLDecl? Misc* (doctypedecl
+        # Misc*)? and [27] Misc ::= Comment | PI | S. Outside the root element, a CDATA
+        # section, a reference, and a character that is not one of the four of [3] S are
+        # refused from `:structural` on, as any other text is.
+        refused(xml, T, level) = try
+            parse(xml, T; wellformed = level); false
+        catch err
+            err isa ErrorException
+        end
+        types = (Node, Node{SubString{String}}, FlatNode)
+        levels = (:structural, :strict)
+        cdata = ("<![CDATA[x]]><a/>", "<a/><![CDATA[x]]>", "<a/><![CDATA[]]>",
+                 "<!--c--><![CDATA[ ]]><a/>", "<a>t</a>\n<![CDATA[]]>\n")
+        refs = ("<a/>&#32;", "&#32;<a/>", "<a/>&#9;", "<a/>&#x20;&#xA;", "<a/>&#65;", "<a/>&amp;",
+                "<?p q?>&#32;<a/>", "<?xml version=\"1.0\"?>\n&#32;\n<a/>", "<a/>&")
+        # White space for `isspace`, not for XML. U+2028 and U+2029 count for `isspace`
+        # under Julia 1.14.0-beta1, and not under Julia 1.13.
+        blanks = [xml for cp in (0x0085, 0x00a0, 0x1680, 0x2000, 0x2028, 0x2029, 0x3000)
+                  for xml in (string("<a/>", Char(cp)), string(Char(cp), "<a/>"),
+                              string("<a/> ", Char(cp), "\n"))]
+        @test [(xml, T, level) for xml in (cdata..., refs..., blanks...) for T in types
+               for level in levels if !refused(xml, T, level)] == []
+        @test_throws "CDATA section outside the root element" parse("<a/><![CDATA[x]]>", Node)
+        @test_throws "CDATA section outside the root element" parse("<![CDATA[x]]><a/>", FlatNode)
+        @test_throws "\"&\" outside the root element: \"&#32;\"" parse("<a/>&#32;", Node)
+        @test_throws "\"&\" outside the root element: \"&#32;\"" parse("<a/> &#32;", FlatNode)
+        # Any other text is named by its first character and the code of that character,
+        # which may not print. White space for Unicode, such as U+00A0, gets the rule too.
+        message(xml, T; level = :structural) = try
+            parse(xml, T; wellformed = level); ""
+        catch err
+            err.msg
+        end
+        top = "not well-formed: non-whitespace text at the top level: "
+        rule = "; only the space, tab, CR and LF are XML white space"
+        @test message("<a/>x&#32;", FlatNode) == top * "'x' (U+0078)"
+        @test message("x y<a/>", Node) == top * "'x' (U+0078)"
+        for (cp, code) in ((0x000b, "U+000B"), (0x0085, "U+0085"), (0x00a0, "U+00A0"),
+                           (0x1680, "U+1680"), (0x2028, "U+2028"), (0x2029, "U+2029"),
+                           (0x3000, "U+3000")), T in types
+            @test message(string("<a/> ", Char(cp)), T) ==
+                  string(top, repr(Char(cp)), " (", code, ")", rule)
+        end
+        @test message(string("<a/>", Char(0xa0)), Node; level = :strict) ==
+              string(top, repr(Char(0xa0)), " (U+00A0)", rule)
+        for (cp, code) in ((0x0001, "U+0001"), (0x200b, "U+200B"), (0xfeff, "U+FEFF"),
+                           (0x1f600, "U+1F600"))
+            @test message(string("<a/>", Char(cp)), Node) ==
+                  string(top, repr(Char(cp)), " (", code, ")")
+        end
+        @test message("<a/>\xff", Node) == top * "'\\xff' (an invalid byte sequence)"
+        # The message shows the reference up to its `;`, or twelve characters from the `&`.
+        @test_throws "\"&#32;\" (XML 1.0 §2.8)" parse("<a/>&#32;\n<!--c-->", Node)
+        @test_throws "\"&abcdefghijk\" (XML 1.0 §2.8)" parse("<a/>&abcdefghijklmnop", Node)
+        # The four characters of S stay, a line end written CR LF included.
+        for xml in (" \t\n<a/> \t\n", "\r\n<a/>\r\n", "<!--c-->\n<?p q?>\t<a/>\n<!--d-->\n"),
+                T in types, level in levels
+            @test nodetype(parse(xml, T; wellformed = level)) == Document
+        end
+        # Inside the root element, all of them are content.
+        inside = string("<a><![CDATA[x]]>&#32;&amp;", Char(0xa0), "</a>")
+        for T in types, level in levels
+            @test nodetype(parse(inside, T; wellformed = level)) == Document
+        end
+        # `:lenient`, `Cursor` and `LazyNode` still read them.
+        @test nodetype(children(parse("<a/><![CDATA[x]]>", Node; wellformed = :lenient))[end]) == CData
+        @test nodetype(children(parse("<a/><![CDATA[x]]>", FlatNode; wellformed = :lenient))[end]) == CData
+        @test nodetype(children(parse("<![CDATA[x]]><a/>", LazyNode))[1]) == CData
+        @test value(children(parse("<a/>&#32;", Node; wellformed = :lenient))[end]) == " "
+        @test value(children(parse("<a/>&#32;", LazyNode))[end]) == " "
+        c = parse("<a/><![CDATA[x]]>&#32;", Cursor)
+        seen = Any[]
+        while XML.next!(c) !== nothing
+            push!(seen, nodetype(c))
+        end
+        @test seen == [Element, CData, Text]
+
+        # In a text outside the root element, a reference to a declared entity is not
+        # included, whatever its replacement text: the document is refused, and a reader
+        # that checks no structure reports the reference as it is written.
+        declared = ("<!DOCTYPE a [<!ENTITY e \"\">]><a/>&e;",                # W3C not-wf-sa-110
+                    "<!DOCTYPE a [<!ENTITY e \" \">]><a/>&e;",
+                    "<!DOCTYPE a [<!ENTITY e \"<!--c-->\">]><a/>&e;",
+                    "<!DOCTYPE a [<!ENTITY e \"<?p q?>\">]>&e;<a/>",
+                    "<!DOCTYPE a [<!ENTITY e \"<a/>\">]>&e;",                 # the root: not-wf-sa-109
+                    "<!DOCTYPE a [<!ENTITY e \"<a/>\">]><!--c-->&e;<!--d-->")
+        @test [(xml, T, level) for xml in declared for T in types for level in levels
+               if !refused(xml, T, level)] == []
+        @test_throws "\"&\" outside the root element: \"&e;\"" parse(declared[1], Node)
+        @test_throws "\"&\" outside the root element: \"&e;\"" parse(declared[5], FlatNode)
+        as_written(doc) = any(n -> nodetype(n) === Text && value(n) == "&e;", children(doc))
+        for xml in declared
+            @test as_written(parse(xml, Node; wellformed = :lenient))
+            @test as_written(parse(xml, FlatNode; wellformed = :lenient))
+            @test as_written(parse(xml, LazyNode))
+        end
+        # Inside the root element the same reference is included.
+        @test simple_value(only(elements(parse("<!DOCTYPE a [<!ENTITY e \"x\">]><a>&e;</a>", Node)))) == "x"
+    end
+
     @testset "rejects a document with no root element (§2.1)" begin
         # §2.1: a well-formed document has exactly one root. A document that holds only a
         # comment, a declaration or a DOCTYPE is not well-formed (libxml2: "no root").
@@ -1830,6 +1931,22 @@ end
         # nor inside the subset: §4.5 bypasses it there, the table resolves it instead
         @test exp("<!DOCTYPE d [<!ENTITY e \"X\"><!ENTITY f \"&e;\">]><d>&f;</d>") ==
               "<!DOCTYPE d [<!ENTITY e \"X\"><!ENTITY f \"&e;\">]><d>X</d>"
+        # nor in a text outside the root element: §4.4 includes a reference in content,
+        # "anywhere after the start-tag and before the end-tag of an element", and in an
+        # attribute value
+        sub = "<!DOCTYPE d [<!ENTITY e \"X\"><!ENTITY m \"<d/>\">]>"
+        for rest in ("&e;<d/>", "<d/>&e;", "<d>t</d>&e;", "<!--c-->&e;<?p q?><d/>\n&e;\n", "&m;", "<d/>&m;")
+            @test exp(sub * rest) == sub * rest
+        end
+        # a reference inside the root is included, next to one outside that is not
+        @test exp(sub * "&e;<d a=\"&e;\"><b>&e;</b><b/>&e;</d>&e;") ==
+              sub * "&e;<d a=\"X\"><b>X</b><b/>X</d>&e;"
+        @test exp(sub * "<d>&m;&e;</d>&m;") == sub * "<d><d/>X</d>&m;"
+        # an end tag that closes nothing does not put the element after it outside the root
+        @test exp(sub * "</x><d>&e;</d>") == sub * "</x><d>X</d>"
+        # the text of an entity included in content is content, outside its own tags too
+        nested = "<!DOCTYPE d [<!ENTITY e \"X\"><!ENTITY m \"&e;<b/>&e;\">]>"
+        @test exp(nested * "<d>&m;</d>&m;") == nested * "<d>X<b/>X</d>&m;"
     end
 
     @testset "the offset constructor reads its source as it stands" begin
