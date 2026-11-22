@@ -2074,6 +2074,21 @@ end
         # the text of an entity included in content is content, outside its own tags too
         nested = "<!DOCTYPE d [<!ENTITY e \"X\"><!ENTITY m \"&e;<b/>&e;\">]>"
         @test exp(nested * "<d>&m;</d>&m;") == nested * "<d>X<b/>X</d>&m;"
+        # nor in the XML declaration, whose `version`, `encoding` and `standalone` are no
+        # attribute values ([24], [80], [32]): what is written there stays, and `:strict`
+        # refuses it
+        decl = "<?xml version=\"&v;\"?><!DOCTYPE d [<!ENTITY v \"1.0\"><!ENTITY e \"X\">]><d>&e;</d>"
+        @test exp(decl) == replace(decl, "<d>&e;</d>" => "<d>X</d>")
+        for T in (Node, FlatNode)
+            @test_throws "version \"&v;\" in the XML declaration" parse(decl, T; wellformed = :strict)
+            @test nodetype(parse(decl, T)) == Document
+            for d in ("<?xml version=\"1.0\" encoding=\"&v;\"?>",
+                      "<?xml version=\"1.0\" standalone=\"&v;\"?>")
+                @test_throws "\"&v;\" in the XML declaration" parse(
+                    d * "<!DOCTYPE d [<!ENTITY v \"yes\">]><d/>", T; wellformed = :strict)
+            end
+        end
+        @test parse(decl, Node)[1]["version"] == "&v;"
     end
 
     @testset "the offset constructor reads its source as it stands" begin
@@ -3234,13 +3249,149 @@ end
         @test tag(read(IOBuffer(UInt8[0xFE,0xFF, 0x00,0x3C,0x00,0x61,0x00,0x2F,0x00,0x3E]), Node)[1]) == "a"  # UTF-16 BE BOM + <a/>
         @test tag(read(IOBuffer(UInt8[0xEF,0xBB,0xBF, 0x3C,0x61,0x2F,0x3E]), Node)[1]) == "a"                  # UTF-8 BOM + <a/>
         # §4.3.3: UTF-16 entities MUST start with a BOM; a leading NUL byte is the signature →
-        # raise a clear error rather than crash the UTF-8 parser downstream.
-        @test_throws "UTF-16 without a BOM" read(IOBuffer(UInt8[0x00,0x3C,0x00,0x61,0x00,0x2F,0x00,0x3E]), Node)  # UTF-16 BE, no BOM
-        @test_throws "UTF-16 without a BOM" read(IOBuffer(UInt8[0x3C,0x00,0x61,0x00,0x2F,0x00,0x3E,0x00]), Node)  # UTF-16 LE, no BOM
+        # raise a clear error rather than crash the UTF-8 parser downstream. XML.jl reads
+        # no UTF-32, and no UTF-16 without its mark, and says so: §4.3.3 lets a processor
+        # refuse an encoding that it cannot process.
+        unread = "unsupported encoding: these bytes look like UTF-32, or like UTF-16 without its " *
+                 "byte order mark; XML.jl reads UTF-8, and UTF-16 that starts with its mark (XML 1.0 §4.3.3)"
+        @test_throws unread read(IOBuffer(UInt8[0x00,0x3C,0x00,0x61,0x00,0x2F,0x00,0x3E]), Node)  # UTF-16 BE, no BOM
+        @test_throws unread read(IOBuffer(UInt8[0x3C,0x00,0x61,0x00,0x2F,0x00,0x3E,0x00]), Node)  # UTF-16 LE, no BOM
+        @test_throws unread read(IOBuffer(UInt8[0x00,0x00,0x00,0x3C,0x00,0x00,0x00,0x61]), Node)  # UTF-32 BE, no BOM
+        @test_throws unread read(IOBuffer(UInt8[0x3C,0x00,0x00,0x00,0x61,0x00,0x00,0x00]), Node)  # UTF-32 LE, no BOM
+        @test_throws unread read(IOBuffer(UInt8[0x00,0x00,0xFE,0xFF,0x00,0x00,0x00,0x3C]), Node)  # UTF-32 BE, BOM
+        @test_throws unread read(IOBuffer(UInt8[0x00,0x3C]), Node)                                # two bytes
         # An odd byte count after a UTF-16 BOM is truncated — raise a clear error, not a cryptic
         # `reinterpret` ArgumentError.
         @test_throws "odd number of bytes" read(IOBuffer(UInt8[0xFF,0xFE, 0x3C,0x00, 0x61]), Node)  # LE BOM + 3 bytes
         @test_throws "odd number of bytes" read(IOBuffer(UInt8[0xFE,0xFF, 0x00,0x3C, 0x00]), Node)  # BE BOM + 3 bytes
+
+        # Under `:strict`, `read` compares the encoding that the XML declaration names with
+        # the byte order mark of the bytes. §4.3.3: "it is a fatal error for an entity
+        # including an encoding declaration to be presented to the XML processor in an
+        # encoding other than that named in the declaration", when no transport protocol
+        # says the encoding; `read` has the bytes alone. UTF-16 has a mark, UTF-8 may have
+        # one, and bytes without one are read as UTF-8. Names are compared without case.
+        declared(name) = Vector{UInt8}("<?xml version=\"1.0\" encoding=\"$name\"?><a/>")
+        mark8(name) = vcat(UInt8[0xEF, 0xBB, 0xBF], declared(name))
+        units(name) = transcode(UInt16, String(declared(name)))
+        le16(name) = vcat(UInt8[0xFF, 0xFE], reinterpret(UInt8, htol.(units(name))))
+        be16(name) = vcat(UInt8[0xFE, 0xFF], reinterpret(UInt8, hton.(units(name))))
+        outcome(bytes, T, level) = try
+            read(IOBuffer(bytes), T; wellformed = level); "read"
+        catch err
+            err isa ErrorException ? err.msg : rethrow()
+        end
+        agreeing = (mark8("UTF-8"), mark8("utf-8"), mark8("utf8"), declared("UTF-8"),
+                    declared("iso-8859-1"), declared("windows-1252"), declared("us-ascii"),
+                    le16("UTF-16"), le16("utf-16"), le16("utf16"), le16("ISO-10646-UCS-2"),
+                    le16("ucs-2"), le16("UCS2"), be16("UTF-16"), be16("UTF16"), be16("UCS-2"),
+                    be16("iso-10646-ucs-2"), be16("ucs2"),
+                    Vector{UInt8}("<a/>"), Vector{UInt8}("<?xml version=\"1.0\"?><a/>"),
+                    vcat(UInt8[0xEF, 0xBB, 0xBF], Vector{UInt8}("<?xml version=\"1.0\"?><a/>")),
+                    Vector{UInt8}("<?xml-stylesheet encoding=\"UTF-16\"?><a/>"))
+        @test [(i, T) for (i, b) in enumerate(agreeing) for T in (Node, FlatNode)
+               if outcome(b, T, :strict) != "read"] == []
+        contradicted = (
+            mark8("iso-8859-1") =>                                       # W3C hst-lhs-007
+                "\"iso-8859-1\", but the document starts with a UTF-8 byte order mark",
+            mark8("UTF-16") => "starts with a UTF-8 byte order mark",
+            mark8("us-ascii") => "starts with a UTF-8 byte order mark",
+            mark8("utf16") => "starts with a UTF-8 byte order mark",
+            le16("utf-8") =>
+                "\"utf-8\", but the document starts with a UTF-16 byte order mark (little-endian)",
+            le16("iso-8859-1") => "starts with a UTF-16 byte order mark (little-endian)",
+            le16("UTF-32") => "starts with a UTF-16 byte order mark (little-endian)",
+            be16("ucs4") => "starts with a UTF-16 byte order mark (big-endian)",
+            be16("utf-8") =>                                             # W3C hst-lhs-008
+                "\"utf-8\", but the document starts with a UTF-16 byte order mark (big-endian)",
+            declared("UTF-16") =>                                        # W3C rmt-e2e-61
+                "\"UTF-16\", but the document has no byte order mark and is read as UTF-8",
+            (declared(n) => "has no byte order mark and is read as UTF-8" for n in
+                ("utf16", "utf-16le", "UTF-16BE", "ISO-10646-UCS-2", "ucs-2", "UCS2", "UTF-32",
+                 "utf32", "utf-32le", "UTF-32BE", "ISO-10646-UCS-4", "UCS-4", "ucs4"))...)
+        for (bytes, msg) in contradicted, T in (Node, FlatNode)
+            @test occursin(msg, outcome(bytes, T, :strict))
+            @test endswith(outcome(bytes, T, :strict), "(XML 1.0 §4.3.3)")
+            for level in (:lenient, :structural)        # the two other levels read it
+                @test outcome(bytes, T, level) == "read"
+            end
+        end
+        # After a mark, `UTF-16LE` and `UTF-16BE` are refused, whichever the mark: §4.3.3
+        # says that its term "UTF-16" does not apply to them, and RFC 2781, which registers
+        # them, gives them no mark. The message gives the name to write. Removing the mark
+        # is no way out, though RFC 2781 describes that form for these names: `read` takes
+        # UTF-16 only with its mark, at each level.
+        for (bytes, name, order) in ((le16("UTF-16LE"), "UTF-16LE", "(little-endian)"),
+                                     (le16("utf-16be"), "utf-16be", "(little-endian)"),
+                                     (be16("UTF-16BE"), "UTF-16BE", "(big-endian)"),
+                                     (be16("utf-16le"), "utf-16le", "(big-endian)"))
+            msg = string("not well-formed: the XML declaration names the encoding \"", name,
+                         "\", but the document starts with a UTF-16 byte order mark ", order,
+                         ": \"", name, "\" is the name of UTF-16 without a mark, and with ",
+                         "the mark the name is \"UTF-16\" (XML 1.0 §4.3.3)")
+            for T in (Node, FlatNode)
+                @test outcome(bytes, T, :strict) == msg
+                for level in (:lenient, :structural)
+                    @test outcome(bytes, T, level) == "read"
+                end
+                # Without the mark, the bytes are in the form that RFC 2781 describes for
+                # these names. XML.jl does not read it, and its message names the encoding.
+                unread_name = string("unsupported encoding: the XML declaration names the encoding \"",
+                                     name, "\", which XML.jl does not read: it reads UTF-16 only when ",
+                                     "the document starts with a byte order mark (XML 1.0 §4.3.3)")
+                for level in (:lenient, :structural, :strict)
+                    @test outcome(bytes[3:end], T, level) == unread_name
+                end
+                @test_throws unread_name read(IOBuffer(bytes[3:end]), LazyNode)
+                @test_throws unread_name read(IOBuffer(bytes[3:end]), XML.Cursor)
+                # the declaration is read from the first bytes of a long document too
+                long = vcat(bytes[3:end], repeat(bytes[end-7:end], 400))
+                @test outcome(long, T, :structural) == unread_name
+                @test outcome(bytes[3:end-1], T, :structural) == unread_name      # an odd count
+            end
+        end
+        # Without a mark, any other declared name gets the general message, and so do bytes
+        # whose declaration cannot be read.
+        for name in ("UTF-16", "utf16", "ISO-10646-UCS-2", "utf-8")
+            for bytes in (le16(name)[3:end], be16(name)[3:end]), T in (Node, FlatNode)
+                @test outcome(bytes, T, :structural) == unread
+            end
+        end
+        @test outcome(le16("UTF-16LE")[3:40], Node, :structural) == unread      # a declaration cut
+        # A file is read like an `IO`. `Cursor` and `LazyNode` take no level and read it.
+        path = tempname()
+        write(path, declared("UTF-16"))
+        @test_throws "has no byte order mark" read(path, Node; wellformed = :strict)
+        @test_throws "has no byte order mark" read(path, FlatNode; wellformed = :strict)
+        @test nodetype(read(path, Node)) == Document
+        @test nodetype(read(path, LazyNode)) == Document
+        @test read(path, XML.Cursor) isa XML.Cursor
+        rm(path)
+        # A string is already decoded: `parse` compares the name with nothing.
+        @test nodetype(parse(String(declared("UTF-16")), Node; wellformed = :strict)) == Document
+        # A second mark is passed as `parse` passes it, and the name is still compared.
+        @test occursin("starts with a UTF-8 byte order mark",
+                       outcome(vcat(UInt8[0xEF, 0xBB, 0xBF], mark8("UTF-16")), Node, :strict))
+        @test occursin("(little-endian)",
+                       outcome(vcat(UInt8[0xFF, 0xFE], le16("utf-8")), FlatNode, :strict))
+        # A declaration that is cut, or that cannot be read, is reported as `parse` reports
+        # it: the name is compared only once the declaration is read whole.
+        failure(f) = try
+            f(); nothing
+        catch err
+            (typeof(err), sprint(showerror, err))
+        end
+        for decl in ("<?xml version=\"1.0' encoding=\"UTF-8\"?><a/>",    # W3C not-wf-sa-097
+                     "<?xml version=\"1.0\" encoding=\"UTF-16\"",
+                     "<?xml version=\"1.0\" encoding=\"UTF-16\" ?",
+                     # the first of two names is compared; `parse` reports the second
+                     "<?xml version=\"1.0\" encoding=\"UTF-8\" encoding=\"UTF-16\"?><a/>")
+            for T in (Node, FlatNode)
+                got = failure(() -> read(IOBuffer(decl), T; wellformed = :strict))
+                @test got !== nothing
+                @test got == failure(() -> parse(decl, T; wellformed = :strict))
+            end
+        end
 
         # A leading U+FEFF as a *character* in an in-memory string is an encoding signature,
         # not content — every reader must drop it, not surface it as a leading Text node, so

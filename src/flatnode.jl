@@ -205,9 +205,11 @@ function _flat_parse(xml::String, lastcr::Int, ::Val{W}) where {W}
             W !== :lenient && _hasbyte(rawval, UInt8('<')) &&
                 error("not well-formed: '<' in attribute value (XML 1.0 §3.1)")
             W === :strict && _check_chars_strict(rawval)
-            W === :strict && token.has_entities && _check_refs_strict(rawval, strict, true)
             name = _fsub_or_empty(xml, pan_off, pan_len)
             r = @inbounds recs[cur]
+            # a value of the XML declaration is judged by its own rule, which allows no `&`
+            W === :strict && token.has_entities && r.kind !== Declaration &&
+                _check_refs_strict(rawval, strict, true)
             if r.attr_count < _SMALL_ATTRIBUTE_COUNT
                 ai = r.attr_first
                 for _ in 1:r.attr_count
@@ -366,10 +368,10 @@ Base.parse(::Type{FlatNode}, xml::AbstractString; wellformed::Symbol=:structural
     parse(xml, FlatNode; wellformed, doctype)
 Base.read(filename::AbstractString, ::Type{FlatNode}; wellformed::Symbol=:structural, doctype::Symbol=:apply) =
     (_check_wellformed(wellformed); _refuses_doctype(doctype);
-     parse(String(_normalize_bom(read(filename))), FlatNode; wellformed, doctype))
+     parse(_decoded(read(filename), wellformed), FlatNode; wellformed, doctype))
 Base.read(io::IO, ::Type{FlatNode}; wellformed::Symbol=:structural, doctype::Symbol=:apply) =
     (_check_wellformed(wellformed); _refuses_doctype(doctype);
-     parse(String(_normalize_bom(read(io))), FlatNode; wellformed, doctype))
+     parse(_decoded(read(io), wellformed), FlatNode; wellformed, doctype))
 
 # The position of the last CR of a document read in place, or 0. Two forward searches find
 # it when the document holds a single CR, as a part saved by Excel does after its XML

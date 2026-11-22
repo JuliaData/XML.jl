@@ -476,7 +476,7 @@ using XML: Cursor, next!, for_each_child!, @for_each_child!, skip_element!, eof,
         # BOM-less UTF-16: the named §4.3.3 diagnostic, not a tokenizer error
         nobom = joinpath(dir, "utf16_nobom.xml")
         write(nobom, collect(reinterpret(UInt8, u16)))
-        @test_throws "UTF-16 without a BOM" read(nobom, Cursor)
+        @test_throws "look like UTF-32, or like UTF-16 without its byte order mark" read(nobom, Cursor)
     end
 
     # Calls on the same element compose: whatever two of them do, the walk goes on in the

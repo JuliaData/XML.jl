@@ -980,6 +980,7 @@ function _rewrite_walk!(out::Union{Nothing, IOBuffer}, s::AbstractString, d::_De
     written = Bool[]                                 # which of them the tag writes
     reduce_value = false                             # the next value is of a type other than CDATA
     level = 0                                        # the elements of `s` that are open
+    in_decl = false                                  # between `<?xml` and its `?>`
     for tok in XMLTokenizer.tokenize(s, 1)
         k = tok.kind
         if k === XMLTokenizer.TokenKinds.OPEN_TAG
@@ -1037,7 +1038,14 @@ function _rewrite_walk!(out::Union{Nothing, IOBuffer}, s::AbstractString, d::_De
             continue
         end
         ents === nothing && continue
+        # The `version`, `encoding` and `standalone` of the XML declaration are no attribute
+        # values: their rules ([24], [80], [32]) allow no reference, and §4.4 includes one
+        # in the content of an element or in an attribute value. They are copied as they
+        # stand.
+        k === XMLTokenizer.TokenKinds.XML_DECL_OPEN && (in_decl = true)
+        k === XMLTokenizer.TokenKinds.XML_DECL_CLOSE && (in_decl = false)
         (k === XMLTokenizer.TokenKinds.TEXT || k === XMLTokenizer.TokenKinds.ATTR_VALUE) || continue
+        in_decl && continue
         # A text of the document that stands outside the root element is not content, and a
         # reference written there is not included: §4.4 includes one "anywhere after the
         # start-tag and before the end-tag of an element", or in an attribute value. It is
