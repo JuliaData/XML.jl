@@ -595,10 +595,10 @@ ibm-not-wf-P25-ibm25n02.xml	stream
 ibm-not-wf-P26-ibm26n01.xml	strict
 ibm-not-wf-P27-ibm27n01.xml	structural
 ibm-not-wf-P28-ibm28n01.xml	none
-ibm-not-wf-P28-ibm28n02.xml	none
+ibm-not-wf-P28-ibm28n02.xml	strict
 ibm-not-wf-P28-ibm28n03.xml	none
 ibm-not-wf-P28-ibm28n04.xml	strict
-ibm-not-wf-P28-ibm28n05.xml	none
+ibm-not-wf-P28-ibm28n05.xml	strict
 ibm-not-wf-P28-ibm28n06.xml	stream
 ibm-not-wf-P28-ibm28n07.xml	structural
 ibm-not-wf-P28-ibm28n08.xml	stream

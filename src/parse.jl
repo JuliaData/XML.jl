@@ -227,6 +227,49 @@ function _check_subset_pi(s::AbstractString, i::Int, j::Int)
     return nothing
 end
 
+# Outside a DOCTYPE, a `<!` that neither `-` nor `[` follows can only open the document
+# type declaration, which stands before the root element (XML 1.0 §2.8):
+#   [22] prolog      ::= XMLDecl? Misc* (doctypedecl Misc*)?
+#   [28] doctypedecl ::= '<!DOCTYPE' S Name (S ExternalID)? S? ('[' intSubset ']' S?)? '>'
+# So it opens with that keyword as it is written, then white space, then a name. The
+# tokenizer gives the token of this declaration to any such `<!`, `<!doctype r>` and
+# `<!ELEMENT r ANY>` included, and takes the name bytes that follow `<!` for the keyword:
+# in `<!DOCTYPEr>`, the keyword it finds is `<!DOCTYPEr`. `body` is what follows those
+# bytes. They end at byte `stop`, the offset of the token of `body`, and start at the
+# last `<`: a name holds none. The offset is the token's, since an empty `body` does not
+# keep its own.
+function _check_doctype_head(xml::String, stop::Int, body::AbstractString)
+    start = something(findprev(==(UInt8('<')), codeunits(xml), stop), 1)
+    keyword = SubString(xml, start, thisind(xml, stop))
+    startswith(keyword, "<!DOCTYPE") || _not_a_doctype(keyword)
+    cu = codeunits(body)
+    n = length(cu)
+    # A `>` at least follows the keyword: the tokenizer refuses a declaration cut before it.
+    (ncodeunits(keyword) == 9 && n >= 1 && XMLTokenizer.is_whitespace(@inbounds cu[1])) ||
+        _doctype_lacks_space(xml[start + 9])
+    i = 2
+    while i <= n && XMLTokenizer.is_whitespace(@inbounds cu[i])
+        i += 1
+    end
+    j = i
+    while j <= n && XMLTokenizer.is_name_byte(@inbounds cu[j])
+        j += 1
+    end
+    j > i || _doctype_lacks_name()
+    # Every byte beyond ASCII is a name byte, so the name starts and ends on a character.
+    name = SubString(body, i, prevind(body, j))
+    _is_xml10_name(name) || _not_a_name("document type name", name)
+    return nothing
+end
+@noinline _not_a_doctype(keyword::AbstractString) =
+    error("not well-formed: \"", keyword, "\" where a document type declaration starts ",
+          "with \"<!DOCTYPE\" (XML 1.0 §2.8)")
+@noinline _doctype_lacks_space(c::AbstractChar) =
+    error("not well-formed: \"<!DOCTYPE\" is followed by ", _shown_char(c),
+          ", not by white space", _blank_rule(c), " (XML 1.0 §2.8)")
+@noinline _doctype_lacks_name() =
+    error("not well-formed: no name after \"<!DOCTYPE\" (XML 1.0 §2.8)")
+
 # Document-shape well-formedness (`:structural`/`:strict`): exactly one root element, so an
 # input that holds none is rejected, whether it is empty, made of white space, or made of a
 # comment, a declaration or a DOCTYPE alone; and a DOCTYPE must be a single declaration in
@@ -271,19 +314,24 @@ function _check_outside_root(text::AbstractString)
     return nothing
 end
 
-# `i` is the index of the first byte that is not white space. The bytes before it are
-# ASCII, so it starts a character, well formed or not. A `&` is shown with what follows
-# it, up to its `;` when one is near. Any other character is shown with its code, since
+# How a message shows a character found where XML wants white space: with its code, since
 # it may not print, and with the rule when Unicode counts it as white space, as it does
 # U+00A0. U+2028 and U+2029 are named apart: `isspace` counts them under Julia
-# 1.14.0-beta1, and not under Julia 1.13.
+# 1.14.0-beta1, and not under Julia 1.13. A byte sequence that is no character is not
+# asked: up to Julia 1.13, `isspace` raises on an overlong one.
+_shown_char(c::AbstractChar) = string(repr(c), " (", _xpath_code(c), ")")
+_blank_rule(c::AbstractChar) =
+    isvalid(c) && (isspace(c) || Char(0x2028) <= c <= Char(0x2029)) ?
+    "; only the space, tab, CR and LF are XML white space" : ""
+
+# `i` is the index of the first byte that is not white space. The bytes before it are
+# ASCII, so it starts a character, well formed or not. A `&` is shown with what follows
+# it, up to its `;` when one is near, and any other character as `_shown_char` shows it.
 @noinline function _text_outside_root(text::AbstractString, i::Int)
     if codeunit(text, i) != UInt8('&')
         c = text[i]
-        blank = isspace(c) || Char(0x2028) <= c <= Char(0x2029)
-        error("not well-formed: non-whitespace text at the top level: ", repr(c), " (",
-              _xpath_code(c), ")",
-              blank ? "; only the space, tab, CR and LF are XML white space" : "")
+        error("not well-formed: non-whitespace text at the top level: ", _shown_char(c),
+              _blank_rule(c))
     end
     shown = first(SubString(text, i), 12)
     stop = findfirst(';', shown)
@@ -732,6 +780,7 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
         elseif k === TokenKinds.DOCTYPE_CONTENT
             W !== :lenient && !isempty(child_marks) &&
                 error("not well-formed: DOCTYPE declaration inside element content")
+            W === :strict && _check_doctype_head(xml, token.offset, raw(token, xml))
             push!(scratch_children, Node{S}(DTD, nothing, nothing, _to(S, lstrip(raw(token, xml))), nothing))
 
         elseif k === TokenKinds.PI_OPEN
