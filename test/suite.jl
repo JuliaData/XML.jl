@@ -352,6 +352,10 @@ end
                   string(top, repr(Char(cp)), " (", code, ")")
         end
         @test message("<a/>\xff", Node) == top * "'\\xff' (an invalid byte sequence)"
+        # an overlong sequence too, on which `isspace` raises up to Julia 1.13
+        for s in ("\xe0\x80\x80", "\xe0\x9f\xbf", "\xf0\x80\x80\x80", "\xf0\x8f\xbf\xbf"), T in types
+            @test message("<a/>" * s, T) == string(top, repr(first(s)), " (an invalid byte sequence)")
+        end
         # The message shows the reference up to its `;`, or twelve characters from the `&`.
         @test_throws "\"&#32;\" (XML 1.0 §2.8)" parse("<a/>&#32;\n<!--c-->", Node)
         @test_throws "\"&abcdefghijk\" (XML 1.0 §2.8)" parse("<a/>&abcdefghijklmnop", Node)
@@ -1042,6 +1046,57 @@ end
             "<?xml\tversion = \"1.0\"\nencoding=\"ISO-8859-1\" \tstandalone=\"yes\" ?>",
             """<?xml version="1.10" encoding="x-Mac.Roman_2"?>""",
             """<?xml version="1.1"?>""",
+        )
+        for decl in good, T in (Node, Node{SubString{String}}, FlatNode)
+            @test nodetype(parse(decl * "<r/>", T; wellformed = :strict)) == Document
+        end
+    end
+
+    @testset ":strict checks the head of the document type declaration (§2.8)" begin
+        # [22] prolog allows one document type declaration before the root element, and
+        # [28] doctypedecl ::= '<!DOCTYPE' S Name ... writes it: the keyword as it is
+        # written, white space, then a name. The tokenizer reads any `<!` that neither `-`
+        # nor `[` follows as this declaration, and the two other levels keep that reading.
+        bad = (
+            "<!DOCtYPE r []>" => "\"<!DOCtYPE\"",                     # W3C ibm-not-wf-P28-ibm28n05
+            "<!doctype r>" => "\"<!doctype\"",
+            "<!DOCTYPEr []>" => "\"<!DOCTYPE\" is followed by 'r' (U+0072), not by white space (XML",
+            "<!FOO r []>" => "\"<!FOO\"",
+            "<!ELEMENT r ANY>" => "\"<!ELEMENT\"",
+            "<!>" => "\"<!\"",
+            "<!DOCTYPE>" => "is followed by '>' (U+003E), not by white space (XML",
+            "<!DOCTYPE[]>" => "is followed by '[' (U+005B), not by white space (XML",
+            "<!DOCTYPE >" => "no name after \"<!DOCTYPE\"",
+            "<!DOCTYPE [<!ELEMENT r EMPTY>] r>" => "no name after \"<!DOCTYPE\"",   # ibm28n02
+            "<!DOCTYPE \"r.dtd\">" => "no name after \"<!DOCTYPE\"",
+            "<!DOCTYPE 1r>" => "invalid document type name \"1r\"",
+            "<!DOCTYPE -r []>" => "invalid document type name \"-r\"",
+            # a keyword that ends on a character of two bytes
+            string("<!DOCTYP", Char(0xc9), " r>") => "where a document type declaration starts",
+            # a no-break space is no white space: the message names it and gives the rule
+            string("<!DOCTYPE", Char(0xa0), "r>") =>
+                "(U+00A0), not by white space; only the space, tab, CR and LF are XML white",
+            string("<!DOCTYPE ", Char(0xa0), "r>") => "invalid document type name",
+            # bytes that are no character get the message too
+            "<!DOCTYPE\xe0\x80\x80 r>" => "(an invalid byte sequence), not by white space (XML",
+            "<!DOCTYPE\xff r>" => "(an invalid byte sequence), not by white space (XML",
+        )
+        for (decl, msg) in bad, T in (Node, Node{SubString{String}}, FlatNode)
+            xml = decl * "<r/>"
+            err = try parse(xml, T; wellformed = :strict); nothing catch e; e end
+            @test err isa ErrorException && occursin(msg, err.msg)
+            for wf in (:lenient, :structural)   # the other levels keep accepting it
+                @test nodetype(parse(xml, T; wellformed = wf)) == Document
+            end
+        end
+        # Heads the rule allows: white space of any of the four kinds, and a name that ends
+        # at white space, at `[` or at `>`. What follows the name is not looked at here.
+        good = (
+            "<!DOCTYPE r>", "<!DOCTYPE r []>", "<!DOCTYPE\tr\n[ ]\n>", "<!DOCTYPE \r\n r >",
+            "<!DOCTYPE\nr>", "<!DOCTYPE\rr>",
+            "<!DOCTYPE r[<!ELEMENT r EMPTY>]>", "<!DOCTYPE r SYSTEM \"r.dtd\" []>",
+            "<!DOCTYPE r PUBLIC \"p\" 's'>", "<!DOCTYPE a:b.c-d_e>",
+            string("<!DOCTYPE ", Char(0xe9), "t", Char(0xe9), ">"),
         )
         for decl in good, T in (Node, Node{SubString{String}}, FlatNode)
             @test nodetype(parse(decl * "<r/>", T; wellformed = :strict)) == Document

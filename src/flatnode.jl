@@ -281,6 +281,7 @@ function _flat_parse(xml::String, lastcr::Int, ::Val{W}) where {W}
         elseif k === K.DOCTYPE_CONTENT
             W !== :lenient && length(pstack) > 1 &&
                 error("not well-formed: DOCTYPE declaration inside element content")
+            W === :strict && _check_doctype_head(xml, token.offset, raw(token, xml))
             dtd = lstrip(raw(token, xml))                    # mirror _parse: lstrip'd DTD value
             off, len, cr = _flat_value(dtd, _frng(dtd)..., lastcr)
             cr && (len = -len)
