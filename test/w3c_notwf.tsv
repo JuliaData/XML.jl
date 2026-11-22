@@ -1165,7 +1165,7 @@ ibm-not-wf-P89-ibm89n10.xml	structural
 ibm-not-wf-P89-ibm89n11.xml	structural
 ibm-not-wf-P89-ibm89n12.xml	structural
 rmt-e2e-27	strict
-rmt-e2e-61	none
+rmt-e2e-61	strict
 rmt-e3e-12	strict
 x-ibm-1-0.5-not-wf-P04-ibm04n02.xml	strict
 x-ibm-1-0.5-not-wf-P04-ibm04n03.xml	strict
@@ -1253,6 +1253,6 @@ hst-bh-001	strict
 hst-bh-002	strict
 hst-bh-003	strict
 hst-bh-004	strict
-hst-lhs-007	none
-hst-lhs-008	none
+hst-lhs-007	strict
+hst-lhs-008	strict
 hst-lhs-009	stream

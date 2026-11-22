@@ -12,14 +12,139 @@ function _normalize_bom(data::Vector{UInt8})
     elseif n >= 3 && data[1] == 0xEF && data[2] == 0xBB && data[3] == 0xBF  # UTF-8 BOM
         return data[4:end]
     end
-    # No BOM matched. A NUL in the first two bytes means UTF-16/UTF-32 without a BOM — not
-    # well-formed XML (§4.3.3). Without this, :structural still rejects it downstream, but with a
-    # cryptic "invalid element name" (the interleaved NULs derail tokenization); this names the real
-    # cause. Two comparisons, no false positives (well-formed UTF-8 XML can't contain 0x00) — vs
-    # isvalid(String, data), which would be an O(n) hot-path scan.
-    n >= 2 && (data[1] == 0x00 || data[2] == 0x00) &&
-        error("UTF-16 without a BOM is not well-formed (XML 1.0 §4.3.3)")
+    # No BOM matched. A NUL in the first two bytes means UTF-32, or UTF-16 without a BOM,
+    # which XML.jl does not read: §4.3.3 asks a BOM of UTF-16, and lets a processor refuse
+    # an encoding that it cannot process. Without this, :structural still rejects it
+    # downstream, but with a cryptic "invalid element name" (the interleaved NULs derail
+    # tokenization); this names the real cause. Two comparisons, no false positives
+    # (well-formed UTF-8 XML can't contain 0x00) — vs isvalid(String, data), which would be
+    # an O(n) hot-path scan.
+    n >= 2 && (data[1] == 0x00 || data[2] == 0x00) && _unread_encoding(data)
     return data
+end
+
+# The refusal of bytes that hold a NUL at their start and no mark that XML.jl reads: UTF-32,
+# or UTF-16 without its mark. `UTF-16LE` and `UTF-16BE` are the names of UTF-16 without a
+# mark (RFC 2781): a document that declares one of them is in an encoding that XML.jl does
+# not read, and the message says so. Any other such bytes get the general message.
+@noinline function _unread_encoding(data::Vector{UInt8})
+    name = _unmarked_utf16_name(data)
+    name === nothing ||
+        error("unsupported encoding: the XML declaration names the encoding \"", name,
+              "\", which XML.jl does not read: it reads UTF-16 only when the document starts ",
+              "with a byte order mark (XML 1.0 §4.3.3)")
+    error("unsupported encoding: these bytes look like UTF-32, or like UTF-16 without its byte ",
+          "order mark; XML.jl reads UTF-8, and UTF-16 that starts with its mark (XML 1.0 §4.3.3)")
+end
+
+# `UTF-16LE` or `UTF-16BE`, as it is written, when the first bytes are an XML declaration in
+# 16-bit units that names it, and `nothing` otherwise. The place of the NUL in the first two
+# bytes gives the order of the units; 1024 bytes are more than a declaration takes.
+function _unmarked_utf16_name(data::Vector{UInt8})
+    n = min(length(data), 1024) & ~1                 # whole 16-bit units
+    little = data[1] != 0x00 && data[2] == 0x00
+    (little || (data[1] == 0x00 && data[2] != 0x00)) || return nothing
+    units = reinterpret(UInt16, data[1:n])
+    name = _declared_encoding(transcode(String, little ? ltoh.(units) : ntoh.(units)))
+    name === nothing && return nothing
+    up = uppercase(name)
+    return (up == "UTF-16LE" || up == "UTF-16BE") ? name : nothing
+end
+
+# The byte order mark that starts the bytes, read before `_normalize_bom` removes it.
+function _byte_order_mark(data::Vector{UInt8})
+    n = length(data)
+    n >= 2 && data[1] == 0xFF && data[2] == 0xFE && return :utf16le
+    n >= 2 && data[1] == 0xFE && data[2] == 0xFF && return :utf16be
+    n >= 3 && data[1] == 0xEF && data[2] == 0xBB && data[3] == 0xBF && return :utf8
+    return :none
+end
+
+# The document that `read` gives to `parse`: the bytes decoded to UTF-8, without their byte
+# order mark. Under `:strict`, the encoding that the XML declaration names is first compared
+# with that mark.
+function _decoded(data::Vector{UInt8}, wellformed::Symbol)
+    mark = wellformed === :strict ? _byte_order_mark(data) : :none
+    text = String(_normalize_bom(data))
+    wellformed === :strict && _check_declared_encoding(text, mark)
+    return text
+end
+
+# `:strict` only, for a document read from bytes. XML 1.0 §4.3.3: "In the absence of
+# information provided by an external transport protocol (e.g. HTTP or MIME), it is a fatal
+# error for an entity including an encoding declaration to be presented to the XML processor
+# in an encoding other than that named in the declaration". `read` has the bytes alone. They
+# show their encoding by their byte order mark: UTF-16 has one, UTF-8 may have one, and
+# bytes without one are read as UTF-8. The name is compared without case, as §4.3.3 asks.
+# After a UTF-16 mark, `UTF-16LE` and `UTF-16BE` are refused: §4.3.3 says that its term
+# "UTF-16" does not apply to them, and RFC 2781, which registers them, gives them no mark.
+# Five names are taken for which the Recommendation has no rule: `ISO-10646-UCS-2` after a
+# UTF-16 mark, and four spellings that the IANA registry does not hold, `UTF16`, `UCS-2` and
+# `UCS2` after a UTF-16 mark, `UTF8` after a UTF-8 mark. Without a mark, fourteen names of
+# 16-bit and 32-bit encodings are refused and any other is taken, an 8-bit one such as
+# `ISO-8859-1` included: the bytes are read as UTF-8 whatever it says. A string given to
+# `parse` is not checked either: the rule is about an entity presented in an encoding, and
+# a string is decoded.
+function _check_declared_encoding(text::String, mark::Symbol)
+    name = _declared_encoding(text)
+    name === nothing && return nothing
+    up = uppercase(name)
+    if mark === :utf8
+        (up == "UTF-8" || up == "UTF8") ||
+            _encoding_mismatch(name, "starts with a UTF-8 byte order mark")
+    elseif mark === :utf16le || mark === :utf16be
+        order = mark === :utf16le ? "(little-endian)" : "(big-endian)"
+        (up == "UTF-16LE" || up == "UTF-16BE") && _utf16_name_without_mark(name, order)
+        up in _UTF16_NAMES ||
+            _encoding_mismatch(name, string("starts with a UTF-16 byte order mark ", order))
+    else
+        up in _WIDE_ENCODINGS &&
+            _encoding_mismatch(name, "has no byte order mark and is read as UTF-8")
+    end
+    return nothing
+end
+const _UTF16_NAMES = ("UTF-16", "UTF16", "ISO-10646-UCS-2", "UCS-2", "UCS2")
+const _WIDE_ENCODINGS = ("UTF-16", "UTF16", "UTF-16LE", "UTF-16BE", "ISO-10646-UCS-2",
+                         "UCS-2", "UCS2", "UTF-32", "UTF32", "UTF-32LE", "UTF-32BE",
+                         "ISO-10646-UCS-4", "UCS-4", "UCS4")
+@noinline _encoding_mismatch(name::AbstractString, what::String) =
+    error("not well-formed: the XML declaration names the encoding \"", name,
+          "\", but the document ", what, " (XML 1.0 §4.3.3)")
+# `UTF-16LE` or `UTF-16BE` after a mark. The message gives the name to write. RFC 2781
+# describes the other way for these two names, the same bytes without their mark, but
+# `read` refuses those at each level: XML.jl reads UTF-16 only with its mark.
+@noinline _utf16_name_without_mark(name::AbstractString, order::String) =
+    error("not well-formed: the XML declaration names the encoding \"", name,
+          "\", but the document starts with a UTF-16 byte order mark ", order, ": \"", name,
+          "\" is the name of UTF-16 without a mark, and with the mark the name is \"UTF-16\"",
+          " (XML 1.0 §4.3.3)")
+
+# The value of `encoding` in the XML declaration that starts the document, as it is written,
+# or `nothing`: when the document starts with no XML declaration, when its declaration names
+# no encoding, and when the declaration is cut or cannot be read, which `parse` then
+# reports as it does for a string. A U+FEFF that starts the text is passed, as `parse`
+# passes it: the declaration that `parse` will read is the one that is judged.
+function _declared_encoding(text::String)
+    doc = _drop_bom(text)
+    name = nothing
+    try
+        st = XMLTokenizer.tokenize(doc, 1)
+        r = iterate(st)
+        (r === nothing || r[1].kind !== XMLTokenizer.TokenKinds.XML_DECL_OPEN) && return nothing
+        encoding = false
+        for tok in st
+            k = tok.kind
+            k === XMLTokenizer.TokenKinds.XML_DECL_CLOSE && return name
+            if k === XMLTokenizer.TokenKinds.ATTR_NAME
+                encoding = XMLTokenizer.raw(tok, doc) == "encoding"
+            elseif k === XMLTokenizer.TokenKinds.ATTR_VALUE && encoding && name === nothing
+                name = XMLTokenizer.attr_value(tok, doc)      # the first one; `parse` reports a second
+            end
+        end
+    catch err
+        err isa ArgumentError || rethrow()
+    end
+    return nothing
 end
 
 # The readers compare the `wellformed` level only with `:lenient` and `:strict`, so another
@@ -44,10 +169,10 @@ end
 
 Base.read(filename::AbstractString, ::Type{Node}; wellformed::Symbol=:structural, doctype::Symbol=:apply) =
     (_check_wellformed(wellformed); _refuses_doctype(doctype);
-     parse(String(_normalize_bom(read(filename))), Node; wellformed, doctype))
+     parse(_decoded(read(filename), wellformed), Node; wellformed, doctype))
 Base.read(io::IO, ::Type{Node}; wellformed::Symbol=:structural, doctype::Symbol=:apply) =
     (_check_wellformed(wellformed); _refuses_doctype(doctype);
-     parse(String(_normalize_bom(read(io))), Node; wellformed, doctype))
+     parse(_decoded(read(io), wellformed), Node; wellformed, doctype))
 
 # Cursor shares the tree readers' entry points (#89): same argument order, same byte-level
 # BOM normalization. The Cursor(str) constructor alone only drops an already-decoded U+FEFF,
@@ -723,7 +848,9 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
             W !== :lenient && _hasbyte(rawval, UInt8('<')) &&
                 error("not well-formed: '<' in attribute value (XML 1.0 §3.1)")
             W === :strict && _check_chars_strict(rawval)
-            W === :strict && token.has_entities && _check_refs_strict(rawval, strict, true)
+            # a value of the XML declaration is judged by its own rule, which allows no `&`
+            W === :strict && token.has_entities && decl_attrs === nothing &&
+                _check_refs_strict(rawval, strict, true)
             val = _text_value(S, _normalize_attr_ws(rawval), token.has_entities, convert_text)
             name = _to(S, pending_attr_name)
             if decl_attrs !== nothing
