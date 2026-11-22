@@ -21,6 +21,10 @@ With the changes below, the same call can give another result than with v0.4.10.
 
 - **`skip_element!` does nothing on an element that the cursor has left already.** Called twice on the same element, it closed the element twice, and every node that followed was given one level too high.
 
+- **A processing instruction keeps the characters that start its content.** `value` dropped each leading character that Julia's `isspace` counts as white space: for `<?p ` followed by a no-break space and `x`, it returned `x`. [XML 1.0 §2.6](https://www.w3.org/TR/xml/#sec-pi) separates the target from the content by white space, which is spaces, tabs and line ends: any other character belongs to the content. The four readers now drop that white space only, and `XML.write` writes the instruction back with the characters it was read with. `:strict` thus checks them too: it refuses `<?p ` followed by U+000B, which it read.
+
+- **The value of a DOCTYPE keeps a first character that is not XML white space.** The four readers dropped the start of the value with `lstrip`, which goes by Julia's `isspace`. That function counts U+1680 as white space, and [XML 1.0 §2.3](https://www.w3.org/TR/xml/#NT-NameStartChar) lets this character start a name: for a document type named U+1680 then `a`, `value` returned `a`, and `XML.write` wrote `<!DOCTYPE a>`. The readers now drop spaces, tabs and line ends only. Below `:strict`, and in `Cursor` and `LazyNode`, a DOCTYPE that is not well formed is given as it is written too: `<!DOCTYPE ` followed by a no-break space and `r` has the value no-break space then `r`, where it had `r`. Up to Julia 1.13, an overlong UTF-8 sequence of three or four bytes at that place, which is not valid UTF-8, raised `Base.InvalidCharError`; these readers now return its bytes.
+
 ## [0.4.10] - 2026-11-18
 
 ### Changed

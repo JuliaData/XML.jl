@@ -138,14 +138,14 @@ end
         iter = _lazy_tokenizer(n)
         iterate(iter)  # DOCTYPE_OPEN
         # strip, then normalize: the same text, in the types the branches above return
-        return _read_eol(lstrip(raw(iterate(iter)[1], n.data)), n.normalized)
+        return _read_eol(_lstrip_xml(raw(iterate(iter)[1], n.data)), n.normalized)
     elseif nt === ProcessingInstruction
         iter = _lazy_tokenizer(n)
         iterate(iter)  # PI_OPEN
         result = iterate(iter)
         result === nothing && return nothing
         result[1].kind === TokenKinds.PI_CONTENT || return nothing
-        content = _read_eol(lstrip(raw(result[1], n.data)), n.normalized)
+        content = _read_eol(_lstrip_xml(raw(result[1], n.data)), n.normalized)
         return isempty(content) ? nothing : content
     end
     nothing

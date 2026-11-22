@@ -821,6 +821,33 @@ end
         @test XML.write(parse("<r><?target hello   ?></r>", Node)[1][1]) == "<?target hello   ?>"  # round-trips
         @test value(parse("<r><?target   ?></r>", Node)[1][1]) === nothing             # whitespace-only -> nothing
         @test value(parse("<r><?target?></r>", Node)[1][1]) === nothing                # empty -> nothing
+        # The separator is white space as XML counts it: the four characters of [3] S. A
+        # character that only `isspace` counts, such as U+00A0, starts the content. U+2028
+        # counts for `isspace` under Julia 1.14.0-beta1, and not under Julia 1.13.
+        instruction(xml, R; kw...) = first(children(first(children(parse(xml, R; kw...)))))
+        for cp in (0x0085, 0x00a0, 0x1680, 0x2003, 0x2028, 0x3000)
+            content = string(Char(cp), "x")
+            xml = string("<r><?t ", content, "?></r>")
+            for R in (Node, Node{SubString{String}}, FlatNode, LazyNode)
+                @test value(instruction(xml, R)) == content
+            end
+            @test value(instruction(xml, Node; wellformed = :strict)) == content
+            c = XML.Cursor(xml); XML.next!(c); XML.next!(c)
+            @test value(c) == content
+            @test XML.write(instruction(xml, Node)) == string("<?t ", content, "?>")
+        end
+        @test value(instruction(string("<r><?t ", Char(0xa0), "?></r>"), Node)) == string(Char(0xa0))
+        for R in (Node, FlatNode, LazyNode)       # each of the four characters, and all of them
+            for sep in (" ", "\t", "\n", "\r", " \t\r\n ")
+                @test value(instruction(string("<r><?t", sep, "x?></r>"), R)) == "x"
+            end
+        end
+        # `:strict` thus sees a character there that XML does not allow
+        @test value(instruction("<r><?t \vx?></r>", Node)) == "\vx"
+        for R in (Node, FlatNode)
+            @test_throws "character U+000B is outside the legal XML range" parse(
+                "<r><?t \vx?></r>", R; wellformed = :strict)
+        end
     end
 
     @testset "PI after root element" begin
@@ -1117,6 +1144,51 @@ end
         @test contains(value(dtd), "greeting")
         @test contains(value(dtd), "SYSTEM")
         @test contains(value(dtd), "hello.dtd")
+    end
+
+    @testset "DOCTYPE value starts after XML white space (§2.3)" begin
+        # [28] doctypedecl ::= '<!DOCTYPE' S Name ...: the value starts at the name, after
+        # white space as XML counts it, the four characters of [3] S. U+1680 is white space
+        # for `isspace` and can start a name ([4] NameStartChar): this document is well
+        # formed, and the name of its type is U+1680 then `a`.
+        doctype(xml, R; kw...) = first(children(parse(xml, R; kw...)))
+        function cursor_doctype(xml)
+            c = XML.Cursor(xml); XML.next!(c)
+            return value(c)
+        end
+        name = string(Char(0x1680), "a")
+        xml = string("<!DOCTYPE ", name, "><", name, "/>")
+        for R in (Node, Node{SubString{String}}, FlatNode, LazyNode)
+            @test value(doctype(xml, R)) == name
+        end
+        for R in (Node, FlatNode), W in (:lenient, :strict)
+            @test value(doctype(xml, R; wellformed = W)) == name
+        end
+        @test cursor_doctype(xml) == name
+        @test XML.write(parse(xml, Node)) == string("<!DOCTYPE ", name, ">\n<", name, "/>")
+        # Each of the four characters is dropped, and all of them together.
+        for R in (Node, FlatNode, LazyNode), sep in (" ", "\t", "\n", "\r", " \t\r\n ")
+            @test value(doctype(string("<!DOCTYPE", sep, "r><r/>"), R)) == "r"
+        end
+        # Another character that only `isspace` counts starts no name: the document is not
+        # well formed, and the readers below `:strict` give the name as it is written.
+        # U+2028 counts for `isspace` under Julia 1.14.0-beta1, and not under Julia 1.13.
+        for cp in (0x0085, 0x00a0, 0x2003, 0x2028, 0x3000)
+            written = string(Char(cp), "r")
+            xml = string("<!DOCTYPE ", written, "><r/>")
+            for R in (Node, FlatNode, LazyNode)
+                @test value(doctype(xml, R)) == written
+            end
+            @test cursor_doctype(xml) == written
+        end
+        # So are bytes that are not UTF-8: up to Julia 1.13, `isspace` raises on an overlong
+        # sequence of three or four bytes, and the readers raised `Base.InvalidCharError`.
+        written = string(String(UInt8[0xe0, 0x80, 0x80]), "r")
+        xml = string("<!DOCTYPE ", written, "><r/>")
+        for R in (Node, FlatNode, LazyNode)
+            @test value(doctype(xml, R)) == written
+        end
+        @test cursor_doctype(xml) == written
     end
 
     @testset "DOCTYPE - with internal subset" begin

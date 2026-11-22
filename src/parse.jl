@@ -781,7 +781,8 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
             W !== :lenient && !isempty(child_marks) &&
                 error("not well-formed: DOCTYPE declaration inside element content")
             W === :strict && _check_doctype_head(xml, token.offset, raw(token, xml))
-            push!(scratch_children, Node{S}(DTD, nothing, nothing, _to(S, lstrip(raw(token, xml))), nothing))
+            dtd = _lstrip_xml(raw(token, xml))      # [28] doctypedecl: S, then the name
+            push!(scratch_children, Node{S}(DTD, nothing, nothing, _to(S, dtd), nothing))
 
         elseif k === TokenKinds.PI_OPEN
             pending_pi_tag = pi_target(token, xml)
@@ -795,7 +796,7 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
             text = raw(token, xml)
             W === :strict && (_pi_content_spaced(text) ||
                               _unspaced_pi_target(pending_pi_tag))
-            content = lstrip(text)
+            content = _lstrip_xml(text)     # [16] PI: what follows the white space after the target
             W === :strict && _check_chars_strict(content)
             pending_pi_value = isempty(content) ? nothing : _to(S, content)
 

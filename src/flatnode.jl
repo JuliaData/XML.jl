@@ -282,7 +282,7 @@ function _flat_parse(xml::String, lastcr::Int, ::Val{W}) where {W}
             W !== :lenient && length(pstack) > 1 &&
                 error("not well-formed: DOCTYPE declaration inside element content")
             W === :strict && _check_doctype_head(xml, token.offset, raw(token, xml))
-            dtd = lstrip(raw(token, xml))                    # mirror _parse: lstrip'd DTD value
+            dtd = _lstrip_xml(raw(token, xml))      # mirror _parse: value after XML white space
             off, len, cr = _flat_value(dtd, _frng(dtd)..., lastcr)
             cr && (len = -len)
             idx = Int32(length(recs) + 1)
@@ -307,7 +307,7 @@ function _flat_parse(xml::String, lastcr::Int, ::Val{W}) where {W}
             text = raw(token, xml)
             W === :strict && (_pi_content_spaced(text) || _unspaced_pi_target(
                 _fsub_or_empty(xml, recs[pend].name_offset, recs[pend].name_len)))
-            content = lstrip(text)          # mirror _parse: lstrip'd, empty → none
+            content = _lstrip_xml(text)     # mirror _parse: separator dropped, empty → none
             W === :strict && _check_chars_strict(content)
             if !isempty(content)
                 off, len, cr = _flat_value(content, _frng(content)..., lastcr)

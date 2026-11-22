@@ -250,13 +250,13 @@ end
     elseif nt === DTD
         it = _rescan(c); iterate(it)            # DOCTYPE_OPEN
         # strip, then normalize: the same text, in the types the branches above return
-        return _read_eol(lstrip(raw(iterate(it)[1], _data(c))), c.normalized)
+        return _read_eol(_lstrip_xml(raw(iterate(it)[1], _data(c))), c.normalized)
     elseif nt === ProcessingInstruction
         it = _rescan(c); iterate(it)            # PI_OPEN
         r = iterate(it)
         r === nothing && return nothing
         r[1].kind === _CURSOR_XT.TokenKinds.PI_CONTENT || return nothing
-        content = _read_eol(lstrip(raw(r[1], _data(c))), c.normalized)
+        content = _read_eol(_lstrip_xml(raw(r[1], _data(c))), c.normalized)
         return isempty(content) ? nothing : content
     end
     nothing

@@ -442,6 +442,15 @@ _normalize_input_eol(s::SubString{String}) =
 _read_eol(s::AbstractString, normalized::Bool) =
     occursin('\r', s) && !normalized ? _rewrite_content_eol(s) : s
 
+# A text without the white space that starts it, where white space is XML's: the four
+# characters of [3] S (XML 1.0 §2.3). `lstrip` alone goes by `isspace`, which also counts
+# U+00A0, U+0085, U+3000 and U+1680. After the white space that follows the target of a
+# processing instruction, XML reads them as content, and U+1680 can start the name of a
+# DOCTYPE ([4] NameStartChar). Up to Julia 1.13, `isspace` also raises on an overlong
+# sequence of three or four bytes.
+_is_xml_space(c::AbstractChar) = c == ' ' || c == '\t' || c == '\n' || c == '\r'
+_lstrip_xml(s::AbstractString) = lstrip(_is_xml_space, s)
+
 # A value that opens on its only line break, as the indentation between two tags of a file
 # saved with CR LF does, normalizes to the view of its bytes after the CR, with no copy. Any
 # other value that holds a CR is rewritten, unless its source is already normalized.
