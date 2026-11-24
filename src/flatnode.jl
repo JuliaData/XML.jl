@@ -146,7 +146,9 @@ function _flat_parse(xml::String, lastcr::Int, ::Val{W}) where {W}
         k = token.kind
         if k === K.TEXT
             rawtext = raw(token, xml)
-            W === :strict && _check_chars_strict(rawtext)
+            # as in `_parse`: outside the root element, a text keeps the character scan
+            W === :strict && (length(pstack) == 1 ? _check_chars_outside_root(rawtext) :
+                                                    _check_text_strict(rawtext))
             W !== :lenient && length(pstack) == 1 && _check_outside_root(rawtext)
             W === :strict && token.has_entities && _check_refs_strict(rawtext, strict, false)
             off, len = _frng(rawtext)

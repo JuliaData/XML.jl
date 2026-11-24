@@ -484,6 +484,8 @@ end
 # `StringView`; the parse-level guard above holds `:strict` to the count of `:structural` across
 # the scan too.
 measure_charscan(s) = Base.@allocations XML._check_chars_strict(s)
+# The scan of a text holds to the same contract, on a text that holds a `>` as well.
+measure_textscan(s) = Base.@allocations XML._check_text_strict(s)
 
 @testset ":strict character-range scan: allocation-free on an accepted span" begin
     ascii = repeat("The quick brown fox jumps over the lazy dog.\t\r\n", 40)
@@ -496,9 +498,17 @@ measure_charscan(s) = Base.@allocations XML._check_chars_strict(s)
         @test XML._check_chars_strict(s) === nothing
         measure_charscan(s)                                                   # warm-up
     end
+    gt = repeat("a > b, c ]] > d; ", 40)                       # `>` and `]]`, never `]]>`
+    for s in (ascii, mixed, long, short, last, view, gt)
+        @test XML._check_text_strict(s) === nothing
+        measure_textscan(s)                                                   # warm-up
+    end
     if _NO_COVERAGE
         for s in (ascii, mixed, long, short, last, view)
             @test measure_charscan(s) == 0
+        end
+        for s in (ascii, mixed, long, short, last, view, gt)
+            @test measure_textscan(s) == 0
         end
     end
 end
