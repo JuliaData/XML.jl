@@ -443,8 +443,9 @@ document that the declarations of its DOCTYPE change — an entity it uses, a de
 value it receives, an attribute declared with a type other than CDATA — is rewritten when it is
 read in (see [`LazyNode`](@ref) for the string types this works on). Its source text is then the
 rewritten one: line ends in LF, since §2.11 normalizes them before the declarations apply,
-replacement texts included (§4.4.2), defaults supplied (§3.3.2), values reduced (§3.3.3).
-Reported *values* are normalized either way.
+replacement texts included (§4.4.2), defaults supplied (§3.3.2), values reduced (§3.3.3). In
+the content of an element, a `]` that stands just before the text of an entity, or that ends
+it, is written `&#93;` there. Reported *values* are normalized either way.
 """
 function sourcetext(n::LazyNode)
     nt = n.nodetype

@@ -199,6 +199,9 @@ The two libxml2 rows put the C library on the same four documents. Its reader to
 
 _Table 7 — what `:strict` adds, by document shape; the ratio is the median of the ratios taken round by round, on the times net of their GC shares. Where the four runs differ, the range goes from the lowest of them to the highest._[^twins]
 
+> [!NOTE]
+> Since these measurements, the scan also looks for `]]>` in the text of an element. As measured on 2026-11-24 under Julia 1.13.4, `:strict` now takes about 1.0 ms on the third row, twice the time of `:structural`: the scan adds about 0.5 ms on pure text. The two other rows show no clear change.
+
 Neither check allocates. The character-range scan reads the bytes of a span and decodes only a byte at or above 0x80, by the string's own `Char` iteration. The reference check reads the bytes of a token that carries a `&` and copies only a reference it rejects, into its message, so `:strict` allocates exactly what `:structural` does on every document.
 
 libxml2 has no levels: it always enforces well-formedness in full. Its DOM build takes 39 ms on the plain document, 45 ms on the escaped twin and 4.0 ms on its character data alone. On pure text the `:strict` character-range scan adds 0.3 ms to the parse, less than a tenth of the time the C library takes to parse, check and build from the same bytes.

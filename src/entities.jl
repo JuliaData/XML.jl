@@ -460,9 +460,10 @@ _check_written(::Nothing, ::Int) = nothing
 # A reference to a declared general entity is replaced by its replacement text, and that text's
 # own references with it (§4.4.2). Everything else is copied through untouched — a character
 # reference, one of the five predefined entities, an undeclared name: the parser reads those
-# afterwards, from the document this pass writes. §4.5 bypasses references when the declaration
-# is read, so bypassing them again here is what makes `&amp;` in a replacement text arrive at the
-# parser as `&amp;` and reach the application as `&`.
+# afterwards, from the document this pass writes. One character is not: the `]` that ends a
+# piece at the boundary of an entity (`_write_before_boundary!`). §4.5 bypasses references
+# when the declaration is read, so bypassing them again here is what makes `&amp;` in a
+# replacement text arrive at the parser as `&amp;` and reach the application as `&`.
 #
 # Unlike the line-end rewrite, whose output is bounded by its source, an expansion's length is
 # not known until it ends — amplification is the point of the bounds above. A growable buffer is
@@ -488,8 +489,8 @@ end
 
 # The document's own text, copied into the rewrite with its line ends normalized (§2.11):
 # each CR LF pair and each lone CR is written as one LF. No span ends on the CR of a pair:
-# a walk cuts before a quote, a `>`, a `/` or an `&`, or where a text starts, just after
-# a `>`.
+# a walk cuts before a quote, a `>`, a `/`, an `&` or the `]` that ends a piece at a
+# boundary, or where a text starts, just after a `>`.
 function _write_doc!(io::IOBuffer, s::AbstractString)
     n = ncodeunits(s)
     i = 1
@@ -536,12 +537,34 @@ function _write_span!(io::IOBuffer, s::AbstractString, literal::Bool, entity::Bo
     end
 end
 
+# In content, the readers read one text where the text of an entity meets what stands around
+# it, and `:strict` refuses `]]>` in a text ([14] CharData, XML 1.0 §2.4). No production and
+# no well-formedness constraint bars a `]]>` that only forms across such a boundary: the
+# document and the replacement text of each internal entity are matched apart (§2.1,
+# §4.3.2), and W3C's valid rmt-e2e-24 writes `]]&gt;` with `gt` declared. So a piece that
+# ends at a boundary with a `]` has that `]` written as `&#93;`. The readers that decode a
+# text give the same character, and what keeps the text as it is written shows `&#93;`.
+# `s` is such a piece.
+function _write_before_boundary!(io::IOBuffer, s::AbstractString, asis::Bool)
+    n = ncodeunits(s)
+    if n > 0 && codeunit(s, n) == UInt8(']')
+        _copy_span!(io, SubString(s, firstindex(s), prevind(s, n)), asis)
+        Base.write(io, "&#93;")
+    else
+        _copy_span!(io, s, asis)
+    end
+    return nothing
+end
+
 # `depth` is the nesting level of `s`: 1 for the document's own text, one more for each entity
 # its text comes through. In content, given the declarations `d`, a replacement text that
 # carries a `<` is read as markup by `_rewrite_walk!` (§4.4.2), so that the tags it brings are
-# rewritten as written ones are; any other is included as text.
+# rewritten as written ones are; any other is included as text. `boundary` says that, in
+# content, the end of `s` is the end of an entity's text: it is for a replacement text
+# included whole, and for the last text of one that carries markup.
 function _expand_refs!(io::IOBuffer, s::AbstractString, ents::InternalEntities, depth::Int,
-                       literal::Bool = false, d::Union{Nothing, _Declarations} = nothing)
+                       literal::Bool = false, d::Union{Nothing, _Declarations} = nothing,
+                       boundary::Bool = depth > 1)
     depth > _MAX_ENTITY_DEPTH &&
         error("entity expansion exceeded $(_MAX_ENTITY_DEPTH) levels of nesting")
     i = firstindex(s)
@@ -551,27 +574,37 @@ function _expand_refs!(io::IOBuffer, s::AbstractString, ents::InternalEntities, 
     while i <= stop
         amp = _findchar(s, UInt8('&'), i)
         if amp === nothing
-            _write_span!(io, SubString(s, i), literal, entity, asis)
+            piece = SubString(s, i)
+            # in content, the end of an entity's text is a boundary
+            boundary && !literal ? _write_before_boundary!(io, piece, asis) :
+                                 _write_span!(io, piece, literal, entity, asis)
             break
         end
-        amp > i && _write_span!(io, SubString(s, i, prevind(s, amp)), literal, entity, asis)
         j = nextind(s, amp)
         while j <= stop && _is_name_byte(codeunit(s, j))
             j = nextind(s, j)
         end
-        if j > stop || codeunit(s, j) != UInt8(';') || j == nextind(s, amp)
+        isref = !(j > stop || codeunit(s, j) != UInt8(';') || j == nextind(s, amp))
+        rep = isref ? get(ents.values, SubString(s, nextind(s, amp), prevind(s, j)), nothing) :
+                      nothing
+        if amp > i
+            before = SubString(s, i, prevind(s, amp))
+            # in content, what stands before an included entity ends at a boundary
+            rep !== nothing && !literal ? _write_before_boundary!(io, before, asis) :
+                                          _write_span!(io, before, literal, entity, asis)
+        end
+        if !isref
             Base.write(io, '&')                      # not a reference: a literal ampersand
             i = nextind(s, amp)
             continue
         end
-        name = SubString(s, nextind(s, amp), prevind(s, j))
-        rep = get(ents.values, name, nothing)
         if rep === nothing
             Base.write(io, SubString(s, amp, j))
         else
             _charge!(ents, ncodeunits(rep))
             if !literal && d !== nothing && occursin('<', rep)
-                _rewrite_walk!(io, rep, d, depth + 1, name)
+                _rewrite_walk!(io, rep, d, depth + 1,
+                               SubString(s, nextind(s, amp), prevind(s, j)))
             else
                 _expand_refs!(io, rep, ents, depth + 1, literal, d)
             end
@@ -1069,12 +1102,18 @@ function _rewrite_walk!(out::Union{Nothing, IOBuffer}, s::AbstractString, d::_De
                           ents, depth, true)
             Base.write(out, q)
         else
-            _expand_refs!(out, span, ents, depth, false, d)
+            # of the texts of a replacement text, only the last one ends at a boundary
+            _expand_refs!(out, span, ents, depth, false, d,
+                          fragment && start + tok.ncodeunits > ncodeunits(s))
         end
         pos = start + tok.ncodeunits
     end
     out === nothing && return nothing
-    pos <= ncodeunits(s) && _copy_span!(out, SubString(s, pos), asis)
+    if pos <= ncodeunits(s)
+        # the end of an entity's text is a boundary (`_write_before_boundary!`)
+        fragment ? _write_before_boundary!(out, SubString(s, pos), asis) :
+                   _copy_span!(out, SubString(s, pos), asis)
+    end
     out
 end
 

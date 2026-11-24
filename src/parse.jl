@@ -439,6 +439,11 @@ function _check_outside_root(text::AbstractString)
     return nothing
 end
 
+# The character scan of a text found outside the root element, under `:strict`. Rule [14]
+# is the rule of a text in the content of an element ([43]): a `]]>` of this place is
+# refused as any text of it is, by `_check_outside_root`. Out of line: a document holds few.
+@noinline _check_chars_outside_root(text::AbstractString) = _check_chars_strict(text)
+
 # How a message shows a character found where XML wants white space: with its code, since
 # it may not print, and with the rule when Unicode counts it as white space, as it does
 # U+00A0. U+2028 and U+2029 are named apart: `isspace` counts them under Julia
@@ -593,6 +598,118 @@ end
 
 @noinline _char_range_error(cp::UInt32) =
     error("not well-formed: character U+$(uppercase(string(cp; base = 16, pad = 4))) is outside the legal XML range (XML 1.0 §2.2)")
+
+# The scan of a text, `:strict` only. A text holds no `]]>` (XML 1.0 §2.4):
+#   [14] CharData ::= [^<&]* - ([^<&]* ']]>' [^<&]*)
+# It is the character scan above, which also refuses a `>` that two `]` precede. In a
+# `String` document, a text of 16 bytes at most is tested in two words, which look for the
+# three bytes themselves. A longer text is tested a block at a time: one reduction says
+# whether the block holds a byte to decode and whether it holds a `>`, and a block that
+# holds a `>` is looked at again, for `]]>`. A block that holds `]]>` takes the decoding
+# walk that refuses it, and any other block with a byte to decode takes the walk of the
+# character scan. The functions below follow those of the character scan and must change
+# with them. They are kept apart, so that the other spans are scanned as before: `]]>` is
+# legal in an attribute value, a comment and a processing instruction, and it ends a CDATA
+# section. A text outside the root element keeps the character scan as well
+# (`_check_chars_outside_root`).
+const _W_3E = 0x3e3e3e3e3e3e3e3e
+const _W_5D = 0x5d5d5d5d5d5d5d5d
+
+@noinline _cdata_end_in_text() =
+    error("not well-formed: \"]]>\" in a text; write its \">\" as \"&gt;\" (XML 1.0 §2.4)")
+
+_check_text_strict(s::AbstractString) = _check_text_blocks(s)
+
+# `_check_chars_strict` for a span of a `String` document, with the words of a text.
+@inline function _check_text_strict(s::SubString{String})
+    n = ncodeunits(s)
+    parent = s.string
+    if n <= 16 && s.offset + 16 <= ncodeunits(parent)
+        GC.@preserve parent begin
+            p = pointer(parent) + s.offset
+            x1 = ltoh(unsafe_load(Ptr{UInt64}(p)))
+            x2 = ltoh(unsafe_load(Ptr{UInt64}(p + 8)))
+        end
+        r1 = min(n, 8)
+        r2 = n - r1
+        m1 = (UInt64(1) << (8r1)) - 1        # a shift by 64 gives 0, so eight bytes give all ones
+        m2 = (UInt64(1) << (8r2)) - 1
+        x1 = (x1 & m1) | (~m1 & _W_20)
+        x2 = (x2 & m2) | (~m2 & _W_20)
+        (_word_flagged(x1) | _word_flagged(x2) | _words_hold_cdata_end(x1, x2)) || return nothing
+        _check_text_decoding(s, codeunits(s), 1, n)
+        return nothing
+    end
+    return _check_text_blocks(s)
+end
+
+# `true` when the 16 bytes of the two words hold `]]>`. A mark is the high bit of a byte
+# equal to the one sought, exact for a byte below 0x80. The first byte of the span is the
+# low byte, so a shift to the left by one and by two bytes brings the marks of `]` onto
+# the byte that follows them.
+@inline function _words_hold_cdata_end(x1::UInt64, x2::UInt64)
+    gt = UInt128(_byte_marks(x1, _W_3E)) | UInt128(_byte_marks(x2, _W_3E)) << 64
+    rb = UInt128(_byte_marks(x1, _W_5D)) | UInt128(_byte_marks(x2, _W_5D)) << 64
+    return (gt & (rb << 8) & (rb << 16)) != 0
+end
+@inline _byte_marks(x::UInt64, w::UInt64) = ~(((x ⊻ w) | _W_HI) - _W_01) & _W_HI
+
+@noinline function _check_text_blocks(s::AbstractString)
+    cu = codeunits(s)
+    n = length(cu)
+    i = 1
+    while i <= n
+        j = min(i + _CHAR_SCAN_BLOCK - 1, n)
+        decode, gt = _text_block_flags(cu, i, j)
+        i = gt && _block_holds_cdata_end(cu, i, j) ? _check_text_decoding(s, cu, i, j) :
+            decode ? _check_chars_decoding(s, cu, i, j) : j + 1
+    end
+    return nothing
+end
+
+# Two facts about `cu[i:j]`, in one reduction without an early exit: whether a byte has to
+# be decoded, by the test of `_ascii_block_legal`, and whether a byte is `>`.
+@inline function _text_block_flags(cu, i::Int, j::Int)
+    decode = false
+    gt = false
+    @inbounds for k in i:j
+        b = cu[k]
+        decode |= (b >= 0x80) | ((b < 0x20) & (b != 0x09) & (b != 0x0A) & (b != 0x0D))
+        gt |= b == 0x3E
+    end
+    return decode, gt
+end
+
+# Whether a `>` of `cu[i:j]` follows two `]`. The two bytes before `k` are read from the
+# span, so they may lie in a block already passed; the first two bytes of a span end no
+# `]]>`.
+@inline function _block_holds_cdata_end(cu, i::Int, j::Int)
+    held = false
+    @inbounds for k in max(i, 3):j
+        held |= (cu[k] == 0x3E) & (cu[k - 1] == 0x5D) & (cu[k - 2] == 0x5D)
+    end
+    return held
+end
+
+# `_check_chars_decoding`, which also refuses the `>` that two `]` precede. The two bytes
+# before it are read from the span, so they may lie before `i`, in a block already passed.
+@noinline function _check_text_decoding(s::AbstractString, cu, i::Int, j::Int)
+    k = i
+    @inbounds while k <= j
+        b = cu[k]
+        if b < 0x80
+            (b >= 0x20 || b == 0x09 || b == 0x0A || b == 0x0D) || _char_range_error(UInt32(b))
+            (b == 0x3E && k >= 3 && cu[k - 1] == 0x5D && cu[k - 2] == 0x5D) && _cdata_end_in_text()
+            k += 1
+        else
+            c, k = @something iterate(s, k)
+            _OVERLONG_DECODES && Base.isoverlong(c) && throw(Base.InvalidCharError(c))
+            cp = UInt32(c)      # raises `Base.InvalidCharError` on a malformed sequence, as `for c in s` does
+            _is_xml_char(cp) || _char_range_error(cp)
+        end
+    end
+    return k
+end
 
 # `:strict` only, one pass over a span's references, character and named alike. Gated + DCE'd off
 # the :strict path and called only when a token carries entities, so :lenient/:structural cost
@@ -802,7 +919,10 @@ function _parse(xml::String, ::Type{S}, convert_text::F, ::Val{W}) where {S, F, 
 
         if k === TokenKinds.TEXT
             rawtext = raw(token, xml)
-            W === :strict && _check_chars_strict(rawtext)
+            # rule [14] judges a text in the content of an element; outside the root element
+            # the text keeps the character scan, and `_check_outside_root` judges it
+            W === :strict && (isempty(child_marks) ? _check_chars_outside_root(rawtext) :
+                                                     _check_text_strict(rawtext))
             W !== :lenient && isempty(child_marks) && _check_outside_root(rawtext)
             W === :strict && token.has_entities && _check_refs_strict(rawtext, strict, false)
             v = _text_value(S, rawtext, token.has_entities, convert_text)

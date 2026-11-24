@@ -691,6 +691,214 @@ end
         @test findfirst(s -> !agree(within(s)), placed) === nothing
         @test findfirst(s -> !agree(at_end(s)), placed) === nothing
         @test findfirst(s -> !agree(StringView(codeunits(s))), placed) === nothing
+
+        # The scan of a text is the same scan with one more verdict: the `>` that two `]`
+        # precede (§2.4). Its specification is the same loop with that test added. It is
+        # tried on every code point, on the byte sequences above, on those of an alphabet
+        # that holds `]` and `>`, and with `]]>` placed across the words and the blocks.
+        function textscan_verdict(s)
+            cu = codeunits(s)
+            for i in eachindex(s)
+                verdict = charscan_verdict(string(s[i]))
+                verdict == "accepted" || return verdict
+                s[i] == '>' && i >= 3 && cu[i - 1] == 0x5d && cu[i - 2] == 0x5d &&
+                    return "not well-formed: \"]]>\" in a text; write its \">\" as \"&gt;\" (XML 1.0 §2.4)"
+            end
+            return "accepted"
+        end
+        function text_outcome(s)
+            try
+                XML._check_text_strict(s)
+                "accepted"
+            catch e
+                e isa ErrorException ? e.msg : string(typeof(e))
+            end
+        end
+        agree_text(s) = text_outcome(s) == textscan_verdict(s)
+        @test findfirst(cp -> !agree_text(string(Char(cp))), 0x0:0x10FFFF) === nothing
+        @test findfirst(cp -> !agree_text(within(string(Char(cp)))), 0x0:0x10FFFF) === nothing
+        @test findfirst(!agree_text, seqs) === nothing
+        @test findfirst(s -> !agree_text(within(s)), seqs) === nothing
+        text_alphabet = UInt8[0x01, 0x0a, 0x20, 0x3e, 0x41, 0x5d, 0x80, 0xc3, 0xff]
+        text_seqs = String[]
+        for b1 in text_alphabet, b2 in text_alphabet, b3 in text_alphabet
+            push!(text_seqs, String([b1, b2, b3]))
+            for b4 in text_alphabet
+                push!(text_seqs, String([b1, b2, b3, b4]))
+            end
+        end
+        @test length(text_seqs) == 729 + 6_561
+        # fifteen of them are refused for their `]]>`: it alone, after one of five legal
+        # bytes, and before any of the nine
+        @test count(s -> occursin("\"]]>\" in a text", textscan_verdict(s)), text_seqs) == 15
+        @test findfirst(!agree_text, text_seqs) === nothing
+        @test findfirst(s -> !agree_text(within(s)), text_seqs) === nothing
+        text_placed = String[]
+        for s in ("]]>", "]]]>", "]>", "]]", ">", "]] >", "]]\x01>", "]]>\x01", "\x01]]>",
+                  "é]]>", "]]é>", "]]>é"),
+                pad in Iterators.flatten((0:17, 61:66, 125:130, 253:258)),
+                tail in ("", "b]]>c", "b"^40)
+            push!(text_placed, repeat("a", pad) * s * tail)
+        end
+        @test findfirst(!agree_text, text_placed) === nothing
+        @test findfirst(s -> !agree_text(within(s)), text_placed) === nothing
+        @test findfirst(s -> !agree_text(at_end(s)), text_placed) === nothing
+        @test findfirst(s -> !agree_text(StringView(codeunits(s))), text_placed) === nothing
+    end
+
+    @testset ":strict refuses \"]]>\" in a text (§2.4)" begin
+        # [14] CharData ::= [^<&]* - ([^<&]* ']]>' [^<&]*): a text holds no `]]>`. Its `>`
+        # is written `&gt;` or as a character reference.
+        types = (Node, Node{SubString{String}}, FlatNode)
+        refused(xml, T) = try
+            parse(xml, T; wellformed = :strict); false
+        catch err
+            err isa ErrorException && occursin("\"]]>\" in a text", err.msg)
+        end
+        bad = ("<r>]]></r>", "<r>]]]></r>", "<r>abc]]]>def</r>", "<r>a]]>b</r>",
+               "<r><![CDATA[x]]>]]></r>",                  # what follows a section is a text
+               "<r><b/>]]></r>", "<r>]]><b/></r>", "<r>a<b>c]]>d</b>e</r>", "<r>é]]>é</r>",
+               "<r>" * "x"^70 * "]]>" * "y"^70 * "</r>",
+               "<r>]]>" * "y"^70 * "</r>")                 # at the start of a long text
+        @test [(xml, T) for xml in bad for T in types if !refused(xml, T)] == []
+        # at each place of a text, short or longer than one block of the character scan
+        for pad in (0:20..., 61:67...), T in (Node, FlatNode)
+            @test refused("<r>" * "a"^pad * "]]></r>", T)
+            @test refused("<r>" * "a"^pad * "]]>" * "b"^pad * "</r>", T)
+        end
+        # The two other levels read it, and so do the readers that check no content.
+        for xml in bad, T in types, w in (:lenient, :structural)
+            @test nodetype(parse(xml, T; wellformed = w)) == Document
+        end
+        @test simple_value(only(elements(parse("<r>a]]>b</r>", LazyNode)))) == "a]]>b"
+        # What the rule allows: the `>` escaped, the three characters apart, or in another
+        # place than a text.
+        good = ("<r>]]&gt;</r>", "<r>]]&#62;</r>", "<r>]]&#x3E;</r>", "<r>]] ></r>", "<r>]></r>",
+                "<r>a>b</r>", "<r>]]</r>", "<r>]</r>", "<r>></r>", "<r>]]<![CDATA[>]]></r>",
+                "<r>]]<b/>></r>", "<r>]]<!--c-->></r>", "<r a=\"]]>\"/>", "<!-- ]]> --><r/>",
+                "<?p ]]>?><r/>", "<r><![CDATA[]]]]><![CDATA[>]]></r>")
+        for xml in good, T in types
+            @test nodetype(parse(xml, T; wellformed = :strict)) == Document
+        end
+        # Outside the root element a text is no content of an element, and rule [14] does
+        # not judge it: it is refused as any text of that place is ([1], [27]), and a
+        # character outside the legal range keeps its own message.
+        for xml in ("<r/>]]>", "]]><r/>", "<r/>x]]>"), T in types
+            @test_throws "non-whitespace text at the top level" parse(xml, T; wellformed = :strict)
+        end
+        for T in types
+            @test_throws "outside the legal XML range" parse("<r/>\x01", T; wellformed = :strict)
+        end
+
+        # Across the boundary of an entity, `]]>` is no `]]>` of a text: the document and
+        # the replacement text of each internal entity are matched apart (§2.1, §4.3.2).
+        # The first document is W3C's rmt-e2e-24, a valid one.
+        across = ("<!DOCTYPE foo [<!ELEMENT foo ANY><!ENTITY gt \">\">]>" *
+                  "<foo>You can use ]]&gt; or ]]&#62;</foo>" => "You can use ]]> or ]]>",
+                  "<!DOCTYPE r [<!ENTITY e \"]]\">]><r>&e;></r>" => "]]>",
+                  "<!DOCTYPE r [<!ENTITY e \"]\">]><r>]&e;></r>" => "]]>",
+                  "<!DOCTYPE r [<!ENTITY e \"\">]><r>]]&e;></r>" => "]]>",
+                  "<!DOCTYPE r [<!ENTITY e \"]\">]><r>&e;&e;></r>" => "]]>",
+                  "<!DOCTYPE r [<!ENTITY e \"&f;\"><!ENTITY f \">\">]><r>]]&e;</r>" => "]]>",
+                  "<!DOCTYPE r [<!ENTITY e \"]]&f;\"><!ENTITY f \"\">]><r>&e;></r>" => "]]>",
+                  "<!DOCTYPE r [<!ENTITY e \"x]\"><!ENTITY f \"]>\">]><r>&e;&f;</r>" => "x]]>")
+        for (xml, text) in across
+            for T in types
+                @test nodetype(parse(xml, T; wellformed = :strict)) == Document
+            end
+            for R in (Node, FlatNode, LazyNode)
+                @test simple_value(only(elements(parse(xml, R)))) == text
+            end
+        end
+        # The rewrite writes `&#93;` for the `]` that ends a piece before a boundary, in a
+        # content only: `]]>` is legal in an attribute value, which stays as it is written.
+        rewritten(xml) = XML._apply_declarations(xml)
+        @test endswith(rewritten("<!DOCTYPE r [<!ENTITY gt \">\">]><r>]]&gt;</r>"), "<r>]&#93;></r>")
+        @test endswith(rewritten("<!DOCTYPE r [<!ENTITY e \"]]\">]><r>&e;></r>"), "<r>]&#93;></r>")
+        @test endswith(rewritten("<!DOCTYPE r [<!ENTITY e \"\">]><r a=\"]]&e;>\"/>"), "<r a=\"]]>\"/>")
+        @test endswith(rewritten("<!DOCTYPE r [<!ENTITY e \"]]\">]><r a=\"&e;>\"/>"), "<r a=\"]]>\"/>")
+        # So a document written back from a `LazyNode` holds no `]]>` in a text.
+        for (xml, text) in across
+            back = XML.write(parse(xml, LazyNode))
+            @test simple_value(only(elements(parse(back, Node; wellformed = :strict)))) == text
+        end
+        # What keeps the text as it is written shows the `&#93;`: the values of a
+        # `Node{SubString{String}}`, `sourcetext` and `splicetext`.
+        kept = "<!DOCTYPE r [<!ENTITY gt \">\">]><r>]]&gt;<b/></r>"
+        raw_text = first(children(only(elements(parse(kept, Node{SubString{String}})))))
+        @test value(raw_text) == "]&#93;>"
+        for T in (LazyNode, FlatNode)
+            r = only(elements(parse(kept, T)))
+            @test sourcetext(r) == "<r>]&#93;><b/></r>"
+            @test endswith(splicetext(only(elements(r))), "<r>]&#93;></r>")
+        end
+        # `Cursor` checks no content, and decodes the `&#93;` as the other readers do.
+        function cursor_texts(xml)
+            c = XML.Cursor(xml)
+            texts = String[]
+            while XML.next!(c) !== nothing
+                nodetype(c) === Text && push!(texts, String(value(c)))
+            end
+            return texts
+        end
+        @test cursor_texts("<r>a]]>b</r>") == ["a]]>b"]
+        for (xml, text) in across
+            @test cursor_texts(xml) == [text]
+        end
+        # The piece before a boundary is copied as any piece of the document is: its line
+        # ends are normalized (§2.11), and the character before its `]` may take several
+        # bytes.
+        crlf = "<!DOCTYPE r [<!ENTITY e \">\">]><r>a\r\nb]]&e;</r>"
+        for R in (Node, FlatNode, LazyNode)
+            @test simple_value(only(elements(parse(crlf, R)))) == "a\nb]]>"
+        end
+        @test cursor_texts(crlf) == ["a\nb]]>"]
+        accented = "<!DOCTYPE r [<!ENTITY e \">\">]><r>é]&e;</r>"
+        @test simple_value(only(elements(parse(accented, Node)))) == "é]>"
+        # an entity whose text carries markup, on either side of the boundary
+        for xml in ("<!DOCTYPE r [<!ENTITY e \"<b/>]]\">]><r>&e;></r>",
+                    "<!DOCTYPE r [<!ENTITY e \"><b/>\">]><r>]]&e;</r>"), T in types
+            @test nodetype(parse(xml, T; wellformed = :strict)) == Document
+        end
+        # In such an entity, only the last text ends at a boundary: a `]` before one of its
+        # own tags stays as it is written.
+        decl_f = "<!ENTITY f \"v\">"
+        @test endswith(rewritten("<!DOCTYPE r [<!ENTITY e \"&f;x]<b/>y\">$decl_f]><r>&e;]></r>"),
+                       "<r>vx]<b/>y]></r>")
+        last_text = "<!DOCTYPE r [<!ENTITY e \"<b/>&f;y]\">$decl_f]><r>&e;]></r>"
+        @test endswith(rewritten(last_text), "<r><b/>vy&#93;]></r>")
+        for T in types
+            @test nodetype(parse(last_text, T; wellformed = :strict)) == Document
+        end
+        # An entity whose replacement text holds `]]>` is refused where a content includes
+        # it: that text has to match content (§4.3.2).
+        inside = ("<!DOCTYPE r [<!ENTITY e \"a]]>b\">]><r>&e;</r>",
+                  "<!DOCTYPE r [<!ENTITY e \"<b/>]]>\">]><r>&e;</r>",
+                  "<!DOCTYPE r [<!ENTITY e \"&f;\"><!ENTITY f \"]]>\">]><r>&e;</r>")
+        @test [(xml, T) for xml in inside for T in types if !refused(xml, T)] == []
+        # A character reference in the declaration of an entity is replaced when the
+        # declaration is read (§4.5): `]]&#62;` there gives a replacement text that holds
+        # `]]>`. A reference to a general entity is left as it is written (§4.4.7), so
+        # `]]&gt;` gives none.
+        by_charref = "<!DOCTYPE r [<!ENTITY e \"a]]&#62;b\">]><r>&e;</r>"
+        @test [T for T in types if !refused(by_charref, T)] == []
+        for T in types
+            @test nodetype(parse("<!DOCTYPE r [<!ENTITY e \"a]]&gt;b\">]><r>&e;</r>", T;
+                                 wellformed = :strict)) == Document
+        end
+        # One that nothing references is not looked at: §4.3.2 asks only the entities that
+        # the document references to be well formed.
+        for T in types
+            @test nodetype(parse("<!DOCTYPE r [<!ENTITY e \"a]]>b\">]><r/>", T;
+                                 wellformed = :strict)) == Document
+        end
+        # One that only an attribute value references is still read. That is a known gap:
+        # the entity is referenced, so §4.3.2 asks its replacement text to match content.
+        # The test notices a refusal whatever its message.
+        unread(xml, T) = try parse(xml, T; wellformed = :strict); false catch; true end
+        for T in types
+            @test_broken unread("<!DOCTYPE r [<!ENTITY e \"a]]>b\">]><r a=\"&e;\"/>", T)
+        end
     end
 end
 
@@ -2037,6 +2245,14 @@ end
         @test exp(doc("<!ENTITY e \"a&amp;b\">", "&e;")) == doc("<!ENTITY e \"a&amp;b\">", "a&amp;b")
         # attribute values are rewritten too
         @test occursin("x=\"ev\"", exp("<!DOCTYPE a [<!ENTITY e \"ev\">]><a x=\"&e;\"/>"))
+        # In content, a `]` that ends a piece before the boundary of an entity is written as
+        # a character reference, so that no `]]>` forms where the two texts meet. An
+        # attribute value needs none.
+        @test exp(doc("<!ENTITY e \">\">", "]]&e;")) == doc("<!ENTITY e \">\">", "]&#93;>")
+        @test exp(doc("<!ENTITY e \"]]\">", "&e;>")) == doc("<!ENTITY e \"]]\">", "]&#93;>")
+        @test exp(doc("<!ENTITY e \"<e/>]\">", "&e;]>")) == doc("<!ENTITY e \"<e/>]\">", "<e/>&#93;]>")
+        @test exp(doc("<!ENTITY e \"ev\">", "x]y&e;z")) == doc("<!ENTITY e \"ev\">", "x]yevz")
+        @test occursin("x=\"]]>\"", exp("<!DOCTYPE a [<!ENTITY e \">\">]><a x=\"]]&e;\"/>"))
         # A name is read as the tokenizer reads names: every non-ASCII character is a name
         # character, the first one included (§2.3).
         readers = (Node, LazyNode, FlatNode)
@@ -2276,6 +2492,12 @@ end
         many = "<!DOCTYPE d [<!ENTITY e \"" * repeat("y", 100) * "\">]><d>" *
                repeat("&e;", 700_000) * "</d>"
         @test ncodeunits(XML._apply_declarations(many)) > 70_000_000
+        # A `]` that the rewrite writes as `&#93;` at the boundary of an entity counts as
+        # five bytes: this document, 13.6 MB long with one byte for each such `]`, passes
+        # the bound with five.
+        brackets = "<!DOCTYPE r [<!ENTITY a \"]\"><!ENTITY b \"" * repeat("&a;", 67) *
+                   "\">]><r>" * repeat("&b;", 203_000) * "</r>"
+        @test_throws "larger than 64 MiB" XML._apply_declarations(brackets)
         # an entity bomb whose leaf is empty writes nothing: what it reads is what is bounded
         empty = "<!ENTITY z0 \"\">" *
                 join(["<!ENTITY z$i \"" * repeat("&z$(i-1);", 10) * "\">" for i in 1:7])

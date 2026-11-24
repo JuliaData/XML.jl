@@ -23,11 +23,11 @@ not-wf-sa-021	strict
 not-wf-sa-022	strict
 not-wf-sa-023	strict
 not-wf-sa-024	structural
-not-wf-sa-025	none
-not-wf-sa-026	none
+not-wf-sa-025	strict
+not-wf-sa-026	strict
 not-wf-sa-027	stream
 not-wf-sa-028	stream
-not-wf-sa-029	none
+not-wf-sa-029	strict
 not-wf-sa-030	strict
 not-wf-sa-031	strict
 not-wf-sa-032	strict
@@ -320,7 +320,7 @@ o-p12fail6	none
 o-p12fail7	none
 o-p14fail1	stream
 o-p14fail2	strict
-o-p14fail3	none
+o-p14fail3	strict
 o-p15fail1	strict
 o-p15fail2	strict
 o-p15fail3	strict
@@ -329,7 +329,7 @@ o-p16fail2	strict
 o-p16fail3	strict
 o-p18fail1	stream
 o-p18fail2	stream
-o-p18fail3	none
+o-p18fail3	strict
 o-p22fail1	structural
 o-p22fail2	structural
 o-p23fail1	strict
@@ -548,7 +548,7 @@ ibm-not-wf-P12-ibm12n03.xml	stream
 ibm-not-wf-P13-ibm13n01.xml	none
 ibm-not-wf-P13-ibm13n02.xml	none
 ibm-not-wf-P13-ibm13n03.xml	none
-ibm-not-wf-P14-ibm14n01.xml	none
+ibm-not-wf-P14-ibm14n01.xml	strict
 ibm-not-wf-P14-ibm14n02.xml	stream
 ibm-not-wf-P14-ibm14n03.xml	strict
 ibm-not-wf-P15-ibm15n01.xml	strict
