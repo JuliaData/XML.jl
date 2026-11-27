@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Benchmarks**: `benchmarks/compare.jl` now measures two versions of the package in fresh processes that take turns, and says when the difference between them is not established. `benchmarks/runs.jl` runs the scripts of the published tables in four passes, and [`benchmarks/README.md`](benchmarks/README.md) describes both. The environment of `benchmarks/` takes XML.jl from the working tree instead of the registry, and `profile_vs_039.jl` measures v0.3.9 with the Julia that runs it. The timings of the README and of `PERFORMANCE-v0.4.md` were measured again that way under Julia 1.13.4 ([#277](https://github.com/JuliaData/XML.jl/issues/277)).
+
 ### Changed
 
 With the changes below, the same call can give another result than with v0.4.10.

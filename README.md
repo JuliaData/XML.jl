@@ -305,7 +305,7 @@ doc = read("file.xml", LazyNode)
 - A traversal costs only the bytes it steps over: descending to a target is O(bytes before it).
 - Nothing is cached, so repeated visits cost again.
 
-It is unbeatable for descents and kilobyte-scale documents. For whole-tree walks (130 ms against ~30/~66 ms build + walk on the 14 MB document below) and repeated queries, build `FlatNode` or `Node` instead: see [Performance by access pattern](#performance-by-access-pattern).
+It is unbeatable for descents and kilobyte-scale documents. For whole-tree walks (140 ms against ~32/~68 ms build + walk on the 14 MB document below) and repeated queries, build `FlatNode` or `Node` instead: see [Performance by access pattern](#performance-by-access-pattern).
 
 For streaming and high-throughput workloads, several extra accessors avoid materializing intermediate collections:
 
@@ -351,7 +351,7 @@ From Julia 1.14, `StringView` is part of Base, so `using XML, Mmap` is enough; o
 
 The reader keeps the string type it is given: the document is walked through the mapping instead of being copied into the heap, and accessors return views into the mapped bytes. `Node` and `FlatNode` do not: they copy the document into a `String` before they parse it, so a mapping saves them no memory.
 
-Opening costs one probe of the prolog, about 28 ns on a mapped 14 MB document, LF or CR LF alike:
+Opening costs one probe of the prolog, about 30 ns on a mapped 14 MB document, LF or CR LF alike:
 
 - the document is neither scanned nor rewritten for its line ends;
 - the line-end normalization the specification requires happens on each value as it is read;
@@ -430,16 +430,16 @@ One number cannot rank the readers — cost depends on what you do with the docu
 | | build | walk every node | extract all values | DOM size in memory |
 |---|--:|--:|--:|--:|
 | `Cursor` | — (streams) | 21 ms (its one scan) | — | — (no DOM) |
-| `LazyNode` | 22 ns (reads the prolog) | 130 ms (re-tokenizes) | — | — (source only) |
-| `FlatNode` | 27 ms | 2.9 ms | 2.9 ms | 54.9 MiB |
-| `Node` | 62 ms | 3.6 ms | 3.8 ms | 71.6 MiB |
-| EzXML (libxml2) | 38 ms | — | — | — |
+| `LazyNode` | 22 ns (reads the prolog) | 140 ms (re-tokenizes) | — | — (source only) |
+| `FlatNode` | 29 ms | 2.9 ms | 3.0 ms | 54.9 MiB |
+| `Node` | 65 ms | 3.5 ms | 3.7 ms | 71.6 MiB |
+| EzXML (libxml2) | 41 ms | — | — | — |
 
 Reading the table: `Cursor`'s walk *is* its parse — one tokenizing scan, nothing retained. `LazyNode` materializes nothing, so its open reads only the prolog, without allocating. The source is rewritten once only when its internal subset declares something to apply: general entities, attribute defaults, attributes of a type other than CDATA. After that it costs per node visited. That still makes it the pick for touching a *fraction* of a large document, and, as the walk column shows, the wrong tool for visiting all of it.
 
-`FlatNode` builds ~2.3× faster than `Node` and holds ~23% less memory. Its `parent` is O(1) and its `depth` one step per level, where `Node` searches from the root. Whole-tree walks are close, because `Node`'s exact-size children vectors keep its locality sharp. Pure value extraction is close too, with the flat store slightly faster: 2.9 against 3.8 ms, since a per-value `SubString` view costs two integer stores. `FlatNode` builds ~1.4× faster than even libxml2, and `Node`'s gap to the C library is materialization, not scanning (see [PERFORMANCE-v0.4.md](PERFORMANCE-v0.4.md)).
+`FlatNode` builds ~2.2× faster than `Node` and holds ~23% less memory. Its `parent` is O(1) and its `depth` one step per level, where `Node` searches from the root. Whole-tree walks are close, because `Node`'s exact-size children vectors keep its locality sharp. Pure value extraction is close too, with the flat store slightly faster: 3.0 against 3.7 ms, since a per-value `SubString` view costs two integer stores. `FlatNode` builds ~1.4× faster than even libxml2, and `Node`'s gap to the C library is materialization, not scanning (see [PERFORMANCE-v0.4.md](PERFORMANCE-v0.4.md)).
 
-_Measured 2026-11-12, Apple M5 (single-threaded), Julia 1.13.3, EzXML 1.2.3; BenchmarkTools medians._
+_Measured 2026-11-27, Apple M5 (single-threaded), Julia 1.13.4, EzXML 1.2.3; BenchmarkTools medians, each the median of four runs._
 
 <br>
 
@@ -451,12 +451,12 @@ What the constructions this document lacks cost, what each `wellformed` level ad
 
 | Benchmark | XML.jl | EzXML | LightXML | XMLDict |
 |---|--:|--:|--:|--:|
-| Parse, small | 14 µs | 11 µs | 11 µs | 130 µs |
-| Parse, medium | 68 ms | 40 ms | 40 ms | 350 ms |
-| Write, small | 4.2 µs | 5.7 µs | 58 µs | — |
-| Write, medium | 20 ms | 21 ms | 31 ms | — |
-| Collect tags, small | 0.34 µs | 1.1 µs | 1.7 µs | — |
-| Collect tags, medium | 4.7 ms | 10 ms | 14 ms | — |
+| Parse, small | 14 µs | 11 µs | 11 µs | 140 µs |
+| Parse, medium | 71 ms | 41 ms | 42 ms | 370 ms |
+| Write, small | 4.4 µs | 5.8 µs | 58 µs | — |
+| Write, medium | 21 ms | 21 ms | 31 ms | — |
+| Collect tags, small | 0.34 µs | 1.2 µs | 1.8 µs | — |
+| Collect tags, medium | 4.5 ms | 12 ms | 13 ms | — |
 
 EzXML and LightXML wrap libxml2 (C): faster on raw parse, slower on in-Julia traversal.
 Times include garbage collection; [PERFORMANCE](PERFORMANCE-v0.4.md) breaks each of its rows
@@ -464,4 +464,4 @@ into the stable GC-free work and the per-session GC share.
 
 For the per-access-pattern decomposition (streaming / partial reads / full DOM / stage breakdown) and the theory behind these numbers, see [**PERFORMANCE-v0.4.md**](PERFORMANCE-v0.4.md).
 
-_Measured 2026-11-12, Apple M5 (single-threaded), Julia 1.13.3; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3), XMLDict 0.4.2. Each cell is the median of four runs of [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl). [`benchmarks/benchmarks_results.md`](benchmarks/benchmarks_results.md) holds these medians for every row of the script: it is put together from the four runs, and a single run of the script writes its own times over it._
+_Measured 2026-11-27, Apple M5 (single-threaded), Julia 1.13.4; EzXML 1.2.3 / LightXML 0.9.3 (libxml2 2.15.3), XMLDict 0.4.2. Each cell is the median of four runs of [`benchmarks/benchmarks.jl`](benchmarks/benchmarks.jl), started by [`benchmarks/runs.jl`](benchmarks/runs.jl). The farthest of a cell's four runs lies about 4 % from their median, and 12 % or more for four cells of the table. One of them is XML.jl on "Parse, medium", whose runs go from 62 to 73 ms. [`benchmarks/benchmarks_results.md`](benchmarks/benchmarks_results.md) holds these medians for every row of the script: it is put together from the four runs, and a single run of the script writes its own times over it._

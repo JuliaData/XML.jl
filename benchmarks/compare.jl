@@ -1,290 +1,170 @@
-#= Compare current dev XML.jl against the last released version.
+# benchmarks/compare.jl
+#
+# Compares two versions of XML.jl, cell by cell.
+#
+#   julia --project=benchmarks benchmarks/compare.jl [before [after]]
+#                                                    [--runs=4] [--rounds=3] [--cells=FILE]
+#
+# `before` and `after` are each a revision of this repository (a tag, a branch, a commit)
+# or a directory that holds a copy of the package. `before` defaults to the latest release
+# tag, `after` to the working tree. Each one is loaded from a copy of its sources alone: a
+# version that depends on a package outside the standard library, as the 0.3 releases do,
+# cannot be measured.
+#
+# When a process starts, the size of its environment and of its command line sets the
+# address of its stack, and a timing can change with that address. Two versions measured by
+# two scripts, under two labels or from two directories start at two addresses, and the gap
+# between them can be that of the addresses. So here:
+#   - every measure runs in a fresh process, by the same script (`compare_cells.jl`), with
+#     the same command line;
+#   - the version under measure is copied into one directory, the same for both;
+#   - an environment variable that nothing reads, `BENCH_PAD`, grows by 16 bytes from one
+#     run to the next, so that each run starts at another address;
+#   - the two versions take turns, in an order that alternates, so that a drift of the
+#     machine falls on both.
+# A cell then shows the ratio of the two medians. Nothing is established where the runs of
+# the two versions overlap, where their medians stand less than 5 % apart, or with fewer
+# than three runs of each: one process can be slower than the next on every cell.
 
-Usage:
-    julia benchmarks/compare.jl [tag]
-
-`tag` defaults to the latest git tag (e.g. v0.3.8).
-
-This script:
-1. Runs benchmarks using the current (dev) code
-2. Checks out the release tag into a temp worktree
-3. Runs the same benchmarks against that version
-4. Prints a side-by-side comparison
-=#
-
-using BenchmarkTools, Serialization, InteractiveUtils
-
-BenchmarkTools.DEFAULT_PARAMETERS.seconds = 5
-BenchmarkTools.DEFAULT_PARAMETERS.samples = 10000
+using Statistics
 
 const ROOT = dirname(@__DIR__)
+const USAGE = "usage: compare.jl [before [after]] [--runs=N] [--rounds=N] [--cells=FILE]"
+const LEAST_RUNS = 3
 
-const RELEASE_TAG = if length(ARGS) >= 1
-    ARGS[1]
-else
-    tags = readlines(`git -C $ROOT tag --sort=version:refname`)
-    filter!(t -> startswith(t, "v"), tags)
-    last(tags)
-end
+fail(message) = (println(stderr, message); exit(1))
 
-const SMALL_FILE = joinpath(ROOT, "test", "data", "books.xml")
-const SMALL_XML = read(SMALL_FILE, String)
-
-# Generate medium file if needed
-include(joinpath(ROOT, "benchmarks", "XMarkGenerator.jl"))
-using .XMarkGenerator
-const MEDIUM_FILE = joinpath(ROOT, "benchmarks", "data", "xmark.xml")
-if !isfile(MEDIUM_FILE)
-    mkpath(dirname(MEDIUM_FILE))
-    @info "Generating the XMark-style benchmark document..."
-    generate_xmark(MEDIUM_FILE, 1.0)
-end
-const MEDIUM_XML = read(MEDIUM_FILE, String)
-
-#-----------------------------------------------------------------------------# Helpers
-function _collect_tags!(out, node)
-    for c in XML.children(node)
-        if XML.nodetype(c) === XML.Element
-            push!(out, XML.tag(c))
-            _collect_tags!(out, c)
+function options(args)
+    versions = String[]
+    opt = Dict("runs" => "4", "rounds" => "3",
+               "cells" => joinpath(@__DIR__, "compare_cells.jl"))
+    for a in args
+        m = match(r"^--(runs|rounds|cells)=(.+)$", a)
+        if m !== nothing
+            opt[m[1]] = m[2]
+        elseif startswith(a, "--")
+            fail("unknown option $a\n$USAGE")
+        else
+            push!(versions, a)
         end
     end
+    length(versions) <= 2 || fail(USAGE)
+    all(k -> something(tryparse(Int, opt[k]), 0) >= 1, ("runs", "rounds")) || fail(USAGE)
+    return versions, opt
 end
 
-function bench_collect_tags(node)
-    out = String[]
-    _collect_tags!(out, node)
-    out
+function latest_tag()
+    tags = filter(startswith("v"), readlines(`git -C $ROOT tag --sort=version:refname`))
+    isempty(tags) && fail("no release tag in this repository: name the two versions")
+    return last(tags)
 end
 
-#-----------------------------------------------------------------------------# Run dev benchmarks
-println("="^60)
-println("  XML.jl Benchmark Comparison")
-println("  Current (dev) vs $RELEASE_TAG")
-println("="^60)
-println()
+# The package of a version: its project file, its sources and its extensions.
+const PACKAGE = ("Project.toml", "src", "ext")
 
-print("Running dev benchmarks...")
-flush(stdout)
-
-using XML
-
-dev_results = Dict{String, BenchmarkTools.Trial}()
-
-const SSNode = Node{SubString{String}}
-
-dev_small = parse(SMALL_XML, Node)
-dev_small_ss = parse(SMALL_XML, SSNode)
-dev_medium = parse(MEDIUM_XML, Node)
-dev_medium_ss = parse(MEDIUM_XML, SSNode)
-
-dev_results["Parse (small), String"] = @benchmark parse($SMALL_XML, Node)
-dev_results["Parse (small), SubString"] = @benchmark parse($SMALL_XML, SSNode)
-dev_results["Parse (medium), String"] = @benchmark parse($MEDIUM_XML, Node)
-dev_results["Parse (medium), SubString"] = @benchmark parse($MEDIUM_XML, SSNode)
-dev_results["Write (small)"] = @benchmark XML.write($dev_small)
-dev_results["Write (medium)"] = @benchmark XML.write($dev_medium)
-dev_results["Read file (medium), String"] = @benchmark read($MEDIUM_FILE, Node)
-dev_results["Read file (medium), SubString"] = @benchmark parse(read($MEDIUM_FILE, String), SSNode)
-dev_results["Collect tags (small), String"] = @benchmark bench_collect_tags($dev_small)
-dev_results["Collect tags (small), SubString"] = @benchmark bench_collect_tags($dev_small_ss)
-dev_results["Collect tags (medium), String"] = @benchmark bench_collect_tags($dev_medium)
-dev_results["Collect tags (medium), SubString"] = @benchmark bench_collect_tags($dev_medium_ss)
-
-# LazyNode benchmarks
-dev_lazy_small = parse(SMALL_XML, LazyNode)
-dev_lazy_medium = parse(MEDIUM_XML, LazyNode)
-
-dev_results["Parse (small), LazyNode"] = @benchmark parse($SMALL_XML, LazyNode)
-dev_results["Parse (medium), LazyNode"] = @benchmark parse($MEDIUM_XML, LazyNode)
-dev_results["Write (small), LazyNode"] = @benchmark XML.write($(dev_lazy_small[1]))
-dev_results["Write (medium), LazyNode"] = @benchmark XML.write($(dev_lazy_medium[1]))
-dev_results["sourcetext, small"] = @benchmark sourcetext($(dev_lazy_small[1]))
-dev_results["sourcetext, medium"] = @benchmark sourcetext($(dev_lazy_medium[1]))
-dev_lazy_medium_root = let ch = children(dev_lazy_medium)
-    i = findfirst(c -> nodetype(c) === Element, ch)
-    ch[i]
-end
-dev_results["children vs eachchildnode, children"] = @benchmark children($dev_lazy_medium_root)
-dev_results["children vs eachchildnode, eachchildnode"] = @benchmark collect(eachchildnode($dev_lazy_medium_root))
-
-# SST-like benchmark: many children, write each one
-const SST_N = 10_000
-const SST_XML = "<sst>" * join("""<si><t>string_$i</t></si>""" for i in 1:SST_N) * "</sst>"
-dev_sst_node = parse(SST_XML, Node)
-dev_sst_lazy = parse(SST_XML, LazyNode)
-dev_sst_root_node = only(children(dev_sst_node))
-dev_sst_root_lazy = only(children(dev_sst_lazy))
-
-function bench_sst_node(xml)
-    root = only(children(parse(xml, Node)))
-    out = String[]
-    for c in XML.children(root)
-        XML.nodetype(c) === XML.Element && push!(out, XML.write(c))
+function copy_package(from, to)
+    mkpath(to)
+    for item in PACKAGE
+        ispath(joinpath(from, item)) && cp(joinpath(from, item), joinpath(to, item))
     end
-    out
 end
-function bench_sst_lazy_children(xml)
-    root = only(children(parse(xml, LazyNode)))
-    out = String[]
-    for c in XML.children(root)
-        XML.nodetype(c) === XML.Element && push!(out, XML.write(c))
+
+# Puts the version `spec` in `dir`, and returns how to name it. A revision goes through
+# `git archive`, which leaves the working tree as it is.
+function export_version(spec, dir)
+    if isdir(spec)
+        isfile(joinpath(spec, "Project.toml")) && isdir(joinpath(spec, "src")) ||
+            fail("no package in the directory $spec")
+        copy_package(spec, dir)
+        return samefile(spec, ROOT) ? "the working tree" : "the directory $(abspath(spec))"
     end
-    out
-end
-function bench_sst_lazy_eachchildnode(xml)
-    root = only(children(parse(xml, LazyNode)))
-    out = String[]
-    for c in XML.eachchildnode(root)
-        XML.nodetype(c) === XML.Element && push!(out, XML.write(c))
-    end
-    out
-end
-
-dev_results["SST (parse+iterate+write), Node"] = @benchmark bench_sst_node($SST_XML)
-dev_results["SST (parse+iterate+write), LazyNode+children"] = @benchmark bench_sst_lazy_children($SST_XML)
-dev_results["SST (parse+iterate+write), LazyNode+eachchildnode"] = @benchmark bench_sst_lazy_eachchildnode($SST_XML)
-
-println(" done")
-
-#-----------------------------------------------------------------------------# Run release benchmarks via temp worktree + separate process
-print("Setting up $RELEASE_TAG worktree...")
-flush(stdout)
-
-worktree_dir = mktempdir()
-run(pipeline(`git -C $ROOT worktree add $worktree_dir $RELEASE_TAG`, stdout=devnull, stderr=devnull))
-println(" done")
-
-release_results_file = joinpath(worktree_dir, "_results.jls")
-
-release_script = joinpath(worktree_dir, "_bench.jl")
-write(release_script, """
-using Pkg
-Pkg.activate(; temp=true)
-Pkg.develop(path=$(repr(worktree_dir)))
-Pkg.add("BenchmarkTools")
-Pkg.add("Serialization")
-
-using BenchmarkTools, Serialization, XML
-
-BenchmarkTools.DEFAULT_PARAMETERS.seconds = 5
-BenchmarkTools.DEFAULT_PARAMETERS.samples = 10000
-
-small_xml = read($(repr(SMALL_FILE)), String)
-medium_xml = read($(repr(MEDIUM_FILE)), String)
-results = Dict{String, BenchmarkTools.Trial}()
-
-results["Parse (small)"] = @benchmark parse(\$small_xml, Node)
-
-try
-    SSNode = Node{SubString{String}}
-    results["Parse (small, SS)"] = @benchmark parse(\$small_xml, SSNode)
-    results["Parse (medium, SS)"] = @benchmark parse(\$medium_xml, SSNode)
-catch
+    out = IOBuffer()
+    commit = `git -C $ROOT rev-parse --verify --quiet $(spec * "^{commit}")`
+    success(pipeline(commit; stdout = out, stderr = devnull)) ||
+        fail("`$spec` is neither a directory nor a revision of this repository")
+    sha = strip(String(take!(out)))
+    whole = mktempdir()
+    run(pipeline(`git -C $ROOT archive --format=tar $sha`, `tar -x -C $whole`))
+    copy_package(whole, dir)
+    return string(spec, " (", first(sha, 7), ")")
 end
 
-results["Parse (medium)"] = @benchmark parse(\$medium_xml, Node)
+# One run of the cells, in a fresh process that loads the package from `tree`. The other
+# packages come from the environment this script runs in. Returns `nothing` if the process
+# fails; what it wrote on its error stream has then been shown.
+function measure(tree, cells, rounds, pad)
+    environment = dirname(Base.active_project())
+    path = join((tree, environment, "@stdlib"), Sys.iswindows() ? ';' : ':')
+    cmd = `$(Base.julia_cmd()) --startup-file=no $cells $rounds`
+    cmd = addenv(cmd, "JULIA_LOAD_PATH" => path, "BENCH_PAD" => pad)
+    out = IOBuffer()
+    success(pipeline(cmd; stdout = out, stderr = stderr)) || return nothing
+    lines = (split(line, '\t') for line in eachline(seekstart(out)))
+    return [(String(l[1]), parse(Float64, l[2])) for l in lines if length(l) == 2]
+end
 
-small_node = parse(small_xml, Node)
-medium_node = parse(medium_xml, Node)
-results["Write (small)"] = @benchmark XML.write(\$small_node)
-results["Write (medium)"] = @benchmark XML.write(\$medium_node)
-results["Read file (medium)"] = @benchmark read($(repr(MEDIUM_FILE)), Node)
+two(x) = (r = round(x; sigdigits = 2); r >= 10 ? string(round(Int, r)) : string(r))
 
-function _collect_tags!(out, node)
-    for c in XML.children(node)
-        if XML.nodetype(c) === XML.Element
-            push!(out, XML.tag(c))
-            _collect_tags!(out, c)
+# The runs of one version: their median, then the lowest and the highest, in the unit
+# that fits the median once it is rounded.
+function runs_string(t)
+    any(isnan, t) && return "n/a"
+    r = round(median(t); sigdigits = 2)
+    scale, unit = r >= 1e9 ? (1e9, "s") : r >= 1e6 ? (1e6, "ms") :
+                  r >= 1e3 ? (1e3, "µs") : (1.0, "ns")
+    return string(two(r / scale), " ", unit, " (", two(minimum(t) / scale), " to ",
+                  two(maximum(t) / scale), ")")
+end
+
+function verdict(before, after)
+    (any(isnan, before) || any(isnan, after)) && return "n/a"
+    min(length(before), length(after)) >= LEAST_RUNS || return "not established"
+    ratio = median(after) / median(before)
+    overlap = minimum(after) <= maximum(before) && minimum(before) <= maximum(after)
+    return overlap || abs(ratio - 1) < 0.05 ? "not established" : string(two(ratio), "×")
+end
+
+function main(args)
+    versions, opt = options(args)
+    before = length(versions) >= 1 ? versions[1] : latest_tag()
+    after = length(versions) >= 2 ? versions[2] : ROOT
+    runs, rounds, cells = parse(Int, opt["runs"]), opt["rounds"], abspath(opt["cells"])
+    isfile(cells) || fail("no file $cells")
+    work = mktempdir()
+    dirs = (joinpath(work, "before"), joinpath(work, "after"))
+    tree = joinpath(work, "tree")
+    labels = (export_version(before, dirs[1]), export_version(after, dirs[2]))
+    println("before: ", labels[1])
+    println("after:  ", labels[2])
+    println("julia ", VERSION, "; ", runs, runs == 1 ? " run" : " runs",
+            " of each version, in turns")
+    names = String[]
+    times = (Dict{String,Vector{Float64}}(), Dict{String,Vector{Float64}}())
+    for i in 1:runs, v in (isodd(i) ? (1, 2) : (2, 1))
+        rm(tree; recursive = true, force = true)
+        copy_package(dirs[v], tree)
+        local run_times
+        t = @elapsed run_times = measure(tree, cells, rounds, "x"^(16 * (i - 1)))
+        run_times === nothing && fail("the cells did not run on $(labels[v])")
+        for (name, ns) in run_times
+            name in names || push!(names, name)
+            push!(get!(times[v], name, Float64[]), ns)
         end
+        println("  run ", i, " of ", runs, ", ", ("before", "after")[v], ": ",
+                round(Int, t), " s")
     end
-end
-function bench_collect_tags(node)
-    out = String[]
-    _collect_tags!(out, node)
-    out
-end
-results["Collect tags (small)"] = @benchmark bench_collect_tags(\$small_node)
-results["Collect tags (medium)"] = @benchmark bench_collect_tags(\$medium_node)
-
-try
-    lazy_small = parse(small_xml, LazyNode)
-    lazy_medium = parse(medium_xml, LazyNode)
-    results["Parse (small), LazyNode"] = @benchmark parse(\$small_xml, LazyNode)
-    results["Parse (medium), LazyNode"] = @benchmark parse(\$medium_xml, LazyNode)
-catch
-end
-
-serialize($(repr(release_results_file)), results)
-""")
-
-print("Running $RELEASE_TAG benchmarks...")
-flush(stdout)
-run(pipeline(`julia $release_script`, stdout=devnull, stderr=devnull))
-release_results = deserialize(release_results_file)
-println(" done")
-
-# Cleanup worktree
-run(pipeline(`git -C $ROOT worktree remove --force $worktree_dir`, stdout=devnull, stderr=devnull))
-
-#-----------------------------------------------------------------------------# Write compare_results.md
-_fmt_ms(t) = string(round(t, sigdigits=3), " ms")
-
-function _compare_indicator(dev_ms, rel_ms)
-    change = (dev_ms / rel_ms - 1) * 100
-    pct = abs(round(change, digits=1))
-    change < -5 ? "($(pct)% faster)" : change > 5 ? "($(pct)% slower)" : "(~same)"
-end
-
-groups = [
-    ("Parse (small)",        "Parse (small)",        ["Parse (small), String", "Parse (small), SubString", "Parse (small), LazyNode"]),
-    ("Parse (medium)",       "Parse (medium)",       ["Parse (medium), String", "Parse (medium), SubString", "Parse (medium), LazyNode"]),
-    ("Write (small)",        "Write (small)",        ["Write (small)", "Write (small), LazyNode"]),
-    ("Write (medium)",       "Write (medium)",       ["Write (medium)", "Write (medium), LazyNode"]),
-    ("Read file (medium)",   "Read file (medium)",   ["Read file (medium), String", "Read file (medium), SubString"]),
-    ("Collect tags (small)", "Collect tags (small)",  ["Collect tags (small), String", "Collect tags (small), SubString"]),
-    ("Collect tags (medium)","Collect tags (medium)", ["Collect tags (medium), String", "Collect tags (medium), SubString"]),
-    ("sourcetext",           nothing,                 ["sourcetext, small", "sourcetext, medium"]),
-    ("children vs eachchildnode (medium)", nothing,   ["children vs eachchildnode, children", "children vs eachchildnode, eachchildnode"]),
-    ("SST-like: parse+iterate+write (10k)", nothing,  ["SST (parse+iterate+write), Node", "SST (parse+iterate+write), LazyNode+children", "SST (parse+iterate+write), LazyNode+eachchildnode"]),
-]
-
-outfile = joinpath(@__DIR__, "compare_results.md")
-open(outfile, "w") do io
-    println(io, "# XML.jl Benchmark Comparison: dev vs $RELEASE_TAG\n")
-    println(io, "```")
-    for (title, rel_key, dev_keys) in groups
-        rel_ms = (!isnothing(rel_key) && haskey(release_results, rel_key)) ? median(release_results[rel_key]).time / 1e6 : nothing
-        any(k -> haskey(dev_results, k), dev_keys) || (isnothing(rel_ms) && continue)
-
-        println(io, title)
-        if !isnothing(rel_ms)
-            println(io, "\t", rpad(RELEASE_TAG, 16), lpad(_fmt_ms(rel_ms), 12))
-        end
-        for dk in dev_keys
-            haskey(dev_results, dk) || continue
-            dev_ms = median(dev_results[dk]).time / 1e6
-            label = occursin(", ", dk) ? split(dk, ", "; limit=2)[2] : "dev"
-            ms_str = lpad(_fmt_ms(dev_ms), 12)
-            padlen = max(16, length(label) + 2)
-            if isnothing(rel_ms)
-                println(io, "\t", rpad(label, padlen), ms_str)
-            else
-                println(io, "\t", rpad(label, padlen), ms_str, "  ", _compare_indicator(dev_ms, rel_ms))
-            end
-        end
-        println(io)
+    of(v, name) = get(times[v], name, [NaN])
+    rows = [(n, runs_string(of(1, n)), runs_string(of(2, n)), verdict(of(1, n), of(2, n)))
+            for n in names]
+    pushfirst!(rows, ("", "before", "after", "after / before"))
+    width = [maximum(textwidth(r[k]) for r in rows) for k in 1:3]
+    println()
+    for r in rows
+        println(join((rpad(r[k], width[k]) for k in 1:3), "  "), "  ", r[4])
     end
-    println(io, "```")
-
-    println(io, "\n```julia")
-    println(io, "versioninfo()")
-    buf = IOBuffer()
-    InteractiveUtils.versioninfo(buf)
-    for line in eachline(IOBuffer(take!(buf)))
-        println(io, "# ", line)
-    end
-    println(io, "```")
+    println("\nEach version: the median of its runs, then the lowest and the highest.")
+    runs >= LEAST_RUNS || println("Fewer than ", LEAST_RUNS,
+                                  " runs of each version: nothing can be established.")
 end
 
-println("Results written to $outfile")
+main(ARGS)
