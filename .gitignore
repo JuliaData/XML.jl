@@ -5,3 +5,4 @@
 *.claude
 test/data/w3c/
 benchmarks/data/
+benchmarks/runs/

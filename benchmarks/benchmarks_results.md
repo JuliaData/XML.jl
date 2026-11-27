@@ -3,66 +3,66 @@
 ```
 Parse (small)
 	XML.jl                 14 µs
-	XML.jl (SS)            12 µs
+	XML.jl (SS)            13 µs
 	EzXML                  11 µs  (XML.jl 1.2× slower)
-	LightXML               11 µs  (XML.jl 1.3× slower)
-	XMLDict               130 µs  (XML.jl 9.3× faster)
+	LightXML               11 µs  (XML.jl 1.2× slower)
+	XMLDict               140 µs  (XML.jl 10× faster)
 
 Parse (medium)
-	XML.jl                 68 ms
-	XML.jl (SS)            65 ms
-	EzXML                  40 ms  (XML.jl 1.7× slower)
-	LightXML               40 ms  (XML.jl 1.7× slower)
-	XMLDict               350 ms  (XML.jl 5.1× faster)
+	XML.jl                 71 ms
+	XML.jl (SS)            61 ms
+	EzXML                  41 ms  (XML.jl 1.8× slower)
+	LightXML               42 ms  (XML.jl 1.7× slower)
+	XMLDict               370 ms  (XML.jl 5.3× faster)
 
 Write (small)
-	XML.jl                4.2 µs
-	EzXML                 5.7 µs  (XML.jl 1.4× faster)
-	LightXML               58 µs  (XML.jl 14× faster)
+	XML.jl                4.4 µs
+	EzXML                 5.8 µs  (XML.jl 1.3× faster)
+	LightXML               58 µs  (XML.jl 13× faster)
 
 Write (medium)
-	XML.jl                 20 ms
+	XML.jl                 21 ms
 	EzXML                  21 ms  (~same)
-	LightXML               31 ms  (XML.jl 1.6× faster)
+	LightXML               31 ms  (XML.jl 1.5× faster)
 
 Read file
-	XML.jl                 69 ms
-	EzXML                  40 ms  (XML.jl 1.7× slower)
-	LightXML               40 ms  (XML.jl 1.7× slower)
+	XML.jl                 68 ms
+	EzXML                  43 ms  (XML.jl 1.6× slower)
+	LightXML               43 ms  (XML.jl 1.6× slower)
 
 Collect tags (small)
 	XML.jl                340 ns
-	EzXML                 1.1 µs  (XML.jl 3.2× faster)
-	LightXML              1.7 µs  (XML.jl 5.1× faster)
+	EzXML                 1.2 µs  (XML.jl 3.3× faster)
+	LightXML              1.8 µs  (XML.jl 5.2× faster)
 
 Collect tags (medium)
-	XML.jl                4.7 ms
-	EzXML                  10 ms  (XML.jl 2.1× faster)
-	LightXML               14 ms  (XML.jl 2.9× faster)
+	XML.jl                4.5 ms
+	EzXML                  12 ms  (XML.jl 2.5× faster)
+	LightXML               13 ms  (XML.jl 2.7× faster)
 
 Parse SST (LazyNode)
-	XML.jl                 21 ns
+	XML.jl                 22 ns
 	Node (for ref)         11 ms  (XML.jl 490000× faster)
 
 Parse worksheet (LazyNode)
-	XML.jl                 21 ns
-	Node (for ref)         19 ms  (XML.jl 890000× faster)
+	XML.jl                 22 ns
+	Node (for ref)         20 ms  (XML.jl 890000× faster)
 
 SST: write each <si>
-	LazyNode + write (zero-copy)      6.4 ms
+	LazyNode + write (zero-copy)      6.1 ms
 	LazyNode + write (normalize)       37 ms
-	Node (for ref)        5.4 ms
+	Node (for ref)        6.1 ms
 
 SST: unformatted text
-	LazyNode + is_simple_value      9.6 ms
-	Node (for ref)        2.6 ms
+	LazyNode + is_simple_value      9.9 ms
+	Node (for ref)        2.9 ms
 
 Worksheet: collect rows
 	children() (fresh Vector each call)      7.5 ms
 	children!(buf, n) (reused buffer)      7.5 ms
 
 Worksheet: attribute scan
-	eachattribute          17 ms
+	eachattribute          18 ms
 	attributes() (materialize dict)       20 ms
 
 Worksheet: single attr fetch
@@ -71,26 +71,26 @@ Worksheet: single attr fetch
 
 Worksheet: <v> value
 	is_simple_value        21 ms
-	is_simple + simple_value       23 ms
+	is_simple + simple_value       24 ms
 
 XLSX sst_load! (end-to-end)
-	LazyNode               15 ms
+	LazyNode               14 ms
 	LazyNode (entity-heavy)       12 ms
 
 XLSX cell read (end-to-end)
-	numeric ws             31 ms
-	string ws              28 ms
+	numeric ws             33 ms
+	string ws              29 ms
 
 ```
 
 ```julia
 versioninfo()
-# Julia Version 1.13.3
-# Commit 67ac47b9cd8 (2026-10-25 15:28 UTC)
+# Julia Version 1.13.4
+# Commit c1ac32ab733 (2026-11-13 17:30 UTC)
 # Build Info:
 #   Official https://julialang.org release
 # Platform Info:
-#   OS: macOS (arm64-apple-darwin27.0.0)
+#   OS: macOS (arm64-apple-darwin27.2.0)
 #   CPU: 10 × Apple M5
 #   WORD_SIZE: 64
 #   LLVM: libLLVM-20.1.8 (ORCJIT, apple-m1)

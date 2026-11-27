@@ -57,7 +57,8 @@ res["extract"] = @benchmark walk(parse(\$S, Node))
 serialize($(repr(resfile)), res)
 """)
 
-ok = success(pipeline(`julia $script`, stdout = logfile, stderr = logfile))
+# The subprocess is the Julia that runs this script, not the `julia` of the PATH.
+ok = success(pipeline(`$(Base.julia_cmd()) $script`, stdout = logfile, stderr = logfile))
 if !ok || !isfile(resfile)
     println("SUBPROCESS FAILED — log tail:\n", join(last(readlines(logfile), 30), "\n"))
     run(pipeline(`git -C $ROOT worktree remove --force $wt`, stdout = devnull, stderr = devnull))
