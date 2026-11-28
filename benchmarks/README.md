@@ -18,6 +18,7 @@ julia --project=benchmarks -e 'using Pkg; Pkg.develop(path = "."); Pkg.instantia
 | `profile.jl` | Tables 1 to 4, 6 and 7 of `PERFORMANCE-v0.4.md`, and its memory-mapped table |
 | `profile_vs_039.jl` | the v0.3.9 row of Table 2 |
 | `flatnode_bench.jl` | Tables 5 and 8 of that page, and the access-pattern table of the README |
+| `dict_benchmarks.jl` | `Attributes`, the type that `attributes` returns, against a `Dict`, for 2 to 20 attributes |
 | `compare.jl` | two versions of XML.jl, one against the other |
 | `runs.jl` | the scripts above several times, each time in a fresh process |
 
